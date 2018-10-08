@@ -1,34 +1,21 @@
-// Copyright 2008, Arizona Board of Regents
-// on behalf of Arizona State University
-// 
-// Prepared by the Mars Space Flight Facility, Arizona State University,
-// Tempe, AZ.
-// 
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-// 
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU General Public License for more details.
-// 
-// You should have received a copy of the GNU General Public License
-// along with this program.  If not, see <http://www.gnu.org/licenses/>.
-
-
 package edu.asu.jmars.layer.map2;
 
-import java.awt.BorderLayout;
+import java.awt.Color;
+import java.awt.Dimension;
 import java.awt.event.ActionEvent;
 import java.awt.event.ActionListener;
 import java.util.EventListener;
 
+import javax.swing.Box;
+import javax.swing.BoxLayout;
 import javax.swing.JButton;
+import javax.swing.JPanel;
 import javax.swing.JScrollPane;
-import javax.swing.JTabbedPane;
+import javax.swing.UIManager;
 import javax.swing.event.EventListenerList;
+
+import org.jdesktop.swingx.JXTaskPane;
+import org.jdesktop.swingx.JXTaskPaneContainer;
 
 import edu.asu.jmars.layer.FocusPanel;
 import edu.asu.jmars.layer.Layer.LView;
@@ -40,16 +27,18 @@ import edu.asu.jmars.layer.map2.stages.composite.CompositeStage;
 
 public class MapFocusPanel extends FocusPanel implements PipelineEventListener, PipelineProducer {
 	private static final long serialVersionUID = 1L;
-	
-	final String chartTabName = "Chart";
-		
+	private final Color lightBlue = UIManager.getColor("TabbedPane.selected");
+	final String chartTabName = "Chart";	
 	final MapLView mapLView;
+	
+	JScrollPane inputSP;
+	JPanel topPanel = new JPanel();
+	JPanel inputPanel = new JPanel();
+	JXTaskPaneContainer inputTaskContainer = new JXTaskPaneContainer();
 	
 	JButton configButton;
 	// Chart view attached to the main view.
 	ChartView chartView;
-	// Tabbed pane enclosing the chart view and individual configuration panels
-	JTabbedPane tabbedPane;
 	// PipelineEvent listeners list
 	EventListenerList eventListenersList = new EventListenerList();
 	// Current LView piplineModel
@@ -88,15 +77,9 @@ public class MapFocusPanel extends FocusPanel implements PipelineEventListener, 
 			public void pipelineEventOccurred(PipelineEvent e) {
 				// By the time this particular listener is called, the chartView already
 				// has the updated pipeline.
-				int chartTabIdx = tabbedPane.indexOfTab(chartTabName); 
-				if (chartView.hasEmptyPipeline()){
-					if (chartTabIdx >= 0)
-						tabbedPane.removeTabAt(tabbedPane.indexOfComponent(chartView));
-				}
-				else {
-					if (chartTabIdx < 0)
-						tabbedPane.insertTab(chartTabName, null, chartView, null, 0);
-				}
+				int chartTabIdx = MapFocusPanel.this.indexOfTab(chartTabName); 
+
+					MapFocusPanel.this.addTab(chartTabName, chartView);
 			}
 		});
 		// TODO: This is not a good way of doing things.
@@ -106,6 +89,7 @@ public class MapFocusPanel extends FocusPanel implements PipelineEventListener, 
 	private void initialize(){
 		// add configure button and call to show map sources dialog
 		configButton = new JButton("Configure");
+		configButton.setMaximumSize(new Dimension(100, 0));
 		configButton.addActionListener(new ActionListener(){
 			public void actionPerformed(ActionEvent e){
 				try {
@@ -126,20 +110,15 @@ public class MapFocusPanel extends FocusPanel implements PipelineEventListener, 
 			}
 		});
 		
-		// initialize tabs for chart and processing panels
-		tabbedPane = new JTabbedPane();
-		tabbedPane.setTabPlacement(JTabbedPane.BOTTOM);
 		
 		// Add tab for the chart view
 		chartView = new ChartView(mapLView);
-		if (!chartView.hasEmptyPipeline())
-			tabbedPane.add(chartTabName, chartView);
+		if (!chartView.hasEmptyPipeline()){
+			this.add(chartTabName, chartView);
+		}
 		
-		
-		// Add it all together
-		setLayout(new BorderLayout());
-		add(tabbedPane, BorderLayout.CENTER);
-		add(configButton, BorderLayout.SOUTH);
+		this.addTab("Input", inputPanel);
+
 	}
 	
 	public ChartView getChartView() {
@@ -170,20 +149,43 @@ public class MapFocusPanel extends FocusPanel implements PipelineEventListener, 
 		
 		pipelineModel.setFromPipeline(newPipeline, Pipeline.getCompStage(newPipeline));
 		
-		int selectedTab = tabbedPane.getSelectedIndex();
-		for(int i=0; i<tabbedPane.getComponentCount();){
-			if (tabbedPane.getComponent(i) != chartView)
-				tabbedPane.removeTabAt(i);
-			else
-				i++;
-		}
-		
 		CompositeStage aggStage = pipelineModel.getCompStage();
+		
+		topPanel.removeAll();
+		inputTaskContainer.removeAll();
+		topPanel.setLayout(new BoxLayout(topPanel, BoxLayout.PAGE_AXIS));
 		for(int i=0; i<pipelineModel.getSourceCount(); i++){
 			PipelinePanel pp = new PipelinePanel(pipelineModel.getPipelineLeg(i));
-			tabbedPane.addTab(aggStage.getInputName(i), new JScrollPane(pp));
+			
+			JXTaskPane inputTaskPane = new JXTaskPane();
+			inputTaskPane.add(pp);
+			inputTaskPane.setTitle(aggStage.getInputName(i));
+	
+			inputTaskContainer.add(inputTaskPane);
+			
+			topPanel.add(inputTaskContainer);
 		}
 		
+		inputTaskContainer.setBackground(lightBlue);
+		inputTaskContainer.repaint();
+		topPanel.repaint();
+		inputSP = new JScrollPane(topPanel, JScrollPane.VERTICAL_SCROLLBAR_AS_NEEDED, JScrollPane.HORIZONTAL_SCROLLBAR_AS_NEEDED);
+		inputSP.getVerticalScrollBar().setUnitIncrement(15);
+		inputPanel.removeAll();
+		inputPanel.setLayout(new BoxLayout(inputPanel, BoxLayout.PAGE_AXIS));
+		inputPanel.setBackground(lightBlue);
+		inputPanel.add(inputSP);
+		configButton.setAlignmentX(CENTER_ALIGNMENT);
+		inputPanel.add(Box.createRigidArea(new Dimension(0,8)));
+		inputPanel.add(configButton);
+		inputPanel.add(Box.createRigidArea(new Dimension(0,8)));
+		inputTaskContainer.repaint();
+		inputPanel.repaint();
+		if (inputSP!=null) {
+			this.remove(inputSP);
+		}
+		
+		this.addTab("Input", inputPanel);
 		firePipelineEvent(e.userInitiated, e.settingsChange);
 	}
 	

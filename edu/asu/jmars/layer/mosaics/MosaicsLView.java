@@ -1,28 +1,10 @@
-// Copyright 2008, Arizona Board of Regents
-// on behalf of Arizona State University
-// 
-// Prepared by the Mars Space Flight Facility, Arizona State University,
-// Tempe, AZ.
-// 
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-// 
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU General Public License for more details.
-// 
-// You should have received a copy of the GNU General Public License
-// along with this program.  If not, see <http://www.gnu.org/licenses/>.
-
-
 package edu.asu.jmars.layer.mosaics;
 
 import java.awt.Color;
 import java.awt.Component;
 import java.awt.Font;
+import java.awt.Graphics2D;
+import java.awt.Window;
 import java.awt.event.ActionEvent;
 import java.awt.event.MouseEvent;
 import java.awt.event.MouseListener;
@@ -37,12 +19,17 @@ import java.util.List;
 import java.util.Set;
 
 import javax.swing.AbstractAction;
+import javax.swing.JFrame;
 import javax.swing.JMenuItem;
+import javax.swing.JOptionPane;
+import javax.swing.JScrollPane;
 import javax.swing.JSeparator;
+import javax.swing.JTextArea;
 import javax.swing.SwingUtilities;
 
 import edu.asu.jmars.Main;
 import edu.asu.jmars.layer.FocusPanel;
+import edu.asu.jmars.layer.InvestigateData;
 import edu.asu.jmars.layer.LViewFactory;
 import edu.asu.jmars.layer.SerializedParameters;
 import edu.asu.jmars.layer.WrappedMouseEvent;
@@ -55,6 +42,7 @@ import edu.asu.jmars.layer.util.features.FeatureCollection;
 import edu.asu.jmars.layer.util.features.Field;
 import edu.asu.jmars.layer.util.features.ShapeRenderer;
 import edu.asu.jmars.layer.util.features.Styles;
+import edu.asu.jmars.layer.util.features.WorldCacheSource;
 import edu.asu.jmars.util.ObservableSetListener;
 import edu.asu.jmars.util.Util;
 
@@ -65,7 +53,7 @@ public class MosaicsLView extends LView implements MouseListener {
 	FeatureCollection fc;
 	MosaicsLayer layer;
 	
-	public MosaicsLView(MosaicsLayer layer){
+	public MosaicsLView(final MosaicsLayer layer){
 		super(layer);
 		this.layer = layer;
 		setBufferCount(2);
@@ -79,7 +67,7 @@ public class MosaicsLView extends LView implements MouseListener {
 		fc = layer.getFeatures();
 		layer.selections.addListener(new ObservableSetListener<Feature>() {
 			public void change(Set<Feature> added, Set<Feature> removed) {
-				drawSelected();
+				draw(true, layer.selections);
 			}
 		});
 	}
@@ -87,7 +75,7 @@ public class MosaicsLView extends LView implements MouseListener {
 	protected LView _new() {
 		return new MosaicsLView((MosaicsLayer)getLayer());
 	}
-
+	
 	protected Object createRequest(Rectangle2D where) {
 		return where;
 	}
@@ -100,8 +88,9 @@ public class MosaicsLView extends LView implements MouseListener {
 	}
 	
 	private ShapeRenderer getFeatureRenderer(boolean forSelected){
-		ShapeRenderer sr = new ShapeRenderer(this);
-		Styles styles = sr.getStyles();
+		ShapeRenderer sr = new ShapeRenderer(getProj().getPPD());
+		Styles styles = sr.getStyleCopy();
+		styles.geometry.setSource(new WorldCacheSource(styles.geometry.getSource(), layer.getCache()));
 		styles.lineColor.setConstant(forSelected? borderColorSelected: borderColor);
 		styles.lineWidth.setConstant(forSelected? 2f : 1f);
 		styles.fillColor.setConstant(fillColor);
@@ -109,49 +98,43 @@ public class MosaicsLView extends LView implements MouseListener {
 		styles.showVertices.setConstant(false);
 		styles.showLineDir.setConstant(false);
 		styles.showLabels.setConstant(false);
+		sr.setStyles(styles);
 		return sr;
 	}
 	
-	private void drawAll(){
+	private void draw(boolean selections, Collection<Feature> features) {
 		if (!isVisible())
 			return;
 		
-		clearOffScreen(0);
-		ShapeRenderer sr = getFeatureRenderer(false);
-		// TODO: This does not seem the right way of avoiding NullPointerException
-		if (getOffScreenG2(0) != null)
-			sr.drawAll(getOffScreenG2(0), fc.getFeatures());
-		repaint();
-	}
-	
-	private void drawSelected(){
-		if (!isVisible())
-			return;
-		
-		clearOffScreen(1);
-		ShapeRenderer srSel = getFeatureRenderer(true);
-		// TODO: This does not seem the right way of avoiding NullPointerException
-		if (getOffScreenG2(1) != null)
-			srSel.drawAll(getOffScreenG2(1), layer.selections);
+		int screen = selections ? 1 : 0;
+		clearOffScreen(screen);
+		Graphics2D g2w = getOffScreenG2(screen);
+		Graphics2D g2sc = getOffScreenG2Direct();
+		if (g2w != null) {
+			ShapeRenderer sr = getFeatureRenderer(selections);
+			for (Feature f: features) {
+				sr.draw(g2w, g2sc, f);
+			}
+		}
 		repaint();
 	}
 	
 	public void receiveData(Object layerData) {
 		SwingUtilities.invokeLater(new Runnable(){
-			public void run(){
-				drawAll();
-				drawSelected();
+			public void run() {
+				draw(false, layer.fc.getFeatures());
+				draw(true, layer.selections);
 			}
 		});
 	}
-
+	
 	public String getName() {
-		return "THEMIS Mosaics";
+		return "Mosaics";
 	}
-
+	
 	private Set<Feature> getFeaturesIntersecting(Rectangle2D worldRect){
 		Set<Feature> underPt = new LinkedHashSet<Feature>();
-
+		
 		for(int i=0; i<fc.getFeatureCount(); i++){
 			Feature f = fc.getFeature(i);
 			if (f.getPath().getWorld().intersects(worldRect))
@@ -166,7 +149,7 @@ public class MosaicsLView extends LView implements MouseListener {
 	}
 	
 	public String getToolTipText(MouseEvent event) {
-		if (viewman2.getActiveLView() != this)
+		if (viewman.getActiveLView() != this)
 			return null;
 
 		Point2D worldPt = getProj().screen.toWorld(event instanceof WrappedMouseEvent?
@@ -195,11 +178,30 @@ public class MosaicsLView extends LView implements MouseListener {
 		
 		return sbuf.toString();
 	}
+	
+// Return data for the investigate tool to display
+	public InvestigateData getInvestigateData(MouseEvent event){
+		InvestigateData invData = new InvestigateData(getName());
+		
+		Point2D worldPt = getProj().screen.toWorld(event instanceof WrappedMouseEvent?
+				((WrappedMouseEvent)event).getRealPoint(): event.getPoint());
+		Set<Feature> features = getFeaturesUnder(worldPt);
+		
+		if (features.isEmpty())
+			return null;
+		
+		for(Feature f : features){
+			invData.add((String)f.getAttribute(Field.FIELD_LABEL), "");
+		}
+		
+		return invData;
+	}
 
 	public Component[] getContextMenu(Point2D worldPt){
 		Set<Feature> features = getFeaturesUnder(worldPt);
 		List<Component> centerAtMenuItems = new ArrayList<Component>();
 		List<Component> loadMenuItems = new ArrayList<Component>();
+		List<Component> ViewCitationMenuItems = new ArrayList<Component>();
 		JMenuItem menuItem;
 		for(Feature f: features){
 			menuItem = new JMenuItem(new CenterAtAction(f));
@@ -210,12 +212,18 @@ public class MosaicsLView extends LView implements MouseListener {
 			if (layer.selections.contains(f))
 				menuItem.setFont(menuItem.getFont().deriveFont(Font.ITALIC|Font.BOLD));
 			loadMenuItems.add(menuItem);
-		}
+			menuItem = new JMenuItem(new ViewCitationAtAction(Main.mainFrame, f));
+			if (layer.selections.contains(f))
+				menuItem.setFont(menuItem.getFont().deriveFont(Font.ITALIC|Font.BOLD));
+				ViewCitationMenuItems.add(menuItem);
+			}
 		
 		List<Component> agg = new ArrayList<Component>();
 		agg.addAll(centerAtMenuItems);
 		agg.add(new JSeparator(JSeparator.HORIZONTAL));
 		agg.addAll(loadMenuItems);
+		agg.add(new JSeparator(JSeparator.HORIZONTAL));
+		agg.addAll(ViewCitationMenuItems);
 		
 		return agg.toArray(new Component[0]);
 	}
@@ -282,11 +290,40 @@ public class MosaicsLView extends LView implements MouseListener {
 		public Feature getFeature(){
 			return f;
 		}
-
+		
 		public void actionPerformed(ActionEvent e) {
 			Point2D centerAt = f.getPath().getWorld().getCenter(); 
 			centerAtPoint(centerAt);
 		}
+	}
+	
+	public class ViewCitationAtAction extends AbstractAction {
+		private final Feature f;
+		private final Window ownerFrame;
+		
+		public ViewCitationAtAction(Window ownerFrame, Feature f){
+			super("View abstract for "+f.getAttribute(Field.FIELD_LABEL));
+			this.f = f;
+			this.ownerFrame = ownerFrame;
+		}
+		
+		public Feature getFeature(){
+			return f;
+		}
+		
+		public void actionPerformed(ActionEvent e) {
+			
+			JTextArea ta = new JTextArea((String)f.getAttribute(FeatureProviderWMS.FIELD_ABSTRACT), 5, 40);
+			ta.setEditable(false);
+			ta.setLineWrap(true);
+			ta.setWrapStyleWord(true);
+			
+			JScrollPane areaScrollPane = new JScrollPane(ta);
+			areaScrollPane.setVerticalScrollBarPolicy(JScrollPane.VERTICAL_SCROLLBAR_AS_NEEDED);
+			
+			JOptionPane.showMessageDialog(ownerFrame, areaScrollPane,
+					"Abstract for "+f.getAttribute(Field.FIELD_LABEL), JOptionPane.INFORMATION_MESSAGE);
+			}
 	}
 	
 	public class LoadMosaicAction extends AbstractAction {
@@ -303,7 +340,7 @@ public class MosaicsLView extends LView implements MouseListener {
 
 		public void actionPerformed(ActionEvent e) {
 			MapLViewFactory mapLViewFactory = (MapLViewFactory)LViewFactory.getFactoryObject(MapLViewFactory.class.getName());
-			mapLViewFactory.createLayer(Main.getLManager(), (MapSource)f.getAttribute(FeatureProviderWMS.FIELD_MAP_SOURCE), null);
+			mapLViewFactory.createLayer((MapSource)f.getAttribute(FeatureProviderWMS.FIELD_MAP_SOURCE), null);
 		}
 	}
 	
@@ -316,4 +353,13 @@ public class MosaicsLView extends LView implements MouseListener {
 		private static final long serialVersionUID = -1L;
 	}
 
+	//The following two methods are used to query for the
+	// info panel fields (description, citation, etc)	
+	   	public String getLayerKey(){
+	   		return "Mosaic Outlines";
+	   	}
+	   	public String getLayerType(){
+	   		return "mosaic";
+	   	}
+	
 }

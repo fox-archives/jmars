@@ -1,23 +1,3 @@
-// Copyright 2008, Arizona Board of Regents
-// on behalf of Arizona State University
-// 
-// Prepared by the Mars Space Flight Facility, Arizona State University,
-// Tempe, AZ.
-// 
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-// 
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU General Public License for more details.
-// 
-// You should have received a copy of the GNU General Public License
-// along with this program.  If not, see <http://www.gnu.org/licenses/>.
-
-
 package edu.asu.jmars.layer.stamp.chart;
 
 import java.awt.BasicStroke;
@@ -26,7 +6,6 @@ import java.awt.Color;
 import java.awt.Dimension;
 import java.awt.FlowLayout;
 import java.awt.Paint;
-import java.awt.Rectangle;
 import java.awt.Shape;
 import java.awt.event.ActionEvent;
 import java.awt.event.ActionListener;
@@ -38,12 +17,13 @@ import java.awt.geom.Line2D;
 import java.awt.geom.PathIterator;
 import java.awt.geom.Point2D;
 import java.awt.geom.Rectangle2D;
-import java.awt.image.BufferedImage;
-import java.awt.image.Raster;
 import java.io.File;
 import java.io.FileNotFoundException;
 import java.io.FileOutputStream;
+import java.io.ObjectInputStream;
 import java.io.PrintStream;
+import java.net.URLEncoder;
+import java.text.DecimalFormat;
 import java.text.NumberFormat;
 import java.util.Arrays;
 
@@ -85,11 +65,14 @@ import edu.asu.jmars.Main;
 import edu.asu.jmars.ProjObj;
 import edu.asu.jmars.layer.DataReceiver;
 import edu.asu.jmars.layer.MultiProjection;
+import edu.asu.jmars.layer.stamp.PdsImage;
 import edu.asu.jmars.layer.stamp.PlotSource;
 import edu.asu.jmars.layer.stamp.PlotSourceRenderer;
 import edu.asu.jmars.layer.stamp.StampLView;
+import edu.asu.jmars.layer.stamp.StampLayer;
 import edu.asu.jmars.swing.AncestorAdapter;
 import edu.asu.jmars.util.DebugLog;
+import edu.asu.jmars.util.HVector;
 import edu.asu.jmars.util.Util;
 import edu.asu.jmars.util.stable.ColorCellEditor;
 import edu.asu.jmars.util.stable.ColorCellRenderer;
@@ -110,7 +93,7 @@ public class ChartView extends JPanel implements DataReceiver {
 	int ppd;
 	ProjObj proj;
 	
-	PlotSource[] plotSources={new PlotSource("Temperature(K)")};
+	PlotSource[] plotSources=null;
 	
 	// Data samples
 	Samples samples = null;
@@ -146,6 +129,13 @@ public class ChartView extends JPanel implements DataReceiver {
 		sp.setDividerLocation(0.8);
 		sp.setResizeWeight(0.8);
 		sp.setLeftComponent(createChartPanel());
+		
+		String instrument=stampLView.stampLayer.getInstrument();
+		
+		plotSources = new PlotSource[1];
+		
+		plotSources[0]=new PlotSource(stampLView.stampLayer.getParam(stampLView.stampLayer.PLOT_UNITS));		
+		
 		sp.setRightComponent(createReadoutPanel(plotSources,chart));
 		add(sp, BorderLayout.CENTER);		
 	}
@@ -216,7 +206,11 @@ public class ChartView extends JPanel implements DataReceiver {
 		JPanel ppdPanel = createPPDPanel();
 		
 		JPanel p = new JPanel(new BorderLayout());
-		p.add(ppdPanel, BorderLayout.NORTH);
+		// PPD box doesn't actually work, so hide it for now.
+		// Hopefully this will be fixed when Chart functionality is cleaned up
+		// for general JMARS use
+//		p.add(ppdPanel, BorderLayout.NORTH);
+		p.add(new JPanel(), BorderLayout.NORTH);
 		p.add(chartPanel, BorderLayout.CENTER);
 		
 		return p;
@@ -431,10 +425,10 @@ public class ChartView extends JPanel implements DataReceiver {
 			sampleData = samples.getSampleData(km);
 		}
 		
-		setCrosshair(km);
-		
-		updateReadouts(sampleData);
-		
+		if(chart.getXYPlot().getDomainAxis().getRange().contains(km)){
+			setCrosshair(km);
+			updateReadouts(sampleData, km);
+		}
 		
 		// Forward the event to mapView so that it can show a cueing line as well.
 		stampLView.cueChanged(cuePoint);
@@ -453,18 +447,22 @@ public class ChartView extends JPanel implements DataReceiver {
 		if (samples != null && worldCuePoint != null){
 			km = samples.getDistance(worldCuePoint);
 			//log.aprintln("worldCuePoint:"+worldCuePoint+"  -> km:"+km+"  -> worldPt:"+samples.getPointAtDist(km));
-			sampleData = samples.getSampleData(worldCuePoint);
+			// Previously, for the stamp layer, this interactively retrieved the value for the exact cuePoint.
+			// Instead, we will now simply snap to the closest value previously retrieved.			
+			sampleData = samples.getSampleData(km);
 		}
-		setCrosshair(km);
-		updateReadouts(sampleData);
+		if(chart.getXYPlot().getDomainAxis().getRange().contains(km)){
+			setCrosshair(km);
+			updateReadouts(sampleData, km);
+		}
 	}
 		
 	public void setCrosshair(double km){
 		chart.getXYPlot().setDomainCrosshairValue(km);
 	}
 	
-	public void updateReadouts(double sampleData){
-		roTableModel.setSampleData(sampleData);
+	public void updateReadouts(double sampleData, double xValue){
+		roTableModel.setSampleData(sampleData, xValue);
 	}
 	
 	private void configurePlot() {
@@ -684,7 +682,7 @@ public class ChartView extends JPanel implements DataReceiver {
 			}
 			for(int i=0; i<plotSources.length; i++){
 				ps.print(delim);
-				ps.print(sampleData == null? nullString: nf.format(sampleData[i]));
+				ps.print(sampleData == null? nullString: nf.format(sampleData[k]));
 			}
 			ps.println();
 		}
@@ -733,16 +731,24 @@ public class ChartView extends JPanel implements DataReceiver {
 	class ReadoutTableModel extends AbstractTableModel {
 		private static final long serialVersionUID = 1L;
 		
+		private final String TITLE_COL = "Title";
+		private final String COLOR_COL = "Color";
+		private final String VAL_COL = "Value";
+		private final String KM_COL = "Distance";
+		
 		public final String[] columns = new String[] {
-			"Title",
-			"Color",
-			"Value"
+			TITLE_COL,
+			COLOR_COL,
+			VAL_COL,
+			KM_COL
 		};
 		
 		private PlotSource[] sources = null;
 		//private Point2D samplePt = null;
 		private double[] sampleData = new double[1];
+		private double xValue = Double.NaN;
 		private JFreeChart chart = null;
+		private DecimalFormat df = new DecimalFormat("#,###,##0.00");
 		
 		public ReadoutTableModel(PlotSource sources[], JFreeChart chart){
 			this.sources = sources;
@@ -754,10 +760,11 @@ public class ChartView extends JPanel implements DataReceiver {
 		}
 		
 		public Class<?> getColumnClass(int columnIndex){
-			switch(columnIndex){
-				case 0: return PlotSource.class;
-				case 1: return Color.class;
-				case 2: return Number.class;
+			switch(getColumnName(columnIndex)){
+				case TITLE_COL: return PlotSource.class;
+				case COLOR_COL: return Color.class;
+				case VAL_COL: return Number.class;
+				case KM_COL: return String.class;
 			}
 			
 			return Object.class;
@@ -789,26 +796,39 @@ public class ChartView extends JPanel implements DataReceiver {
 			// This should be thread-safe since all updates to the chart occur on the AWT thread.
 			XYPlot plot = chart.getXYPlot();
 			if (datasetIndex < plot.getDatasetCount() && seriesIndex < plot.getDataset(datasetIndex).getSeriesCount()){
-				if (columnIndex == 1){
+				//color
+				if (getColumnName(columnIndex).equals(COLOR_COL)){
 					Paint p = ((XYLineAndShapeRenderer)plot.getRenderer(datasetIndex)).getSeriesPaint(seriesIndex);
 					if (p instanceof Color)
 						return (Color)p;
 					return null;
 				}
-				else if (columnIndex == 2){
+				//value
+				else if (getColumnName(columnIndex).equals(VAL_COL)){
 					if (sampleData != null && sampleData.length > rowIndex)
 						return new Double(sampleData[rowIndex]);
+				}
+				//km
+				else if (getColumnName(columnIndex).equals(KM_COL)){
+				
+					String unit = "km";
+					if(xValue < 1){
+						xValue = xValue*1000;
+						unit= "m";
+					}
+				
+					return df.format(xValue)+" "+unit;
 				}
 			}
 			return null;
 		}
 		
 		public boolean isCellEditable(int rowIndex, int colIndex){
-			return (colIndex == 1);
+			return (getColumnName(colIndex).equals(COLOR_COL));
 		}
 		
 		public void setValueAt(Object value, int rowIndex, int columnIndex){
-			if (columnIndex != 1)
+			if (!getColumnName(columnIndex).equals(COLOR_COL))
 				throw new IllegalArgumentException("Columns other than the color column are uneditable.");
 			
 			int datasetIndex = rowIndex;
@@ -820,8 +840,9 @@ public class ChartView extends JPanel implements DataReceiver {
 			}
 		}
 		
-		public void setSampleData(double newSampleData){
+		public void setSampleData(double newSampleData, double xValue){
 			sampleData[0] = newSampleData;
+			this.xValue = xValue;
 			//fireTableChanged(new TableModelEvent(this, 0, getRowCount(), 2, TableModelEvent.UPDATE));
 			fireTableDataChanged();
 		}
@@ -875,7 +896,7 @@ public class ChartView extends JPanel implements DataReceiver {
 			this.lseg = lseg;
 			this.t0 = t0;
 			this.t1 = t1;
-			this.ppd = stampLView.viewman.getMagnification();;
+			this.ppd = stampLView.viewman.getZoomManager().getZoomPPD();
 			double dists[] = perimeterLength(lseg, stampLView.getProj()); 
 			lsegLength = dists[0];
 			lsegLengthKm = dists[1];
@@ -902,19 +923,20 @@ public class ChartView extends JPanel implements DataReceiver {
 			
 			return at;
 		}
-		private void sampleData(){
+		
+		private void sampleData() {
 			for(int i=0; i<nSamples; i++){ // Loops over the left edge
-				double t = t0+((double)i)/nSamples; // TODO: Not quite correct, t never equals 1
+				double t = t0+((double)i)/nSamples; // Not quite correct, t never equals 1
 				tVals[i] = t;
 				pts[i] = interpolate(lseg, t, stampLView.getProj());
 				dist[i] = distanceTo(lseg, pts[i])[1];
-				
+
 				try {
 					data[i]=stampLView.getValueAtPoint(pts[i]);						
 				} catch (Exception e) {
 					e.printStackTrace();
 				}
-			}
+			}					
 		}
 		
 		/**
@@ -972,11 +994,7 @@ public class ChartView extends JPanel implements DataReceiver {
 		public double[] getSampleData(){
 			return (double[])data.clone();
 		}
-		
-		public double getSampleData(Point2D worldPt){
-			return stampLView.getValueAtPoint(worldPt);
-		}
-		
+				
 		public double getSampleData(double km){
 			int idx = getDistanceIndex(km);
 			if (idx >=0 && idx < dist.length)

@@ -1,55 +1,44 @@
-// Copyright 2008, Arizona Board of Regents
-// on behalf of Arizona State University
-// 
-// Prepared by the Mars Space Flight Facility, Arizona State University,
-// Tempe, AZ.
-// 
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-// 
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU General Public License for more details.
-// 
-// You should have received a copy of the GNU General Public License
-// along with this program.  If not, see <http://www.gnu.org/licenses/>.
-
-
 package edu.asu.jmars.layer.util.features;
 
 import java.awt.AlphaComposite;
 import java.awt.BasicStroke;
+import java.awt.BorderLayout;
 import java.awt.Color;
+import java.awt.Font;
 import java.awt.Graphics2D;
 import java.awt.GridBagConstraints;
 import java.awt.GridBagLayout;
 import java.awt.Insets;
 import java.awt.Rectangle;
+import java.awt.RenderingHints;
 import java.awt.Shape;
 import java.awt.event.ActionEvent;
 import java.awt.event.ActionListener;
+import java.awt.geom.Area;
 import java.awt.geom.Rectangle2D;
 import java.awt.image.BufferedImage;
 import java.awt.image.Raster;
-import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Set;
-import java.util.concurrent.CyclicBarrier;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
 
+import javax.swing.Box;
+import javax.swing.BoxLayout;
+import javax.swing.ComboBoxModel;
+import javax.swing.DefaultComboBoxModel;
+import javax.swing.JButton;
 import javax.swing.JComboBox;
 import javax.swing.JLabel;
 import javax.swing.JPanel;
+import javax.swing.JTextArea;
+import javax.swing.JTextField;
+import javax.swing.SwingUtilities;
+import javax.swing.border.EmptyBorder;
+import javax.swing.border.TitledBorder;
 
 import org.jdesktop.swingx.combobox.EnumComboBoxModel;
-import org.jdesktop.swingx.combobox.ListComboBoxModel;
 
 import edu.asu.jmars.Main;
 import edu.asu.jmars.graphics.GraphicsWrapped;
@@ -61,21 +50,17 @@ import edu.asu.jmars.layer.map2.MapServerFactory;
 import edu.asu.jmars.layer.map2.MapSource;
 import edu.asu.jmars.layer.map2.Pipeline;
 import edu.asu.jmars.layer.map2.Stage;
+import edu.asu.jmars.layer.shape2.ColumnEditor;
+import edu.asu.jmars.layer.shape2.ShapeLayer;
+import edu.asu.jmars.layer.util.NumericMapSourceDialog;
 import edu.asu.jmars.util.Config;
 import edu.asu.jmars.util.Util;
 
 /**
  * Computes the min/max/mean/stdev of map pixels under
  * each shape at the given scale and projection.
- * 
- * Each instance of this field has an unbounded queue
- * of field requests that feed into a map channel one
- * at a time. The requests are handled asynchronously,
- * so initially updating this column will show an empty
- * cell (which is also the user's feedback that data
- * is still being processed.)
  */
-public class FieldMap extends CalculatedField implements MapChannelReceiver {
+public class FieldMap extends CalculatedField {
 	private static final long serialVersionUID = 1L;
 	private static final Set<Field> fields = Collections.singleton(Field.FIELD_PATH);
 	public enum Type {
@@ -85,107 +70,143 @@ public class FieldMap extends CalculatedField implements MapChannelReceiver {
 		return fields;
 	}
 	
-	private transient ExecutorService pool;
-	private transient CyclicBarrier barrier;
-	private transient MapChannelTiled ch;
-	
+	/** @deprecated This remains here for binary compatibility with session files. */
 	private final FeatureCollection fc;
-	private final Field field;
-	private final int band;
+	/** @deprecated This remains here for binary compatibility with session files. */
+	private Field field;
 	
+	private final int band;
 	private MapSource source;
 	private int ppd;
 	private Type type;
 	
-	private Feature feature;
-	private Shape roi;
-	int count;
-	double sum;
-	double m, s;
-	double min;
-	double max;
-	
-	public FieldMap(FeatureCollection fc, Field target, String name, Type type, int ppd, MapSource source, int band) {
+	public FieldMap(String name, Type type, int ppd, MapSource source, int band) {
 		super(name, Double.class);
-		this.field = target;
 		this.type = type;
 		this.source = source;
 		this.band = band;
 		this.ppd = ppd;
-		this.fc = fc;
-		initTransients();
+		this.fc = null;
 	}
 	
-	private void readObject(java.io.ObjectInputStream stream) throws IOException, ClassNotFoundException {
-		stream.defaultReadObject();
-		initTransients();
-	}
-	
-	private void initTransients() {
-		pool = Executors.newFixedThreadPool(1);
-		barrier = new CyclicBarrier(2);
-		ch = new MapChannelTiled(this);
-	}
-	
-	public Object getValue(final Feature f) {
-		pool.submit(new Runnable() {
-			public void run() {
-				try {
-					feature = f;
-					roi = f.getPath().getWorld().getGeneralPath();
-					// for points, create a one pixel box
-					Rectangle2D bounds = roi.getBounds2D();
-					if (bounds.isEmpty()) {
-						roi = new Rectangle2D.Double(bounds.getCenterX()-.5/ppd, bounds.getCenterY()-.5/ppd, 1d/ppd, 1d/ppd);
-					}
-					sum = 0;
-					m = 0;
-					s = 0;
-					count = 0;
-					min = Double.POSITIVE_INFINITY;
-					max = Double.NEGATIVE_INFINITY;
-					ch.setRequest(Main.PO, roi.getBounds2D(), ppd, new Pipeline[]{new Pipeline(source, new Stage[0])});
-					// if ch is finished right after we set it up
-					// then mapData won't be called; this is
-					// just so we don't hang FieldMap if something
-					// goes wrong.
-					if (!ch.isFinished()) {
-						barrier.await();
-					}
-				} catch (Exception e) {
-					e.printStackTrace();
+	/**
+	 * Controls the sampling operation for a single Feature. Instances of this
+	 * class are queued up in a pool, and they block the pool thread by using a
+	 * barrier until the MapData requests have all arrived or an error occurs.
+	 */
+	private class MapSampler implements Runnable, MapChannelReceiver {
+		/** the path to sample under */
+		private final FPath path;
+		private Shape roi;
+		private Rectangle2D.Double bounds;
+		private int count;
+		private double sum, m, s, min, max;
+		private MapChannelTiled ch = new MapChannelTiled(this);
+		/** the resulting map sample */
+		private Double stat;
+		private volatile boolean finished = false;
+		
+		public MapSampler(FPath path) {
+			this.path = path;
+		}
+		
+		public void run() {
+			try {
+				Shape shape = path.getShape();
+				bounds = new Rectangle2D.Double();
+				bounds.setRect(shape.getBounds2D());
+				
+				// expand bounds out to nearest pixel boundary in all
+				// directions, since MapData will round one way or the other for
+				// us, and we want a predictable result for e.g. points that are
+				// exactly between two pixels.
+				double dpp = 1d/ppd;
+				double x1 = Math.floor(bounds.x * ppd) * dpp;
+				double x2 = Math.ceil((bounds.x + bounds.width) * ppd) * dpp;
+				if (x1 == x2) {
+					x1 -= dpp;
+					x2 += dpp;
 				}
+				double y1 = Math.floor(bounds.y * ppd) * dpp;
+				double y2 = Math.ceil((bounds.y + bounds.height) * ppd) * dpp;
+				if (y1 == y2) {
+					y1 -= dpp;
+					y2 += dpp;
+				}
+				bounds.setFrameFromDiagonal(x1, y1, x2, y2);
+				
+				// keep shape x values >= 0, since MapData will as well and
+				// we want the overlap checking that occurs later to remain
+				// simple
+				if (bounds.x < 0) {
+					bounds.x += 360;
+				}
+				
+				// Area estimate for shape
+				double shapeArea = shape.getBounds2D().getWidth()*shape.getBounds2D().getHeight();
+				// Area estimate for a 1x1 pixel map at the specified ppd
+				double pixelArea = dpp *dpp;
+				
+				// Use the bounding box for points, to ensure we enclose some area
+				if (path.getType() == FPath.TYPE_POINT) {
+					roi = bounds;
+				}
+				// If our shape is smaller than a single pixel, use the entire bounds as well.  Otherwise we can end up with NO DATA
+				// because the code to draw the roi into the pixel will decide not to draw anything at all
+				else if (shapeArea < pixelArea) {
+					roi = bounds;
+				} else {
+					roi = shape;
+				}
+				
+				// initialize accumulator variables
+				sum = 0;
+				m = 0;
+				s = 0;
+				count = 0;
+				min = Double.POSITIVE_INFINITY;
+				max = Double.NEGATIVE_INFINITY;
+				
+				// kick off map request
+				ch.setRequest(Main.PO, bounds, ppd, new Pipeline[]{new Pipeline(source, new Stage[0])});
+			} catch (Exception e) {
+				e.printStackTrace();
+				finishStat();
 			}
-		});
-		return null;
-	}
-	public void mapChanged(MapData mapData) {
-		if (mapData.isFinished()) {
-			Rectangle2D roiBounds = roi.getBounds2D();
-			Rectangle2D extent = mapData.getRequest().getExtent();
-			Raster raster = mapData.getImage().getRaster();
+		}
+		
+		/** add the partial statistics from this tile */
+		private void accumulateStat(MapData mapData, Rectangle2D tileBounds) {
+			Raster raster = mapData.getRasterForWorld(tileBounds);
 			int width = raster.getWidth();
 			int height = raster.getHeight();
+			
 			BufferedImage maskImage = new BufferedImage(width, height, BufferedImage.TYPE_BYTE_GRAY);
 			Graphics2D g2 = maskImage.createGraphics();
-			g2.setTransform(Util.world2image(extent, width, height));
-			g2 = new GraphicsWrapped(g2,360,ppd,extent,"maskWrapped");
+			g2.setTransform(Util.world2image(tileBounds, width, height));
+			g2 = new GraphicsWrapped(g2,360,ppd,tileBounds,"maskWrapped");
 			try {
 				g2.setComposite(AlphaComposite.getInstance(AlphaComposite.SRC));
 				g2.setColor(Color.white);
-				g2.setStroke(new BasicStroke(1f/ppd));
+				// anti-aliasing is slower and unwanted here
+				g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_OFF);
+				// fill and then draw a border, just more than 1 pixel so
+				// pixels touching the shape are always filled in
+				g2.fill(roi);
+				g2.setStroke(new BasicStroke(1.01f/ppd));
 				g2.draw(roi);
 			} finally {
 				g2.dispose();
 			}
+			
 			int[] mask = new int[width*height];
 			maskImage.getRaster().getPixels(0, 0, width, height, mask);
-			
-			Rectangle region = mapData.getRasterBoundsForWorld(roiBounds);
-			for (int j = region.y+region.height-1; j >= region.y; j--) {
-				for (int i = region.x+region.width-1; i >= region.x; i--) {
-					if (mask[j*width+i] != 0) {
+			Rectangle region = mapData.getRasterBoundsForWorld(tileBounds);
+			for (int j = 0; j < height; j++) {
+				for (int i = 0; i < width; i++) {
+					if (mask[j*width+i] != 0 && !mapData.isNull(i + region.x, j + region.y)) {
 						count ++;
+						// TODO: add support for selecting the band to sample
 						double value = raster.getSampleDouble(i, j, band);
 						switch (type) {
 						case AVG:
@@ -212,27 +233,144 @@ public class FieldMap extends CalculatedField implements MapChannelReceiver {
 					}
 				}
 			}
-			
-			if (ch.isFinished()) {
-				Object stat = null;
-				switch (type) {
-				case AVG: stat = sum/count; break;
-				case MIN: stat = min; break;
-				case MAX: stat = max; break;
-				case SUM: stat = sum; break;
-				case STDEV: stat = count==1 ? 0 : Math.sqrt(s/(count-1)); break;
+		}
+		
+		/**
+		 * Computes the final stat or error indicator, sends it to the Feature,
+		 * stops any further processing for this Feature, and unlocks the pool
+		 * so the next Feature may be processed.
+		 */
+		private void finishStat() {
+			try {
+				if (count == 0) {
+					stat = null;
+				} else {
+					switch (type) {
+					case AVG: stat = sum/count; break;
+					case MIN: stat = min; break;
+					case MAX: stat = max; break;
+					case SUM: stat = sum; break;
+					case STDEV: stat = count==1 ? 0 : Math.sqrt(s/(count-1)); break;
+					default: throw new IllegalStateException("Unsupported stat type");
+					}
 				}
-				if (stat != null) {
-					fc.setAttributes(feature, Collections.singletonMap(field, stat));
-				}
-				try {
-					barrier.await();
-				} catch (Exception e) {
-					e.printStackTrace();
+			} finally {
+				ch.cancel();
+				finished = true;
+				synchronized(this) {
+					notifyAll();
 				}
 			}
 		}
+		
+		public void mapChanged(MapData mapData) {
+			try {
+				if (mapData.isFinished()) {
+					// all fragments for this MapData have arrived or failed
+					// so see if the portion of 'bounds' under this request finished
+					Rectangle2D.Double tileBounds = new Rectangle2D.Double();
+					tileBounds.setFrame(bounds);
+					Area finished = mapData.getFinishedArea();
+					Rectangle2D finishedBounds = finished.getBounds2D();
+					if (!finishedBounds.intersects(tileBounds)) {
+						double xdelta = finishedBounds.getMinX() - tileBounds.x;
+						tileBounds.x += 360 * Math.signum(xdelta);
+					}
+					Rectangle2D.intersect(tileBounds, finishedBounds, tileBounds);
+					if (mapData.getImage() == null || !finished.contains(tileBounds)) {
+						// missing data, set error condition and set result on Feature
+						count = 0;
+						finishStat();
+					} else {
+						// include this tile in the running stats
+						accumulateStat(mapData, tileBounds);
+						if (ch.isFinished()) {
+							// compute final stat and set it on the feature
+							finishStat();
+						}
+					}
+				}
+			} catch (Exception e) {
+				// something went wrong, set error condition and set result on Feature
+				e.printStackTrace();
+				count = 0;
+				finishStat();
+				return;
+			}
+		}
 	}
+	
+	/**
+	 * Requests tiles for this map sampling operation over the given feature,
+	 * blocks until the statistic has been cobbled together, and returns the value.
+	 * The MapSampler must asynchronously receive updates on the event thread,
+	 * therefore it cannot synchronously block the event thread and must be
+	 * called from another thread.
+	 */
+	public Object getValue(ShapeLayer layer, Feature f) {
+		if (SwingUtilities.isEventDispatchThread()) {
+			throw new IllegalStateException("Must not be called on the AWT event thread.");
+		}
+		
+		// use the cache if it contains this feature
+		FPath path = layer.getIndex().getWorldPath(f);
+		if (path == null) {
+			// otherwise calculate the geometry style here
+			path = layer.getStylesLive().geometry.getValue(f).getWorld();
+		}
+		
+		MapSampler sampler = new MapSampler(path);
+		sampler.run();
+		
+		while (!sampler.finished) {
+			try {
+				synchronized(sampler) {
+					sampler.wait();
+				}
+			} catch (Exception e) {
+				e.printStackTrace();
+				return null;
+			}
+		}
+		
+		return sampler.stat;
+	}
+	
+	/**
+	 * Called from the landing layer
+	 * 
+	 * Requests tiles for this map sampling operation over the given feature,
+	 * blocks until the statistic has been cobbled together, and returns the value.
+	 * The MapSampler must asynchronously receive updates on the event thread,
+	 * therefore it cannot synchronously block the event thread and must be
+	 * called from another thread.
+	 */
+	public Object getValue(FPath path) {
+		if (SwingUtilities.isEventDispatchThread()) {
+			throw new IllegalStateException("Must not be called on the AWT event thread.");
+		}
+		
+		// convert from spacial degrees west to world points
+		FPath fPath = path.getWorld();
+		
+		MapSampler sampler = new MapSampler(fPath);
+		sampler.run();
+		
+		while (!sampler.finished) {
+			try {
+				synchronized(sampler) {
+					sampler.wait();
+				}
+			} catch (Exception e) {
+				e.printStackTrace();
+				return null;
+			}
+		}
+		
+		return sampler.stat;
+	}
+	
+	
 	public static class Factory extends FieldFactory<FieldMap> {
 		private static final Comparator<MapSource> byTitle = new Comparator<MapSource>() {
 			public int compare(MapSource o1, MapSource o2) {
@@ -240,88 +378,186 @@ public class FieldMap extends CalculatedField implements MapChannelReceiver {
 			}
 		};
 		
-		private List<MapSource> sources = new ArrayList<MapSource>();
 		
-		public Factory(String name, FeatureCollection fc) {
-			super(name, FieldMap.class, Double.class);
-			// just in case the user gets to this point before
-			// the map server responds
-			if (MapServerFactory.getMapServers() != null) {
-				for (MapServer server: MapServerFactory.getMapServers()) {
-					for (MapSource source: server.getMapSources()) {
-						if (source.hasNumericKeyword()) {
-							sources.add(source);
-						}
-					}
-				}
-			}
-			Collections.sort(sources, byTitle);
+		public Factory() {
+			super("Map Sampling", FieldMap.class, Double.class);
+
 		}
-		private static ListComboBoxModel<Integer> getPpdModel(MapSource source) {
+		
+		private static ComboBoxModel getPpdModel(MapSource source) {
 			List<Integer> ppdlist = new ArrayList<Integer>();
-			for (int ppd = 1; ppd <= source.getMaxPPD(); ppd *= 2) {
+			double maxPPD = source.getMaxPPD();
+			//if the source has a max ppd of less than one, default to 1.
+			if(maxPPD<1){
+				maxPPD = 1;
+			}
+			for (int ppd = 1; ppd <= maxPPD; ppd *= 2) {
 				ppdlist.add(ppd);
 			}
-			return new ListComboBoxModel<Integer>(ppdlist);
+			return new DefaultComboBoxModel(ppdlist.toArray());
 		}
-		public JPanel createEditor(Field field) {
+		
+		
+		
+		public JPanel createEditor(ColumnEditor colEditor, Field field) {
+			//used for ui
+			int pad = 1;
+			Insets in = new Insets(pad,pad,pad,pad);
+			int row = 0;
+			
 			final FieldMap f = (FieldMap)field;
 			
+			//GUI Components
+			final JPanel mainPnl = new JPanel();
+			
+			//TextArea with information about map sampling
+			JTextArea infoText = new JTextArea();
+			infoText.setWrapStyleWord(true);
+			infoText.setLineWrap(true);
+			Font font = new Font("Dialog",Font.BOLD,12);
+			infoText.setFont(font);
+			infoText.setBackground(Util.panelGrey);
+			infoText.setText("Computes the selected statistic from all pixel " +
+					"values in the selected map, under the shape, and sampled " +
+					"at the selected resolution.");
+			infoText.setEditable(false);
+			
+			//The map source button and related source gui components
+			JButton sourceBtn = new JButton("Select Map Source...");
+			final JTextField sourceTF = new JTextField(20);
+			sourceTF.setEditable(false);
+			sourceTF.setText(f.source.getTitle());
+			sourceTF.setColumns((int)(f.source.getTitle().length()*.8));
 			final JComboBox ppdCB = new JComboBox();
-			final JComboBox sourceCB = new JComboBox(new ListComboBoxModel<MapSource>(sources));
-			sourceCB.setSelectedItem(f.source);
+			final JComboBox typeCB = new JComboBox(new EnumComboBoxModel<Type>(Type.class));
+			final JLabel unitsLbl = new JLabel();
+			final JTextArea descriptionTA = new JTextArea();
+			
+			sourceBtn.addActionListener(new ActionListener() {
+				public void actionPerformed(ActionEvent e) {
+					MapSource newSource = NumericMapSourceDialog.getUserSelectedSources(mainPnl, false).get(0); 
+					//if source is null, return.  This shouldn't happen though.
+					if(newSource != null){
+						f.source = newSource;
+						ppdCB.setModel(getPpdModel(f.source));
+						ppdCB.setSelectedIndex(ppdCB.getModel().getSize()-1);
+						//check to see if units is null
+						if(f.source.getUnits()!=null){
+							unitsLbl.setText(f.source.getUnits());
+						}else{
+							unitsLbl.setText("Not Available");
+						}
+						descriptionTA.setText(f.source.getAbstract());
+						
+						//update the source TF which is displaying the selected map
+						String title = f.source.getTitle();
+						sourceTF.setText(title);
+						sourceTF.setColumns((int)(title.length()*.8));
+						
+						descriptionTA.setCaretPosition(0); //so scrollbar comes back to the top
+					}
+				}
+			});
+			
+			//map panel
+			row = 0;
+			JPanel mapPnl = new JPanel(new GridBagLayout());
+			mapPnl.add(sourceBtn, new GridBagConstraints(0, row, 1, 1, 0, 0, GridBagConstraints.CENTER, GridBagConstraints.NONE, in, pad, pad));
+			mapPnl.add(sourceTF, new GridBagConstraints(0, ++row, 1, 1, 0, 0, GridBagConstraints.CENTER, GridBagConstraints.NONE, in, pad, pad));
+			
+			//ppd components
+			JLabel ppdLbl = new JLabel("PPD: ");
+			ppdCB.setLightWeightPopupEnabled(false);
 			ppdCB.setModel(getPpdModel(f.source));
 			ppdCB.setSelectedItem(f.ppd);
-			
 			ppdCB.addActionListener(new ActionListener() {
 				public void actionPerformed(ActionEvent e) {
 					f.ppd = (Integer)ppdCB.getSelectedItem();
 				}
 			});
+			JPanel ppdPnl = new JPanel(new GridBagLayout());
+			ppdPnl.add(ppdLbl);
+			ppdPnl.add(ppdCB);
 			
-			sourceCB.addActionListener(new ActionListener() {
-				public void actionPerformed(ActionEvent e) {
-					f.source = (MapSource)sourceCB.getSelectedItem();
-					ppdCB.setModel(getPpdModel(f.source));
-					ppdCB.setSelectedIndex(ppdCB.getModel().getSize()-1);
-				}
-			});
-			
-			final JComboBox typeCB = new JComboBox(new EnumComboBoxModel<Type>(Type.class));
+			//stat components
+			JLabel statLbl = new JLabel("Stat: ");
+			typeCB.setLightWeightPopupEnabled(false);
 			typeCB.setSelectedItem(f.type);
 			typeCB.addActionListener(new ActionListener() {
 				public void actionPerformed(ActionEvent e) {
 					f.type = (Type)typeCB.getSelectedItem();
 				}
 			});
+			JPanel statPnl = new JPanel(new GridBagLayout());
+			statPnl.add(statLbl);
+			statPnl.add(typeCB);
 			
-			JPanel editor = new JPanel(new GridBagLayout());
-			int pad = 4;
-			Insets in = new Insets(pad,pad,pad,pad);
-			editor.add(new JLabel("Map"), new GridBagConstraints(0,0,1,1,0,0,GridBagConstraints.NORTHWEST,GridBagConstraints.NONE,in,pad,pad));
-			editor.add(sourceCB, new GridBagConstraints(1,0,1,1,0,0,GridBagConstraints.NORTHWEST,GridBagConstraints.HORIZONTAL,in,pad,pad));
-			editor.add(new JLabel("PPD"), new GridBagConstraints(0,1,1,1,0,0,GridBagConstraints.NORTHWEST,GridBagConstraints.NONE,in,pad,pad));
-			editor.add(ppdCB, new GridBagConstraints(1,1,1,1,0,0,GridBagConstraints.NORTHWEST,GridBagConstraints.HORIZONTAL,in,pad,pad));
-			editor.add(new JLabel("Type"), new GridBagConstraints(0,2,1,1,0,0,GridBagConstraints.NORTHWEST,GridBagConstraints.NONE,in,pad,pad));
-			editor.add(typeCB, new GridBagConstraints(1,2,1,1,0,0,GridBagConstraints.NORTHWEST,GridBagConstraints.HORIZONTAL,in,pad,pad));
-			editor.add(new JLabel(), new GridBagConstraints(0,3,1,2,0,1,GridBagConstraints.NORTHWEST,GridBagConstraints.VERTICAL,in,pad,pad));
-			return editor;
-		}
-		/** Returns a field to compute the values, using the collection and field if it is necessary to send asynchronous updates */
-		public FieldMap createField(FeatureCollection fc, Field f) {
-			Type opType = Type.AVG;
-			MapSource source = sources.get(0);
-			String defaultElevServer = Config.get("threed.default_elevation.server");
-			String defaultElevSource = Config.get("threed.default_elevation.source");
-			for (MapSource s: sources) {
-				if (s.getServer().getName().equals(defaultElevServer) &&
-						s.getName().equals(defaultElevSource)) {
-					source = s;
-					break;
-				}
+			JPanel ppdStatPnl = new JPanel();
+			ppdStatPnl.add(ppdPnl);
+			ppdStatPnl.add(Box.createHorizontalStrut(5));
+			ppdStatPnl.add(statPnl);
+			
+			//Map info panel with components
+			JPanel mapInfoPnl = new JPanel(new BorderLayout());
+			mapInfoPnl.setBorder(new TitledBorder("Map Source Info"));
+			//units
+			JLabel uLbl = new JLabel("Units: ");
+			Font plainFt = new Font("Dialog",Font.PLAIN,12);
+			unitsLbl.setFont(plainFt);
+			//if null, set to not available
+			if(f.source.getUnits()!=null){
+				unitsLbl.setText(f.source.getUnits());
+			}else{
+				unitsLbl.setText("Not Available");
 			}
+			JPanel unitsPnl = new JPanel(new BorderLayout());
+			unitsPnl.setBorder(new EmptyBorder(5, 5, 0, 0));
+			unitsPnl.add(uLbl, BorderLayout.WEST);
+			unitsPnl.add(unitsLbl, BorderLayout.CENTER);
+			//description
+			JLabel dLbl = new JLabel("Description: ");
+			descriptionTA.setText(f.source.getAbstract());
+			descriptionTA.setWrapStyleWord(true);
+			descriptionTA.setLineWrap(true);
+			descriptionTA.setBackground(Util.panelGrey);
+			descriptionTA.setCaretPosition(0); //so scrollbar comes back to the top
+			descriptionTA.setEditable(false);
+			JPanel descripPnl = new JPanel(new BorderLayout());
+			descripPnl.setBorder(new EmptyBorder(5,5,0,0));
+			JPanel dPnl = new JPanel(new BorderLayout());
+			dPnl.add(dLbl, BorderLayout.NORTH);
+			descripPnl.add(dPnl, BorderLayout.WEST);
+			descripPnl.add(descriptionTA, BorderLayout.CENTER);
+			//add to mapinfopanel
+			mapInfoPnl.add(unitsPnl, BorderLayout.NORTH);
+			mapInfoPnl.add(descripPnl, BorderLayout.CENTER);
+
+			//Put all UI components together
+			mainPnl.setLayout(new BoxLayout(mainPnl, BoxLayout.PAGE_AXIS));
+			mainPnl.setBorder(new EmptyBorder(10,5,5,5));
+			mainPnl.add(infoText);
+			mainPnl.add(Box.createVerticalStrut(5));
+			mainPnl.add(mapPnl);
+			mainPnl.add(Box.createVerticalStrut(5));
+			mainPnl.add(ppdStatPnl);
+			mainPnl.add(Box.createVerticalStrut(15));
+			mainPnl.add(mapInfoPnl);
+			
+			return mainPnl;
+		}
+		
+		/** Returns a field to compute the values, using the collection and field if it is necessary to send asynchronous updates */
+		public FieldMap createField(Set<Field> fields) {
+			Type opType = Type.AVG;
+			String defaultElevServer = Config.get("threed.default_elevation.server");
+			defaultElevServer = Config.get(Util.getProductBodyPrefix() + "threed.default_elevation.server", defaultElevServer);
+			String defaultElevSource = Config.get("threed.default_elevation.source");
+			defaultElevSource = Config.get(Util.getProductBodyPrefix() + "threed.default_elevation.source", defaultElevSource);
+			MapServer server = MapServerFactory.getServerByName(defaultElevServer);
+			MapSource source = server.getSourceByName(defaultElevSource);
+	
 			int ppd = (int)Math.round(Math.pow(2, Math.ceil(Math.log(source.getMaxPPD())/Math.log(2))));
-			return new FieldMap(fc, f, getName(), opType, ppd, source, 0);
+			return new FieldMap(getName(), opType, ppd, source, 0);
 		}
 	}
 }

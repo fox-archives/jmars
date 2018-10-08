@@ -1,23 +1,3 @@
-// Copyright 2008, Arizona Board of Regents
-// on behalf of Arizona State University
-// 
-// Prepared by the Mars Space Flight Facility, Arizona State University,
-// Tempe, AZ.
-// 
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-// 
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU General Public License for more details.
-// 
-// You should have received a copy of the GNU General Public License
-// along with this program.  If not, see <http://www.gnu.org/licenses/>.
-
-
 package edu.asu.jmars.layer.stamp;
 
 import java.awt.geom.Area;
@@ -25,10 +5,11 @@ import java.awt.geom.GeneralPath;
 import java.awt.geom.PathIterator;
 import java.awt.geom.Point2D;
 import java.awt.geom.Rectangle2D;
-import java.net.URLEncoder;
 import java.text.DecimalFormat;
+import java.text.DecimalFormatSymbols;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.Locale;
 
 import javax.swing.JCheckBox;
 import javax.swing.JComboBox;
@@ -47,6 +28,8 @@ public class FilterParams {
     public DataField datafields[] = null;
     public HashMap<DataField, JComponent[]> dataMap = new HashMap<DataField, JComponent[]>();
     public String instrument = null;
+
+    public ArrayList<GeneralPath> paths = null;
     
     
     public FilterParams(String instrument, DataField fields[], HashMap<DataField, JComponent[]> map) {
@@ -64,7 +47,7 @@ public class FilterParams {
      ** data the user has entered into the container.
      **/
     public String getSql() {
-       	String sql = StampLayer.stampURL+"StampFetcher?limit=2000000&instrument="+getInstrument()+StampLayer.versionStr;
+       	String sql = "StampFetcher?limit=2000000&instrument="+getInstrument();
 
         String sqlAppend = "";
 
@@ -75,7 +58,53 @@ public class FilterParams {
         	String val="";
         	String val2="";        	
         	
-        	if (df.isMultiSelect()) {
+        	if (df.getFieldName().equalsIgnoreCase("intersect") && paths!=null) {
+    			StringBuffer sb = new StringBuffer(paths.size()*40);
+    			int area=1;
+    			int point=1;
+    			int line=1;
+
+			    DecimalFormat formatter = new DecimalFormat("0.000");
+
+    			ArrayList<ArrayList<Point2D>> pathLists = new ArrayList<ArrayList<Point2D>>();
+    			
+    			for (GeneralPath path : paths) {
+        			GeneralPath poly = Main.PO.convWorldToSpatial(path);
+        			
+        			pathLists.addAll(PathUtil.generalPathToPoints(poly, true, true));        			
+    			}
+    			    			
+    			// TODO: Handle the case where this crosses the prime meridian?
+				
+    			for (ArrayList<Point2D> pathPoints : pathLists) {
+    				if (pathPoints.size()==1) {                                                   // Point
+    					sb.append("&viewPoint"+point++ +"=");
+    					Point2D p = pathPoints.get(0);
+						sb.append(formatter.format(p.getX())+","+formatter.format(p.getY()));        					
+    				} else if (pathPoints.get(0)==pathPoints.get(pathPoints.size()-1)) {          // Closed polygon
+				    	if (area==1) {
+				    		sb.append("&viewArea=");
+				    	} else {
+				    		sb.append("&viewArea"+area+"=");
+				    	}
+				    	area++;
+				    	
+    					for (Point2D p : pathPoints) {
+    						sb.append(formatter.format(p.getX())+","+formatter.format(p.getY()));
+    						sb.append(",");
+    					}		    					        					
+    				} else {                                                                      // Polyline
+    					sb.append("&viewLine"+line++ +"=");
+    					for (Point2D p : pathPoints) {
+    						sb.append(formatter.format(p.getX())+","+formatter.format(p.getY()));
+    						sb.append(",");
+    					}		    					        					        					
+    				}
+    			}
+
+    			sqlAppend+=sb.toString();
+			    val = "";
+    		} else if (df.isMultiSelect()) {
         		if (tc[0] instanceof JCheckBox) {
                		JCheckBox cb[] = (JCheckBox[])tc;
                		
@@ -86,7 +115,7 @@ public class FilterParams {
                		}	
                 	if (val.length()>0) {
                 	   	String fieldName = df.getFieldName();
-                	   	sqlAppend+="&min"+fieldName+"="+URLEncoder.encode(val, "UTF-8");
+                        sqlAppend+="&min"+fieldName+"="+val;
                 	}                   		            			
         		}
         	} else if (df.isRange()) {
@@ -107,6 +136,32 @@ public class FilterParams {
             		// seems to work.  More straight forward implementations all failed in one case or another.
             		if (val.equalsIgnoreCase("MainView")) {
     					Rectangle2D extent = Main.testDriver.mainWindow.getProj().getWorldWindow();
+
+    					{
+	    					double x = extent.getMinX();
+	    					double y = extent.getMinY();
+	    					double w = extent.getWidth();
+	    					double h = extent.getHeight();
+	    					
+	    					if (y<-90) {
+	    						extent.setRect(x, -90, w, h-(-90-y));
+	    					}
+
+	    					if (y+h>89.999) {
+	    						extent.setRect(x, y, w, 89.999-y);
+	    					}	    					
+	    					
+	    					if (w>180) {
+    							JOptionPane.showMessageDialog(
+    									Main.mainFrame,
+    									"MainView filtering not supported with current view.  Lat/Lon filter will be skipped for this query.",
+    									"Unsupported Filter",
+    									JOptionPane.INFORMATION_MESSAGE
+    							);
+    							continue;
+	    					}
+	    					
+    					}
     					
     					float x = (float)extent.getMinX();
     					float y = (float)extent.getMinY();    					
@@ -123,9 +178,11 @@ public class FilterParams {
     					float minLat=99f;
     					float maxLat=-99f;
     					float n = 1000.0f;
-    					    					
+    					int cnt =0;    					
+    					
     					float lastLon = -999f;
-    					for (float i=x; i<x+width; i+=(width/n)) {
+    					
+    					for (float i=x; i<x+width; i=x+(width*cnt++/n)) {
     						Point2D pt = Main.PO.convWorldToSpatial(i, y);
     						float newLon = (float)pt.getX();
     						float newLat = (float)pt.getY();
@@ -141,8 +198,9 @@ public class FilterParams {
     						lastLon = newLon;
     					}
     					
+    					cnt=0;
     					lastLon = -999f;
-    					for (float i=y; i<y+height; i+=(height/n)) {
+    					for (float i=y; i<y+height; i=y+(height*cnt++/n)) {
     						Point2D pt = Main.PO.convWorldToSpatial(x + width, i);
     						float newLon = (float)pt.getX();
     						float newLat = (float)pt.getY();
@@ -158,8 +216,9 @@ public class FilterParams {
     						lastLon = newLon;
     					}
 
+    					cnt = 0;
     					lastLon = -999f;
-    					for (float i=x+width; i>x; i-=(width/n)) {
+    					for (float i=x+width; i>x; i=x+width-(width*cnt++/n)) {
     						Point2D pt = Main.PO.convWorldToSpatial(i, y+height);
     						float newLon = (float)pt.getX();
     						float newLat = (float)pt.getY();
@@ -175,8 +234,9 @@ public class FilterParams {
     						lastLon = newLon;
     					}
     					
+    					cnt=0;
     					lastLon = -999f;
-    					for (float i=y+height; i>y; i-=(height/n)) {
+    					for (float i=y+height; i>y; i=y+height-(height*cnt++/n)) {
     						Point2D pt = Main.PO.convWorldToSpatial(x, i);
     						float newLon = (float)pt.getX();
     						float newLat = (float)pt.getY();
@@ -390,6 +450,8 @@ public class FilterParams {
     					mainView.closePath();
     					    					    					
     				    DecimalFormat formatter = new DecimalFormat("0.000");
+    				    // Force the use of . as the decimal symbol, so that the backend knows how to interpret these values
+    				    formatter.setDecimalFormatSymbols(DecimalFormatSymbols.getInstance(Locale.US));
 
     				    if (!unsupportedCase) {
 	    					if (pmCrosses%2==1) {
@@ -471,12 +533,12 @@ public class FilterParams {
 
             	if (val.length()>0) {
             	   	String fieldName = df.getFieldName();
-            	   	sqlAppend+="&min"+fieldName+"="+URLEncoder.encode(val, "UTF-8");
+                    sqlAppend+="&min"+fieldName+"="+val;
             	}
 
             	if (val2.length()>0) {
             	   	String fieldName = df.getFieldName();
-            	   	sqlAppend+="&max"+fieldName+"="+URLEncoder.encode(val2, "UTF-8");
+                    sqlAppend+="&max"+fieldName+"="+val2;
             	}
             	                	
         	} else {
@@ -497,7 +559,7 @@ public class FilterParams {
             	
         		if (val!=null && val.trim().length()>0) {
             	   	String fieldName = df.getFieldName();
-            	   	sqlAppend+="&"+fieldName+"="+URLEncoder.encode(val, "UTF-8");            			
+                    sqlAppend+="&"+fieldName+"="+val;                       
         		}
         	}
         	            	

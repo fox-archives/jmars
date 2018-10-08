@@ -1,21 +1,23 @@
-#!/bin/csh
-###############################################################################
-##
-## This file has the same #define conventions as the jmars.config file.
-##
-###############################################################################
-cpp -C -P -traditional $* <<EOF
-#if PUBLIC
 ===============================================================================
 
 JMARS command-line argument combinations:
 
 	<longitude> <latitude>
-	<Previously saved *.jmars filename>
+	<Previously saved *.jmars or *.jlf file>
+	<longitude> <latitude> <previously saved *.jlf file>
 
-The longitude is east-leading. Both longitude and latitude are in
-degrees. A JMARS save file can be created from the File menu with the
-"Save As" command.
+The longitude is degrees east of the prime meridian and the latitude is
+geocentric degrees north of the equator.
+
+When the JMARS user interface is running, the File menu has two ways to save
+the state for later use:
+
+A .jmars save file may be created with the "Save As" command. It saves all
+layers and the position of the view but cannot handle certain types of state.
+
+A .jlf save file may be created with the "Save Layers" command. It saves only
+layers, but the user can choose to load saved layers from jlf files while JMARS
+is running.
 
 If started with no arguments, longitude and latitude default to zero.
 
@@ -33,50 +35,3 @@ to the saved layers and the map image cache.
 Invoke with "-version" for some useful JMARS version info.
 
 ===============================================================================
-#else
-===============================================================================
-
-JMARS command-line argument combinations:
-
-	<longitude> <latitude>
-	<Previously saved *.jmars filename>
-
-Longitude is east-leading, and both longitude and latitude are in degrees.
-
-A JMARS save file can be created from the File menu with the "Save As"
-command, and then loaded by naming it on the command-line as above.
-
-If started with no arguments, longitude and latitude default to zero.
-
-JMARS flags, allowed anywhere on the command-line:
-
-	:
-	:<display>
-	clean
-	generate
-	slideshow
-
-The single-colon invocation prints a list of available displays. The
-colon WITH a display argument specifies a particular alternate display
-for multi-head mode. The clean flag forces a fresh start with regard
-to the map image cache. The generate argument is for creating cached
-map data for CD distribution.
-
-The slideshow flag enables slideshow mode, which allows JMARS to be
-driven from stdin. Slideshow commands are read one-by-one, without
-stopping, one command per line. Currently the only command available
-is:
-    center <tolerance> <longitude> <latitude>
-
-The arguments should all be whitespace-separated. The tolerance field
-indicates how many degrees off-axis is allowed for a pan before a
-reproject is triggered. A tolerance of 0 causes reprojects to always
-happen, a tolerance of 90 causes them to never happen. A value of
-30-60 is generally reasonable. The longitude and latitude are in
-east-leading degrees.
-
-Invoke with "-version" for some useful JMARS version info.
-
-===============================================================================
-#endif
-EOF

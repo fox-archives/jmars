@@ -1,43 +1,31 @@
-// Copyright 2008, Arizona Board of Regents
-// on behalf of Arizona State University
-// 
-// Prepared by the Mars Space Flight Facility, Arizona State University,
-// Tempe, AZ.
-// 
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-// 
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU General Public License for more details.
-// 
-// You should have received a copy of the GNU General Public License
-// along with this program.  If not, see <http://www.gnu.org/licenses/>.
-
-
 package edu.asu.jmars.layer.util.features;
 
 import java.awt.Shape;
-import java.awt.geom.GeneralPath;
 import java.awt.geom.Line2D;
+import java.awt.geom.Path2D;
 import java.awt.geom.PathIterator;
 import java.awt.geom.Point2D;
 import java.awt.geom.Rectangle2D;
 import java.text.DecimalFormat;
 import java.text.NumberFormat;
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.List;
-import java.util.Map;
 
-import org.apache.commons.collections.ReferenceMap;
+import com.vividsolutions.jts.awt.ShapeReader;
+import com.vividsolutions.jts.awt.ShapeWriter;
+import com.vividsolutions.jts.geom.Coordinate;
+import com.vividsolutions.jts.geom.CoordinateSequence;
+import com.vividsolutions.jts.geom.Geometry;
+import com.vividsolutions.jts.geom.GeometryCollection;
+import com.vividsolutions.jts.geom.GeometryFactory;
+import com.vividsolutions.jts.geom.LineString;
+import com.vividsolutions.jts.geom.LinearRing;
+import com.vividsolutions.jts.geom.Point;
+import com.vividsolutions.jts.geom.Polygon;
 
 import edu.asu.jmars.Main;
-import edu.asu.jmars.layer.ProjectionEvent;
-import edu.asu.jmars.layer.ProjectionListener;
+import edu.asu.jmars.graphics.TransformingIterator;
+import edu.asu.jmars.graphics.TransformingIterator.Transformer;
 import edu.asu.jmars.util.HVector;
 import edu.asu.jmars.util.SPolygon;
 import edu.asu.jmars.util.Util;
@@ -48,9 +36,6 @@ import edu.asu.jmars.util.Util;
  * computations are also provided.
  */
 public final class FPath {
-	// NOTE! To disable caching, just set this to false
-	private static final boolean caching = true;
-	
 	/** This Feature represents an undefined shape. */
 	public static final int TYPE_NONE = 0;
 	/** This Feature represents a single point. */
@@ -63,30 +48,24 @@ public final class FPath {
 	public static final int WORLD = 0;
 	public static final int SPATIAL_EAST = 1;
 	public static final int SPATIAL_WEST = 2;
-	private static Map cache;
-
-	static {
-		if (caching) {
-			cache = newCache();
-			Main.addProjectionListener(new ProjectionListener () {
-				public void projectionChanged (ProjectionEvent e) {
-					cache = newCache();
-				}
-			});
-		}
-	}
-
-	static Map newCache () {
-		return Collections.synchronizedMap(new ReferenceMap (ReferenceMap.WEAK, ReferenceMap.SOFT));
-	}
 	
 	private static final NumberFormat nf = new DecimalFormat("0.###");
-
+	
+	private static final Transformer toggleLon = new Transformer() {
+		public void transform(Point2D.Double p) {
+			p.x = FeatureUtil.lonNorm(-p.x);
+		}
+	};
+	
+	/** The coordinate system, or null if this is a west-leading spatial path */
 	private final int coordSystem;
-	private final Point2D[] vertices;
-	private final GeneralPath gp;
-	private final boolean closed;
-
+	/** The shape. Will often be Path2D, but other classes are possible so long as they follow the rules defined by {@link PathIterator}. */
+	private final Shape shape;
+	/** The offsets to the start of each path, plus one additional entry at the end of the array for where the next entry would start. */
+	private final int[] pathOffsets;
+	/** The closed flag for each path, which is true for those paths that end with the {@link PathIterator#SEG_CLOSE} code, and false otherwise. */
+	private final boolean[] pathClosed;
+	
 	/**
 	 * Creates a new Path from the given point array, where each point
 	 * is stored as
@@ -95,11 +74,12 @@ public final class FPath {
 	 * @param coordSystem One of WORLD, SPATIAL_EAST, or SPATIAL_WEST
 	 * @param closed If true, this represents a closed polygon
 	 */
+	public FPath (double[] coords, boolean latFirst, int coordSystem, boolean closed) {
+		this(verticesToPath(coordsToVertices(coords, latFirst), closed), coordSystem);
+	}
+
 	public FPath (float[] coords, boolean latFirst, int coordSystem, boolean closed) {
-		this.vertices = coordsToVertices(coords, latFirst);
-		this.gp = verticesToGp(vertices, closed);
-		this.closed = closed;
-		this.coordSystem = coordSystem;
+		this(verticesToPath(coordsToVertices(coords, latFirst), closed), coordSystem);
 	}
 
 	/**
@@ -110,99 +90,181 @@ public final class FPath {
 	 * @param closed If true, this represents a closed polygon
 	 */
 	public FPath (Point2D[] vertices, int coordSystem, boolean closed) {
-		this.vertices = createVertices(vertices);
-		this.gp = verticesToGp (vertices, closed);
-		this.coordSystem = coordSystem;
-		this.closed = closed;
+		this(verticesToPath(vertices, closed), coordSystem);
 	}
-
-	// TODO: copy 'points' into new instances of Point2D subclass that is itself
-	// immutable, do the same thing with GeneralPath (or pull the class type up
-	// to Polygon or some similar immutable) and _stop the cloning_ in
-	// getVertices() and getGeneralPath().
-	private static final Point2D[] createVertices (Point2D[] vertices) {
-		Point2D[] copy = new Point2D[vertices.length];
-		for (int i = 0; i < copy.length; i++)
-			copy[i] = (Point2D)vertices[i].clone();
-		return copy;
-	}
-
+	
 	/**
-	 * Creates a new FPath from the given GeneralPath, which must contain
+	 * Creates a new FPath from the given Path2D, which must contain
 	 * a single connected polygon, line, or point. If it does not, the
 	 * resulting FPath will be empty.
 	 */
-	public FPath (GeneralPath path, int coordSystem) {
-		Boolean[] closed = new Boolean[1];
-		Point2D[] points = gpToVertices(path, closed);
-		if (points == null) {
-			this.vertices = new Point2D[0];
-			this.gp = new GeneralPath();
-			this.closed = false;
-		} else {
-			this.gp = (GeneralPath)path.clone();
-			this.vertices = points;
-			this.closed = closed[0].booleanValue();
+	public FPath (Shape shape, int coordSystem) {
+		// set the coordinate system or explode
+		switch (coordSystem) {
+		case SPATIAL_EAST:
+		case SPATIAL_WEST:
+		case WORLD:
+			this.coordSystem = coordSystem;
+			break;
+		default:
+			throw new IllegalArgumentException("Unrecognized coordinate system " + coordSystem);
 		}
-		this.coordSystem = coordSystem;
+		
+		// ensure WORLD coordinate shapes are normalized
+		this.shape = coordSystem == WORLD ? Util.normalize360(shape) : shape;
+		
+		// compute the offsets and closed flags
+		PathIterator it = shape.getPathIterator(null);
+		double[] coords = new double[6];
+		// parallel arrays for each sub-path indicating the initial offset to the path and whether it is closed
+		List<Integer> starts = new ArrayList<Integer>();
+		List<Boolean> closed = new ArrayList<Boolean>();
+		int offset = 0;
+		for (boolean done = it.isDone(); !done; done = done | it.isDone()) {
+			switch (it.currentSegment(coords)) {
+			case PathIterator.SEG_MOVETO:
+				if (starts.size() > closed.size()) {
+					closed.add(false);
+				}
+				starts.add(offset);
+				break;
+			case PathIterator.SEG_LINETO:
+				break;
+			case PathIterator.SEG_CLOSE:
+				// allowed segment types, but we don't do anything here but avoid
+				// the default case
+				closed.add(true);
+				break;
+			default:
+				throw new IllegalArgumentException("Curved edges are not supported");
+			}
+			it.next();
+			offset ++;
+		}
+		
+		if (starts.size() > closed.size()) {
+			closed.add(false);
+		}
+		
+		int size = starts.size();
+		this.pathOffsets = new int[size+1];
+		this.pathClosed = new boolean[size];
+		for (int i = 0; i < size; i++) {
+			pathOffsets[i] = starts.get(i);
+			pathClosed[i] = closed.get(i);
+		}
+		pathOffsets[size] = offset;
 	}
-
+	
 	/**
 	 * @return WORLD, SPATIAL_WEST, or SPATIAL_EAST.
 	 */
 	public int getCoordSystem () {
 		return coordSystem;
 	}
-
-	/**
-	 * If true, the polygon is a closed figure. If false, the polygonal points
-	 * represent a series of lines, but not a closed polygon.
-	 */
+	
+	/** @return the number of paths within this FPath, always at least one. */
+	public int getPathCount() {
+		return pathClosed.length;
+	}
+	
+	/** As {@link #getClosed(int)}, for the first sub-path. */
 	public boolean getClosed () {
-		return closed;
-	}
-
-	/**
-	 * Returns a copy of the vertices of this path.
-	 */
-	public Point2D[] getVertices () {
-		Point2D[] result = new Point2D[vertices.length];
-		for (int i = 0; i < vertices.length; i++)
-			result[i] = (Point2D)vertices[i].clone();
-		return result;
-	}
-
-	/**
-	 * Returns a copy of the GeneralPath for this path.
-	 */
-	public GeneralPath getGeneralPath () {
-		return (GeneralPath) gp.clone();
-	}
-
-	/**
-	 * Returns the lat/lon coordinates as a series of doubles, like
-	 * lat lon lat lon ... (if latFirst is true, or)
-	 * lon lat lon lat ... (if latFirst is false)
-	 */
-	public float[] getCoords(boolean latFirst) {
-		float[] latLons = new float[vertices.length * 2];
-
-		int x = (latFirst ? 1 : 0);
-		int y = (latFirst ? 0 : 1);
-
-		for (int i = 0; i < vertices.length*2; i += 2) {
-			latLons[i + x] = (float) vertices[i/2].getX();
-			latLons[i + y] = (float) vertices[i/2].getY();
-		}
-
-		return latLons;
+		return pathClosed[0];
 	}
 	
 	/**
-	 * Returns the current type of the Feature's path attribute.
-	 * The GeneralPath is examined each time this method is called, so the
-	 * result should be retained externally if it is needed in many places.
-	 * @return One of the public field values:
+	 * @return true if the path at the given path index is a closed figure.
+	 * Should only be true for paths with three or more points.
+	 */
+	 public boolean getClosed(int path) {
+		return pathClosed[path];
+	}
+	
+	/** @return As {@link #getVertices(int)}, for the first sub-path. */
+	public Point2D[] getVertices () {
+		return getVertices(0);
+	}
+	
+	/**
+	 * @return a copy of the MOVE_TO and LINE_TO points within the
+	 * given sub-path.
+	 */
+	public Point2D[] getVertices (int path) {
+		PathIterator it = getIterator(path);
+		int size = getSize(path);
+		double[] coords = new double[6];
+		Point2D[] points = new Point2D[size];
+		for (int i = 0; i < size; i++) {
+			it.currentSegment(coords);
+			points[i] = new Point2D.Double(coords[0], coords[1]);
+			it.next();
+		}
+		return points;
+	}
+	
+	/**
+	 * @return the Shape; note that since Shape has no mutable methods, we return the live object.
+	 * Do <em>not</em> cast to a mutable implementation of Shape and alter this object directly,
+	 * since many places assume FPath (and therefore the result of this method) are immutable.
+	 */
+	public Shape getShape() {
+		return shape;
+	}
+	
+	/** @return the result of calling {@link #getCoords(int, boolean)} with path=0. */
+	public double[] getCoords(boolean latFirst) {
+		return getCoords(0, latFirst);
+	}
+	
+	/**
+	 * Returns the lat/lon coordinates as a series of doubles, like
+	 * 
+	 * <code>lat lon lat lon ...</code> (if latFirst is true, or)
+	 * <code>lon lat lon lat ...</code> (if latFirst is false)
+	 */
+	public double[] getCoords(int path, boolean latFirst) {
+		PathIterator it = getIterator(path);
+		int size = getSize(path);
+		double[] coords = new double[6];
+		int x = (latFirst ? 1 : 0);
+		int y = (latFirst ? 0 : 1);
+		double[] latLons = new double[size * 2];
+		for (int i = 0; i < latLons.length; i += 2) {
+			it.currentSegment(coords);
+			latLons[i + x] = coords[0];
+			latLons[i + y] = coords[1];
+			it.next();
+		}
+		
+		return latLons;
+	}
+	
+	/** @return the path iterator positioned at the start of the given path */
+	private PathIterator getIterator(int path) {
+		PathIterator it = shape.getPathIterator(null);
+		for (int i = 0; i < pathOffsets[path]; i++) {
+			it.next();
+		}
+		return it;
+	}
+	
+	/** @return the number of vertices (MOVE_TO and LINE_TO segments) in the given path. */
+	private int getSize(int path) {
+		int size = pathOffsets[path+1] - pathOffsets[path];
+		if (pathClosed[path]) {
+			size --;
+		}
+		return size;
+	}
+	
+	/** @return the type of shape in the first path */
+	public int getType() {
+		return getType(0);
+	}
+	
+	/**
+	 * @return the type of the given path as one of the public constants:
 	 * <ul>
 	 * <li>TYPE_NONE
 	 * <li>TYPE_POINT
@@ -210,12 +272,12 @@ public final class FPath {
 	 * <li>TYPE_POLYGON
 	 * </ul>
 	 */
-	public int getType () {
-		if (vertices.length < 1)
+	public int getType (int path) {
+		if (pathClosed.length == 0)
 			return TYPE_NONE;
-		else if (vertices.length < 2)
+		else if (getSize(path) < 2)
 			return TYPE_POINT;
-		else if (closed)
+		else if (pathClosed[path])
 			return TYPE_POLYGON;
 		else
 			return TYPE_POLYLINE;
@@ -223,168 +285,223 @@ public final class FPath {
 	
 	/**
 	 * Returns the vector average for spatial paths, or the positional average
-	 * for world paths.
+	 * for world paths. If there are multiple subpaths they are all averaged.
 	 */
 	public Point2D getCenter () {
+		double[] coords = new double[6];
+		PathIterator it = shape.getPathIterator(null);
 		switch (coordSystem) {
 		case SPATIAL_EAST:
 		case SPATIAL_WEST:
 			// vector average
 			double lon, lat;
 			HVector sum = new HVector (0,0,0);
-			for (int i = 0; i < vertices.length; i++) {
-				lon = coordSystem==SPATIAL_EAST ? -vertices[i].getX() : vertices[i].getX();
-				lat = vertices[i].getY();
-				sum = sum.add(new HVector (lon, lat));
+			while (!it.isDone()) {
+				switch (it.currentSegment(coords)) {
+				case PathIterator.SEG_MOVETO:
+				case PathIterator.SEG_LINETO:
+					lon = coordSystem==SPATIAL_EAST ? -coords[0] : coords[0];
+					lat = coords[1];
+					sum = sum.add(new HVector (lon, lat));
+					break;
+				}
+				it.next();
 			}
 			lon = coordSystem==SPATIAL_EAST ? FeatureUtil.lonNorm(-sum.lon()) : sum.lon();
 			lat = sum.lat();
 			return new Point2D.Double (lon, lat);
 		case WORLD:
 			// positional average
-			Point2D[] v = Util.normalize360(vertices);
 			Point2D.Double c = new Point2D.Double();
-			for (int i = 0; i < v.length; i++) {
-				c.x += v[i].getX();
-				c.y += v[i].getY();
+			int count = 0;
+			while (!it.isDone()) {
+				switch (it.currentSegment(coords)) {
+				case PathIterator.SEG_MOVETO:
+				case PathIterator.SEG_LINETO:
+					c.x += coords[0];
+					c.y += coords[1];
+					count ++;
+					break;
+				}
+				it.next();
 			}
-			if (v.length > 1) {
-				c.x /= v.length;
-				c.y /= v.length;
+			if (count > 1) {
+				c.x /= count;
+				c.y /= count;
 			}
 			return c;
 		default:
 			return null;
 		}
 	}
-
+	
 	/**
 	 * Returns the spherical area in square kilometers. Currently returns 0.0
 	 * for world-coordinate polygons, and open spatial polygons.
 	 */
 	public double getArea () {
-		switch (coordSystem) {
-		case SPATIAL_EAST:
-		case SPATIAL_WEST:
-			return closed ? Util.sphericalArea(vertices) * Util.MARS_MEAN * Util.MARS_MEAN : 0.0;
-		case WORLD:
-			// TODO
-		default:
-			return 0.0;
+		double area = 0;
+		if (coordSystem == SPATIAL_EAST || coordSystem == SPATIAL_WEST) {
+			for (int i = 0; i < pathClosed.length; i++) {
+				if (pathClosed[i]) {
+					Point2D[] vertices = getVertices(i);
+					// Since the sphericalArea() method cannot handle duplicate vertices,
+					// but such vertices are both legal and do not affect the area, we
+					// just remove the duplicates from the array before calling it.
+					int length = vertices.length;
+					int last = length-1;
+					for (int j = 0; j < vertices.length; j++) {
+						if (vertices[last].equals(vertices[j])) {
+							vertices[j] = null;
+							length --;
+						} else {
+							last = j;
+						}
+					}
+					if (length < vertices.length) {
+						Point2D[] tmp = new Point2D[length];
+						int idx = 0;
+						for (int j = 0; j < vertices.length; j++) {
+							if (vertices[j] != null) {
+								tmp[idx++] = vertices[j];
+							}
+						}
+						vertices = tmp;
+					}
+					area += Util.sphericalArea(vertices) * Util.MEAN_RADIUS * Util.MEAN_RADIUS;
+				}
+			}
 		}
+		return area;
 	}
-
+	
 	/**
-	 * TODO: Test this!
-	 * 
 	 * Returns true if this FPath encloses the given point. The given point must
 	 * be in the same coordinate system as this path.
 	 */
 	public boolean contains (Point2D p) {
 		switch (coordSystem) {
 		case WORLD:
-			return gp.contains(p);
+			return shape.contains(p);
 		case SPATIAL_EAST:
-			return new SPolygon(gp).contains(new HVector(-p.getX(),p.getY()));
+			return new SPolygon(shape).contains(new HVector(-p.getX(),p.getY()));
 		case SPATIAL_WEST:
-			return new SPolygon(gp).contains(new HVector(p.getX(),p.getY()));
+			return new SPolygon(shape).contains(new HVector(p.getX(),p.getY()));
 		default:
 			return false;
 		}
 	}
-
+	
+	private static ThreadLocal<Rectangle2D.Double> mouseBoxTL = new ThreadLocal<Rectangle2D.Double>() {
+		protected Rectangle2D.Double initialValue() {
+			return new Rectangle2D.Double();
+		}
+	};
+	
 	/**
-	 * TODO: Test this!
-	 * 
-	 * We use the same routines in the graphicswrapped and in the GUI code. If
-	 * we dont, what we see can be different from how the mouse controller
-	 * reacts. That's a Bad Thing. So, in for a penny, in for a pound.
-	 * 
-	 * Returns true if the given rect intersects this path. The rect must be in
-	 * the same coordinate system as this path. A single point path is given an
-	 * area of a millionth of a unit square in world coordinates, since the Util
-	 * intersection methods compare the shape to the rect and not the other way
-	 * around.
+	 * @return true if the given rect intersects this path. The rectangle is
+	 *         assumed to be in the same coordinate system as this FPath. If
+	 *         this FPath is in world coordinates, then the test is done modulus
+	 *         360 on the shape and rectangle. If this FPath is spatial, then
+	 *         the test returns true if and only if there is some area of
+	 *         overlap between the resulting {@link SPolygo}ns.
 	 */
-	public boolean intersects(Rectangle2D rect)
-	{
-		if (vertices.length < 1)
+	public boolean intersects(Rectangle2D rect) {
+		if (pathClosed.length < 1)
 			return false;
 		switch (coordSystem) {
 		case WORLD:
-			Shape[] shapes;
-			if (vertices.length == 1) {
-				double x = vertices[0].getX();
-				double y = vertices[0].getY();
-				shapes = new Shape[] {Util.normalize360(new Rectangle2D.Double(x,y,0.001,0.001))};
-			} else if (!closed) {
-				shapes = new Line2D[vertices.length-1];
-				for (int i = 1; i < vertices.length; i++)
-					shapes[i-1] = Util.normalize360(new Line2D.Double (vertices[i-1], vertices[i]));
-			} else {
-				shapes = new Shape[] {Util.normalize360(gp)};
+			Rectangle2D bound = shape.getBounds2D();
+			Rectangle2D.Double mouseBox = mouseBoxTL.get();
+			mouseBox.setFrame(rect);
+			if (mouseBox.y > bound.getMaxY() || mouseBox.getMaxY() < bound.getMinY()) {
+				return false;
 			}
-			return Util.intersects360(rect, shapes).length > 0;
+			mouseBox.x += Math.floor((bound.getMinX() - mouseBox.x) / 360) * 360;
+			while (mouseBox.x <= bound.getMaxX()) {
+				if (mouseBox.getMaxX() >= bound.getMinX()) {
+					switch (getType()) {
+					case TYPE_POINT:
+						if (mouseBox.contains(bound.getMinX(), bound.getMinY())) {
+							return true;
+						}
+						break;
+					case TYPE_POLYLINE:
+						final Line2D.Double line = new Line2D.Double();
+						double[] coords = new double[6];
+						PathIterator it = shape.getPathIterator(null);
+						int place = 0;
+						while (!it.isDone()) {
+							int code = it.currentSegment(coords);
+							switch (code) {
+							case PathIterator.SEG_MOVETO:
+								place = 0;
+								// flow into LINE_TO case to get coordinates
+							case PathIterator.SEG_LINETO:
+								line.x1 = line.x2;
+								line.x2 = coords[0];
+								line.y1 = line.y2;
+								line.y2 = coords[1];
+								break;
+							}
+							if (place > 0 && line.intersects(mouseBox)) {
+								return true;
+							}
+							place ++;
+							it.next();
+						}
+						break;
+					case TYPE_POLYGON:
+						if (shape.intersects(mouseBox)) {
+							return true;
+						}
+						break;
+					}
+				}
+				mouseBox.x += 360;
+			}
+			return false;
 		case SPATIAL_WEST:
 		case SPATIAL_EAST:
-			return SPolygon.area(new SPolygon(gp), new SPolygon(rect)) > 0.0;
+			// tests for area of intersection > 0, assuming rect contains four
+			// spatial points in the same east/west sense as this FPath
+			return SPolygon.area(new SPolygon(shape), new SPolygon(rect)) > 0.0;
 		default:
 			return false;
 		}
 	}
-
-	/**
-	 * Translates this path by the given delta. This just calls translate(double,double).
-	 */
-	public FPath translate (Point2D delta) {
-		return translate (delta.getX(), delta.getY());
-	}
-
-	/**
-	 * Translates this path by the given xy delta. The returned path is a completely new
-	 * immutable path based on this path and shifted accordingly.
-	 */
-	// TODO: methods like this already done on Polygon, maybe replace vertices and gp with
-	// a single polygon instance. In fact, FPath can _be_ a polygon instance.
-	public FPath translate (double x, double y) {
-		Point2D[] newVerts = new Point2D[vertices.length];
-		for (int i = 0; i < newVerts.length; i++) {
-			newVerts[i] = new Point2D.Double(
-				FeatureUtil.lonNorm(vertices[i].getX() + x),
-				vertices[i].getY() + y);
-		}
-		return new FPath (newVerts, coordSystem, closed);
-	}
-
+	
 	/**
 	 * Convenience method that calls convertTo(SPATIAL_WEST)
 	 */
 	public FPath getSpatialWest () {
 		return convertTo (SPATIAL_WEST);
 	}
-
+	
 	/**
 	 * Convenience method that calls convertTo(SPATIAL_EAST)
 	 */
 	public FPath getSpatialEast () {
 		return convertTo (SPATIAL_EAST);
 	}
-
+	
 	/**
 	 * Convenience method that calls convertTo(WORLD)
 	 */
 	public FPath getWorld () {
 		return convertTo (WORLD);
 	}
-
-	/**
-	 * Returns this FPath in the requested coordinate system.
-	 */
-	public FPath convertTo(int coordSystem) {
-		return (caching ? convertTo_cache (coordSystem) : convertTo_impl(coordSystem));
+	
+	/** Converts the given coordinate array to an array of points. */
+	private static final Point2D[] coordsToVertices (double[] coords, boolean latFirst) {
+		Point2D[] points = new Point2D[coords.length/2];
+		int x = (latFirst ? 1 : 0);
+		int y = (latFirst ? 0 : 1);
+		for (int i = 0; i < coords.length/2; i++)
+			points[i] = new Point2D.Double (coords[i*2 + x], coords[i*2 + y]);
+		return points;
 	}
 
-	// This operation is inverted by the public method, getCoords()
 	private static final Point2D[] coordsToVertices (float[] coords, boolean latFirst) {
 		Point2D[] points = new Point2D[coords.length/2];
 		int x = (latFirst ? 1 : 0);
@@ -394,53 +511,48 @@ public final class FPath {
 		return points;
 	}
 
-	// Using array of Boolean as a second return value; ewww
-	// Didn't this type of operation bother anyone? I mean, this is proof that we
-	// don't support GeneralPath, and just sample down to it.
-	// TODO: use Polygon instead, if we can.
-	private static final Point2D[] gpToVertices (GeneralPath path, Boolean[] closed) {
-		closed[0] = Boolean.FALSE;
-		boolean error = false;
-		List points = new ArrayList();
-		for (PathIterator it=path.getPathIterator(null); !it.isDone(); it.next()) {
-			double[] coords = new double[6];
-			switch (it.currentSegment(coords)) {
-			case PathIterator.SEG_MOVETO:
-				if (points.size() == 0)
-					points.add (new Point2D.Double(coords[0], coords[1]));
-				else
-					error = true;
-				break;
-			case PathIterator.SEG_LINETO:
-				if (! closed[0].booleanValue())
-					points.add(new Point2D.Double(coords[0], coords[1]));
-				else
-					error = true;
-				break;
-			case PathIterator.SEG_CLOSE:
-				closed[0] = Boolean.TRUE;
-				break;
-			default:
-				error = true;
-			}
-			if (error)
-				return null;
-		}
-		return (Point2D[])points.toArray(new Point2D[0]);
-	}
-
-	private static final GeneralPath verticesToGp (Point2D[] points, boolean closed) {
-		GeneralPath gp = new GeneralPath ();
+	/** Converts the given point array into a Path2D */
+	private static final Path2D verticesToPath (Point2D[] points, boolean closed) {
+		Path2D path=new Path2D.Double();
+				
 		if (points.length > 0) {
-			gp.moveTo((float)points[0].getX(), (float)points[0].getY());
+			path.moveTo(points[0].getX(), points[0].getY());
 			for (int i = 1; i < points.length; i++)
-				gp.lineTo((float)points[i].getX(), (float)points[i].getY());
+				path.lineTo(points[i].getX(), points[i].getY());
 			if (closed)
-				gp.closePath();
+				path.closePath();
 		}
-		return gp;
+		return path;
 	}
-
+	
+	/**
+	 * @return a transformation from one coordinate system to another,
+	 * or null if no transform can be found.
+	 */
+	private static final Transformer getTransform(int from, int to) {
+		switch (from) {
+		case WORLD:
+			switch (to) {
+			case SPATIAL_EAST: return Main.PO.worldToSpatialEast;
+			case SPATIAL_WEST: return Main.PO.worldToSpatial;
+			}
+			break;
+		case SPATIAL_EAST:
+			switch (to) {
+			case WORLD: return Main.PO.spatialEastToWorld;
+			case SPATIAL_WEST: return toggleLon;
+			}
+			break;
+		case SPATIAL_WEST:
+			switch (to) {
+			case WORLD: return Main.PO.spatialToWorld;
+			case SPATIAL_EAST: return toggleLon;
+			}
+			break;
+		}
+		return null;
+	}
+	
 	/**
 	 * Returns this Path converted into the given coordinate coordinate system.
 	 * If this Path is already in the requested coordinate system, this
@@ -448,78 +560,21 @@ public final class FPath {
 	 * 
 	 * @param coordSystem One of WORLD, SPATIAL_EAST, or SPATIAL_WEST
 	 */
-	private final FPath convertTo_impl (int coordSystem) {
-		if (this.coordSystem == coordSystem)
+	public final FPath convertTo(int coordSystem) {
+		if (this.coordSystem == coordSystem) {
 			return this;
-		Point2D[] rv = null; // returned vertices
-		if (this.coordSystem == SPATIAL_EAST && coordSystem == SPATIAL_WEST)
-			rv = toggleLonEastWest(vertices);
-		else if (this.coordSystem == SPATIAL_EAST && coordSystem == WORLD)
-			rv = spatialToWorld(vertices, true);
-		else if (this.coordSystem == SPATIAL_WEST && coordSystem == SPATIAL_EAST)
-			rv = toggleLonEastWest(vertices);
-		else if (this.coordSystem == SPATIAL_WEST && coordSystem == WORLD)
-			rv = spatialToWorld(vertices, false);
-		else if (this.coordSystem == WORLD && coordSystem == SPATIAL_EAST)
-			rv = worldToSpatial(vertices, true);
-		else if (this.coordSystem == WORLD && coordSystem == SPATIAL_WEST)
-			rv = worldToSpatial(vertices, false);
-		return (rv == null ? null : new FPath (rv, coordSystem, closed));
-	}
-
-	/**
-	 * Allows caching each FPath to the most-recently-requested coordinate system. For
-	 * example if spatial east is repeatedly requested from spatial-west, the
-	 * cache does a good job, but if two different coordinate systems are intermittently
-	 * requested of the same FPath, the cache will actually degrade
-	 * performance. In the case we're worrying about, such alternating coordinate system
-	 * requests don't happen, and boy is this approach a small amount of code.
-	 */
-	private final FPath convertTo_cache (int coordSystem) {
-		FPath to = (FPath)cache.get(this);
-		if (to == null || to.getCoordSystem() != coordSystem)
-			cache.put(this, to=convertTo_impl(coordSystem));
-		return to;
-	}
-
-	private final Point2D[] toggleLonEastWest (Point2D[] points) {
-		Point2D[] newPoints = new Point2D[points.length];
-		for (int i = 0; i < points.length; i++)
-			newPoints[i] = new Point2D.Double (FeatureUtil.lonNorm(-points[i].getX()), points[i].getY());
-		return newPoints;
-	}
-
-	/** converts this path to world coordinates, where x values are in the range [0,540) and y values are in the range [-90,90] */
-	private final Point2D[] spatialToWorld(Point2D[] points, boolean east) {
-		Point2D[] newPoints = new Point2D[points.length];
-		if (east)
-			points = toggleLonEastWest (points);
-		double lastX = 0;
-		double minX = Double.POSITIVE_INFINITY;
-		for (int i = 0; i < points.length; i++) {
-			newPoints[i] = Main.PO.convSpatialToWorld(points[i]);
-			double x = newPoints[i].getX();
-			if (i > 0 && Math.abs(lastX - x) > 180) {
-				x += Math.signum(lastX - x) * 360;
-				minX = Math.min(minX, x);
-				newPoints[i].setLocation(x, newPoints[i].getY());
-			}
-			lastX = x;
 		}
-		if (minX < 0) {
-			minX = (int)Math.ceil(-minX/360)*360;
-			for (Point2D p: newPoints) {
-				p.setLocation(p.getX() + minX, p.getY());
-			}
+		if (coordSystem < WORLD || coordSystem > SPATIAL_WEST) {
+			throw new IllegalArgumentException("Unrecognized coordinate system");
 		}
-		return newPoints;
-	}
-
-	private final Point2D[] worldToSpatial(Point2D[] points, boolean east) {
-		Point2D[] newPoints = new Point2D[points.length];
-		for (int i = 0; i < points.length; i++)
-			newPoints[i] = Main.PO.convWorldToSpatial(points[i]);
-		return east ? toggleLonEastWest (newPoints) : newPoints;
+		Transformer t = getTransform(this.coordSystem, coordSystem);
+		if (t == null) {
+			throw new IllegalArgumentException("Cannot transform from " + this.coordSystem + " to " + coordSystem);
+		}
+		PathIterator transformed = new TransformingIterator(shape.getPathIterator(null), t);
+		Path2D.Double out = new Path2D.Double();
+		out.append(transformed, false);
+		return new FPath(out, coordSystem);
 	}
 	
 	public String toString(){
@@ -534,7 +589,7 @@ public final class FPath {
 		sbuf.append("coordSys="+coordSys+";");
 		
 		sbuf.append("coords=");
-		float[] coords = getCoords(false);
+		double[] coords = getCoords(false);
 		for(int i=0; i<coords.length; i++){
 			if (i > 0)
 				sbuf.append(",");
@@ -542,5 +597,93 @@ public final class FPath {
 		}
 		sbuf.append("]");
 		return sbuf.toString();
+	}
+	
+	public static final class GeometryAdapter {
+		private final GeometryFactory fac = new GeometryFactory();
+		private final ShapeReader sr = new ShapeReader(fac);
+		private final ShapeWriter sw = new ShapeWriter();
+		public Geometry getGeometry(FPath path) {
+			PathIterator it = path.getShape().getPathIterator(null);
+			switch (path.getType()) {
+			case FPath.TYPE_POINT:
+				List<Coordinate[]> pointCoords = ShapeReader.toCoordinates(it);
+				Point[] points = new Point[pointCoords.size()];
+				for (int i = 0; i < points.length; i++) {
+					points[i] = fac.createPoint(pointCoords.get(i)[0]);
+				}
+				if (points.length > 1) {
+					return fac.createMultiPoint(points);
+				} else {
+					return points[0];
+				}
+			case FPath.TYPE_POLYLINE:
+				List<Coordinate[]> lineCoords = ShapeReader.toCoordinates(it);
+				LineString[] lines = new LineString[lineCoords.size()];
+				for (int i = 0; i < lines.length; i++) {
+					lines[i] = fac.createLineString(lineCoords.get(i));
+				}
+				if (lines.length > 1) {
+					return fac.createMultiLineString(lines);
+				} else {
+					return lines[0];
+				}
+			case FPath.TYPE_POLYGON:
+				return sr.read(it);
+			default:
+				return null;
+			}
+		}
+		private static final Path2D.Double seq2path(CoordinateSequence seq) {
+			Path2D.Double path = new Path2D.Double();
+			int size = seq.size();
+			int lastIdx = size - 1;
+			Coordinate first = seq.getCoordinate(0);
+			path.moveTo(first.x, first.y);
+			for (int i = 1; i < lastIdx; i++) {
+				Coordinate c = seq.getCoordinate(i);
+				path.lineTo(c.x, c.y);
+			}
+			Coordinate last = seq.getCoordinate(lastIdx);
+			if (size > 3 && first.equals(last)) {
+				path.closePath();
+			} else {
+				path.lineTo(last.x, last.y);
+			}
+			return path;
+		}
+		public Path2D.Double getPath(Geometry geom) {
+			if (geom instanceof Point) {
+				Coordinate c = ((Point)geom).getCoordinate();
+				Path2D.Double path = new Path2D.Double();
+				path.moveTo(c.x, c.y);
+				return path;
+			} else if (geom instanceof LineString) {
+				return seq2path(((LineString) geom).getCoordinateSequence());
+			} else if (geom instanceof LinearRing) {
+				return seq2path(((LinearRing)geom).getCoordinateSequence());
+			} else if (geom instanceof Polygon) {
+				Polygon poly = (Polygon)geom;
+				Path2D.Double path = new Path2D.Double(Path2D.WIND_EVEN_ODD);
+				path.append(seq2path(poly.getExteriorRing().getCoordinateSequence()), false);
+				int holes = poly.getNumInteriorRing();
+				for (int i = 0; i < holes; i++) {
+					path.append(seq2path(poly.getInteriorRingN(i).getCoordinateSequence()), false);
+				}
+				return path;
+			} else if (geom instanceof GeometryCollection) {
+				GeometryCollection gc = (GeometryCollection)geom;
+				Path2D.Double path = new Path2D.Double();
+				int parts = gc.getNumGeometries();
+				for (int i = 0; i < parts; i++) {
+					path.append(getPath(gc.getGeometryN(i)), false);
+				}
+				return path;
+			} else if (geom == null) {
+				return null;
+			} else {
+				throw new IllegalArgumentException("Unrecognized geometry type " + geom.getClass().getName());
+			}
+		}
 	}
 }

@@ -1,37 +1,31 @@
-// Copyright 2008, Arizona Board of Regents
-// on behalf of Arizona State University
-// 
-// Prepared by the Mars Space Flight Facility, Arizona State University,
-// Tempe, AZ.
-// 
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-// 
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU General Public License for more details.
-// 
-// You should have received a copy of the GNU General Public License
-// along with this program.  If not, see <http://www.gnu.org/licenses/>.
-
-
 package edu.asu.jmars.graphics;
 
-import edu.asu.jmars.*;
-import edu.asu.jmars.util.*;
-import java.awt.*;
-import java.awt.font.*;
-import java.awt.geom.*;
-import java.awt.image.*;
-import java.awt.image.renderable.*;
+import java.awt.Color;
+import java.awt.Composite;
+import java.awt.Font;
+import java.awt.FontMetrics;
+import java.awt.Graphics;
+import java.awt.Graphics2D;
+import java.awt.GraphicsConfiguration;
+import java.awt.Image;
+import java.awt.Paint;
+import java.awt.Rectangle;
+import java.awt.RenderingHints;
+import java.awt.Shape;
+import java.awt.Stroke;
 import java.awt.RenderingHints.Key;
-import java.io.*;
-import java.lang.*;
-import java.text.*;
-import java.util.*;
+import java.awt.font.FontRenderContext;
+import java.awt.font.GlyphVector;
+import java.awt.geom.AffineTransform;
+import java.awt.image.BufferedImage;
+import java.awt.image.BufferedImageOp;
+import java.awt.image.ImageObserver;
+import java.awt.image.RenderedImage;
+import java.awt.image.renderable.RenderableImage;
+import java.text.AttributedCharacterIterator;
+import java.util.Map;
+
+import edu.asu.jmars.util.DebugLog;
 
 /**
  ** Convenience class for implementing new {@link Graphics2D} wrapper
@@ -328,13 +322,9 @@ public class Graphics2DAdapter
         g2.setTransform(Tx);
      }
 
-    /** DO NOT CALL, NOT PROPERLY IMPLEMENTED **/
     public AffineTransform getTransform()
      {
-        log.aprintln("POSSIBLY UNSUPPORTED GRAPHICS OPERATION CALLED " +
-					 "(" + getClass().getName() + ")");
-        log.aprintStack(5);
-        return  g2.getTransform();
+        return g2.getTransform();
      }
 
     /** DO NOT CALL, NOT PROPERLY IMPLEMENTED **/

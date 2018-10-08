@@ -1,34 +1,12 @@
-// Copyright 2008, Arizona Board of Regents
-// on behalf of Arizona State University
-// 
-// Prepared by the Mars Space Flight Facility, Arizona State University,
-// Tempe, AZ.
-// 
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-// 
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU General Public License for more details.
-// 
-// You should have received a copy of the GNU General Public License
-// along with this program.  If not, see <http://www.gnu.org/licenses/>.
-
-
 package edu.asu.jmars.layer.util.filetable;
 
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
-import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Iterator;
 import java.util.LinkedList;
 import java.util.List;
-import java.util.Map;
 import java.util.Set;
 
 import javax.swing.table.AbstractTableModel;
@@ -56,7 +34,7 @@ public class FileTableModel extends AbstractTableModel
 	 * is marked modified every time the FileTableModel is notified of a change
 	 * made to the FeatureCollection.
 	 */
-	private Map<FeatureCollection,Boolean> touched = new HashMap<FeatureCollection,Boolean>();
+	private Set<FeatureCollection> touched = new HashSet<FeatureCollection>();
 	
 	/**
 	 * Marks the current default FeatureCollection. This FeatureCollection serves
@@ -135,7 +113,7 @@ public class FileTableModel extends AbstractTableModel
 		case COL_IDX_COUNT:
 			return new Integer(fc.getFeatures().size());
 		case COL_IDX_TOUCHED:
-			return touched.get(fc);
+			return touched.contains(fc);
 		}
 		return null;
 	}
@@ -166,10 +144,10 @@ public class FileTableModel extends AbstractTableModel
 	 * Public interface to add a new FeatureCollection to the FileTable.
 	 * @param fc
 	 */
-	public void add(FeatureCollection fc){
+	public void add(FeatureCollection fc) {
 		int idx = fcc.size();
 		fcc.add(fc);
-		touched.put(fc, Boolean.FALSE);
+		touched.remove(fc);
 		if (history != null)
 			history.addChange (this, new AddChange (fc));
 		fc.addListener(this);
@@ -243,7 +221,7 @@ public class FileTableModel extends AbstractTableModel
 			history.addChange (this, new RemoveChange (sfc));
 		}
 		boolean result = fcc.removeAll(fcl);
-		touched.keySet().removeAll(fcl);
+		touched.removeAll(fcl);
 		
 		// Sort the collected indices for which we have to fire deleteRow events.
 		Arrays.sort(indices);
@@ -303,35 +281,23 @@ public class FileTableModel extends AbstractTableModel
 			return;
 
 		Set<FeatureCollection> modified = new HashSet<FeatureCollection>();
-		Feature feat;
 
-		switch(e.type){
+		switch(e.type) {
 		case FeatureEvent.ADD_FEATURE:
-			if (e.source != null)
-				modified.add(e.source);
-			else
-				log.println("Orphan AddFeature Event encountered.");
-			break;
 		case FeatureEvent.REMOVE_FEATURE:
-			if (e.source != null)
-				modified.add(e.source);
-			else
-				log.println("Orphan RemoveFeature Event encountered.");
-			break;
-		case FeatureEvent.CHANGE_FEATURE:
-			for(Iterator<Feature> li = e.features.iterator(); li.hasNext(); ) {
-				feat = li.next();
-				if (modified.contains(feat.getOwner()))
-					continue;
-				modified.add(feat.getOwner());
-			}
-			break;
 		case FeatureEvent.ADD_FIELD:
 		case FeatureEvent.REMOVE_FIELD:
-			if (e.source != null)
+			if (e.source != null) {
 				modified.add(e.source);
-			else
-				log.println("Orphan Add/Remove Field Event encountered.");
+			}
+			break;
+		case FeatureEvent.CHANGE_FEATURE:
+			for (Feature feat: e.features) {
+				FeatureCollection fc = feat.getOwner();
+				if (fc != null) {
+					modified.add(fc);
+				}
+			}
 			break;
 		default:
 			log.aprintln("Invalid event type "+e.type+" encountered. Ignoring!");
@@ -339,17 +305,9 @@ public class FileTableModel extends AbstractTableModel
 
 		// Notify the table model of the modification by firing an updated event
 		// on the view (JTable).
-		for(Iterator<FeatureCollection> li = modified.iterator(); li.hasNext(); ){
-			FeatureCollection fc = li.next();
-			int idx = fcc.indexOf(fc);
-			if (idx > -1) {
-				setTouched(idx, true);
-			}
-			else
-				log.println("Orphan FeatureCollection encountered: "+fc);
+		for(FeatureCollection fc: modified) {
+			setTouched(fc, true);
 		}
-
-		// TODO Propagate event forward as a FileTable event 
 	}
 
 	/**
@@ -366,22 +324,6 @@ public class FileTableModel extends AbstractTableModel
 	}
 	
 	/**
-	 * Returns whether the FeatureCollection at the given index
-	 * is marked modified.
-	 * 
-	 * @param index Index of the FeatureCollection requested.
-	 * @return true if the FeatureCollection has been marked as
-	 *         modified, false if it is either not marked as
-	 *         modified or if the given index is out of bounds.
-	 */
-	public boolean getTouched(int index){
-		if (index < 0 || index >= fcc.size())
-			return false;
-		
-		return ((Boolean)touched.get(fcc.get(index))).booleanValue();
-	}
-	
-	/**
 	 * Similar as {@linkplain #getTouched(int)} except that this method
 	 * works on FeatureCollections as compared to their indices.
 	 * 
@@ -390,27 +332,7 @@ public class FileTableModel extends AbstractTableModel
 	 *         in the TableModel or false otherwise.
 	 */
 	public boolean getTouched(FeatureCollection fc){
-		return getTouched(fcc.indexOf(fc));
-	}
-
-	/**
-	 * Sets the modification status of the FeatureCollection at the
-	 * specified index.
-	 * 
-	 * @param index Index of the FeatureCollection to operate upon.
-	 * @param flag Modification status to set.
-	 */
-	public void setTouched(int index, boolean flag){
-		if (index < 0 || index >= fcc.size())
-			return;
-
-		FeatureCollection fc = fcc.get(index); 
-		boolean oldFlag = getTouched (fc);
-		touched.put(fc, flag? Boolean.TRUE: Boolean.FALSE);
-		fireTableRowsUpdated(index, index);
-
-		if (history != null)
-			history.addChange(this, new TouchedChange(fc, oldFlag, flag));
+		return touched.contains(fc);
 	}
 
 	/**
@@ -419,7 +341,19 @@ public class FileTableModel extends AbstractTableModel
 	 * @param flag Modification status to set.
 	 */
 	public void setTouched(FeatureCollection fc, boolean flag){
-		setTouched(fcc.indexOf(fc), flag);
+		boolean oldFlag = getTouched(fc);
+		if (oldFlag != flag) {
+			if (flag) {
+				touched.add(fc);
+			} else {
+				touched.remove(fc);
+			}
+			int index = fcc.indexOf(fc);
+			fireTableRowsUpdated(index, index);
+			if (history != null) {
+				history.addChange(this, new TouchedChange(fc, oldFlag, flag));
+			}
+		}
 	}
 
 	/**

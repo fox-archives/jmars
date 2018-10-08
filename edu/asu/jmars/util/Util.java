@@ -1,23 +1,3 @@
-// Copyright 2008, Arizona Board of Regents
-// on behalf of Arizona State University
-// 
-// Prepared by the Mars Space Flight Facility, Arizona State University,
-// Tempe, AZ.
-// 
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-// 
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU General Public License for more details.
-// 
-// You should have received a copy of the GNU General Public License
-// along with this program.  If not, see <http://www.gnu.org/licenses/>.
-
-
 package edu.asu.jmars.util;
 
 import java.awt.AlphaComposite;
@@ -36,6 +16,7 @@ import java.awt.Point;
 import java.awt.Shape;
 import java.awt.Toolkit;
 import java.awt.Transparency;
+import java.awt.Window;
 import java.awt.color.ColorSpace;
 import java.awt.color.ICC_ColorSpace;
 import java.awt.color.ICC_Profile;
@@ -49,6 +30,7 @@ import java.awt.geom.Line2D;
 import java.awt.geom.PathIterator;
 import java.awt.geom.Point2D;
 import java.awt.geom.Rectangle2D;
+import java.awt.image.BandedSampleModel;
 import java.awt.image.BufferedImage;
 import java.awt.image.ColorModel;
 import java.awt.image.ComponentColorModel;
@@ -56,6 +38,7 @@ import java.awt.image.ComponentSampleModel;
 import java.awt.image.DataBuffer;
 import java.awt.image.DataBufferByte;
 import java.awt.image.Raster;
+import java.awt.image.SampleModel;
 import java.awt.image.WritableRaster;
 import java.io.BufferedInputStream;
 import java.io.BufferedOutputStream;
@@ -77,9 +60,9 @@ import java.io.UnsupportedEncodingException;
 import java.lang.reflect.Array;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.UndeclaredThrowableException;
-import java.net.MalformedURLException;
+import java.net.URI;
 import java.net.URL;
-import java.net.URLConnection;
+//import java.net.URLConnection;
 import java.net.URLEncoder;
 import java.nio.ByteBuffer;
 import java.nio.charset.Charset;
@@ -87,7 +70,6 @@ import java.sql.Blob;
 import java.sql.Clob;
 import java.sql.Ref;
 import java.sql.ResultSet;
-import java.text.DecimalFormat;
 import java.text.NumberFormat;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
@@ -97,11 +79,14 @@ import java.util.Collections;
 import java.util.Comparator;
 import java.util.Date;
 import java.util.HashMap;
-import java.util.Hashtable;
 import java.util.Iterator;
 import java.util.LinkedList;
 import java.util.List;
+import java.util.Map;
 import java.util.StringTokenizer;
+import java.util.TreeMap;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 import javax.imageio.ImageIO;
 import javax.swing.AbstractAction;
@@ -112,19 +97,27 @@ import javax.swing.JFileChooser;
 import javax.swing.JOptionPane;
 import javax.swing.KeyStroke;
 import javax.swing.SwingUtilities;
+import javax.swing.UIManager;
 
 import org.apache.commons.codec.binary.Base64;
 import org.apache.commons.codec.digest.DigestUtils;
-import org.apache.commons.httpclient.Header;
-import org.apache.commons.httpclient.HttpClient;
-import org.apache.commons.httpclient.HttpException;
-import org.apache.commons.httpclient.URI;
-import org.apache.commons.httpclient.URIException;
-import org.apache.commons.httpclient.methods.PostMethod;
+//import org.apache.commons.httpclient.Header;                                   TODO (PW) Remove commented-out code
+//import org.apache.commons.httpclient.HttpClient;
+//import org.apache.commons.httpclient.HttpException;
+//import org.apache.commons.httpclient.URI;
+//import org.apache.commons.httpclient.URIException;
+//import org.apache.commons.httpclient.methods.PostMethod;
+import org.apache.http.HttpStatus;
+
+import com.vividsolutions.jts.geom.Envelope;
 
 import edu.asu.jmars.Main;
 import edu.asu.jmars.ProjObj.Projection_OC;
 import edu.asu.jmars.layer.MultiProjection;
+import edu.asu.jmars.layer.map2.MapServerDefault;
+import edu.asu.jmars.layer.map2.MapSourceDefault;
+import edu.asu.jmars.layer.util.features.FeatureProviderSHP;
+import edu.asu.jmars.pref.DefaultBrowser;
 import edu.stanford.ejalbert.BrowserLauncher;
 
 /* Collection of useful things for jlayers... all methods are static,
@@ -135,6 +128,7 @@ public final class Util
 
     public static final Color darkGreen = Color.green.darker();
     public static final Color darkRed = Color.red.darker();
+    public static final Color darkBlue = Color.blue.darker();
     public static final Color purple = new Color(128, 0, 128);
     public static final Color green3 = new Color(0,205,0);
     public static final Color darkViolet = new Color(148,0,211);
@@ -144,7 +138,27 @@ public final class Util
     public static final Color yellow3 = new Color(205,205,0);
     public static final Color gray50 = new Color(128,128,128);
     public static final Color darkOrange = new Color(255,140,0);
+    public static final Color darkBrown = new Color(101,67,33);
+	public static final Color lightBlue = UIManager.getColor("TabbedPane.selected");
+	public static final Color panelGrey = UIManager.getColor("Panel.background");
 
+    private static String configPrefix = null;// @since change bodies
+    private static boolean showBodyMenuFlag = false;
+    private static TreeMap<String,String[]> bodyList = null;// @since change bodies
+
+	/**
+	* @since change bodies
+	*/
+    public static TreeMap<String,String[]> getBodyList() {
+    	return bodyList;
+    }
+    
+    /**
+     * @since change bodies
+     */
+    public static boolean showBodyMenu() {
+    	return showBodyMenuFlag;
+    }
      // This is to prevent some ne'er-do-well from coming in and trying 
      // to instanciate what is supposed to be class of nothing but static methods.
      private Util(){}
@@ -251,7 +265,7 @@ public final class Util
      **/
     public static Object cloneArray(Object orig, int fromIndex, int toIndex)
      {
-	Class cl = orig.getClass().getComponentType();
+	Class<?> cl = orig.getClass().getComponentType();
 	if(cl == null)
 	    throw new IllegalArgumentException(
 		"First argument to cloneArray must be an array!");
@@ -489,19 +503,21 @@ public final class Util
      }
 
     /**
-     ** Given an array of longitude/latitude points representing the
-     ** vertices of a spherical polygon, returns the surface area of
-     ** the polygon. Assumes a unit sphere. The polygon is assumed to
-     ** be closed, so there is no need to pass a copy of the first
-     ** vertex as the last vertex.
-     **
-     ** <p>To convert the result to square kilometers, assuming a
-     ** spherical Mars with radius 3386 km (the average of the polar
-     ** and equatorial ellipsoid radii), use the following:
-     **
-     ** <pre>unitArea = Util.sphericalArea(...);
-     **      kmArea = unitArea * 3386 * 3386;   </pre>
-     **/
+      * Given an array of longitude/latitude points representing the
+      * vertices of a spherical polygon, returns the surface area of
+      * the polygon. Assumes a unit sphere. The polygon is assumed to
+      * be closed, so there is no need to pass a copy of the first
+      * vertex as the last vertex. This method also requires all of the
+      * vertices to be distinct and non-self-intersecting.
+      *
+      * <p>To convert the result to square kilometers, assuming a
+      * spherical body with radius Util.radius (in km)
+	  * (the average of the polar and any equatorial ellipsoid radii),
+	  * use the following:
+      *
+      * <pre>unitArea = Util.sphericalArea(...);
+      *      kmArea = unitArea * Util.radius * Util.radius;   </pre>
+      */
     public static double sphericalArea(Point2D[] polygonLL)
      {
 	HVector[] polygonV = new HVector[polygonLL.length];
@@ -511,19 +527,21 @@ public final class Util
      }
 
     /**
-     ** Given an array of vectors representing the vertices of a
-     ** spherical polygon, returns the surface area of the
-     ** polygon. Assumes a unit sphere. The polygon is assumed to be
-     ** closed, so there is no need to pass a copy of the first vertex
-     ** as the last vertex.
-     **
-     ** <p>To convert the result to square kilometers, assuming a
-     ** spherical Mars with radius 3386 km (the average of the polar
-     ** and equatorial ellipsoid radii), use the following:
-     **
-     ** <pre>unitArea = Util.sphericalArea(...);
-     **      kmArea = unitArea * 3386 * 3386;   </pre>
-     **/
+      * Given an array of vectors representing the vertices of a
+      * spherical polygon, returns the surface area of the
+      * polygon. Assumes a unit sphere. The polygon is assumed to be
+      * closed, so there is no need to pass a copy of the first vertex
+      * as the last vertex. This method also requires all of the
+      * vertices to be distinct and non-self-intersecting.
+      *
+      * <p>To convert the result to square kilometers, assuming a
+      * spherical body with radius Util.radius (in km)
+	  * (the average of the polar and any equatorial ellipsoid radii),
+	  * use the following:
+      *
+      * <pre>unitArea = Util.sphericalArea(...);
+      *      kmArea = unitArea * Util.radius * Util.radius;   </pre>
+      */
     public static double sphericalArea(HVector[] polygonV)
      {
 	// Calculating the area of a spherical polygon is actually
@@ -592,12 +610,55 @@ public final class Util
      * @return angular-distance (degrees), linear-distance (km)
      */
     public static double[] angularAndLinearDistanceS(Point2D p1, Point2D p2, MultiProjection proj){
-    	double angDistance = proj.spatial.distance(p1, p2);
-    	double linDistance = angDistance * 3390.0 * 2*Math.PI / 360.0;
-    	
-    	return new double[]{ angDistance, linDistance};
+		double angDistance = proj.spatial.distance(p1, p2);
+		double linDistance = angDistance * MEAN_RADIUS * 2*Math.PI / 360.0;
+		return new double[]{ angDistance, linDistance};
     }
-
+    
+	/**
+	 * Given an array array of <code>N</code> points that describe
+	 * <code>N-1</code> line segments, this method computes the angular and
+	 * linear distance traveled by the world coordinate lines. Unlike the other
+	 * distance methods in Util, this method computes internal points within the
+	 * world coordinate line so that the distance measurement is taken along the
+	 * world coordinate line, as opposed to measuring the great circle between a
+	 * world coordinate line's endpints.
+	 * 
+	 * @param points
+	 *            The array of points in world coordinates.
+	 * @return An array of two elements, the angular distance in degrees and the
+	 *         distance along the ellipsoid in kilometers.
+	 */
+    public static double[] angularAndLinearDistanceWorld(Point2D ... points) {
+		final double maxSep = Math.toRadians(5);
+		HVector lastUnit = null, last = null;
+		double km = 0;
+		double degs = 0;
+		for (Point2D p: points) {
+			HVector vUnit = new HVector(Main.PO.convWorldToSpatial(p));
+			HVector v = HVector.intersectMars(HVector.ORIGIN, vUnit);
+			if (lastUnit != null) {
+				HVector norm = lastUnit.cross(vUnit);
+				double sep = lastUnit.separation(vUnit, norm);
+				HVector previous = last;
+				for (double theta = maxSep/2; theta < sep + maxSep/2; theta += maxSep) {
+					HVector current;
+					if (theta >= sep - maxSep/2) {
+						current = v;
+					} else {
+						current = HVector.intersectMars(HVector.ORIGIN, lastUnit.rotate(norm, theta));
+					}
+					degs += Math.toDegrees(previous.separation(current));
+					km += current.sub(previous).norm();
+					previous = current;
+				}
+			}
+			lastUnit = vUnit;
+			last = v;
+		}
+		return new double[]{degs, km};
+    }
+    
     /**
      ** Given an ET, returns an epoch-based approximation to Ls, also
      ** known as "solar longitude" or "heliocentric longitude". The
@@ -702,6 +763,25 @@ public final class Util
 	return  Integer.toHexString(n).toUpperCase();
      }
 
+	/**
+	 * Returns a new URI based on the given base but with the given args added
+	 * onto the end of the query portion of the URI
+	 */
+	public static final URI getSuffixedURI(URI baseURI, String ... args) {
+		try {
+			String query = baseURI.getQuery();
+			if (query == null)
+				query = "";
+			if (query.length() > 0 && !query.endsWith("&"))
+				query += "&";
+			query += Util.join("&", args);
+			return new URI(baseURI.getScheme(), baseURI.getUserInfo(), baseURI.getHost(),
+				baseURI.getPort(), baseURI.getPath(), query, baseURI.getFragment());
+		} catch (Exception e) {
+			throw new IllegalArgumentException("Could not construct modified URI: " + e.getMessage(), e);
+		}
+	}
+	
     /** Returns an array of all lines from the given stream */
     public static String[] readLines(InputStream is) throws IOException {
 		BufferedReader br = new BufferedReader(new InputStreamReader(is));
@@ -711,16 +791,16 @@ public final class Util
 			lines.add(buff);
 		return lines.toArray(new String[lines.size()]);
 	}
-
+    
     /**
-     ** For every non-empty line in the given stream, returns an array
-     ** of whitespace-separated tokens of length at most maxCount.
-     **/
+	 * For every non-empty line in the given stream, returns an array of
+	 * whitespace-separated tokens of length at most maxCount.
+	 */
     public static String[][] readLineTokens(InputStream is, int maxCount)
      throws IOException
      {
 	String[] lines = readLines(is);
-	List tokens = new ArrayList(lines.length);
+	List<Object> tokens = new ArrayList<Object>(lines.length);
 	for(int i=0; i<lines.length; i++)
 	    if(lines[i].trim().length() != 0)
 		tokens.add(lines[i].split("\\s+", maxCount));
@@ -788,6 +868,64 @@ public final class Util
 	    tokens[i] = tok.nextToken();
 	return	tokens;
      }
+    
+    /**
+     * Trims the given character from the beginning and end of the string
+     * @param str The string you wish to trim the character from
+     * @param chr The character you wish to trim from the string
+     * @param left pass true if the character should be removed from the left of the string
+     * @param right pass true if the character should be removed from the right of the string
+     * @return a trimmed String
+     */
+    public static final String trim(String str, char chr, boolean left, boolean right){
+    	if (str==null) return null;
+    	int start = 0;
+    	int end = str.length();
+    	char[] charArray = str.toCharArray();
+    	if(left){
+    		while (start<end && (charArray[start]==chr)){
+        		start++;
+        	}
+    		if (start==end) return "";
+    	}
+    	if(right){
+    		while (end>start && (charArray[end-1]==chr)){
+        		end--;
+        	}
+    	}
+    	
+    	return str.substring(start,end);
+    }
+    
+    /**
+     * Trims the given character from the beginning and end of the string
+     * @param str The string you wish to trim the character from
+     * @param chr The character you wish to trim from the string
+     * @return a trimmed String
+     */
+    public static final String trim(String str, char chr){
+    	return Util.trim(str, chr, true, true);
+    }
+    
+    /**
+     * Trims the given character from the end of the string
+     * @param str The string you wish to trim the character from
+     * @param chr The character you wish to trim from the string
+     * @return
+     */
+    public static final String rTrim(String str, char chr){
+    	return Util.trim(str, chr, false, true);
+    }
+    
+    /**
+     * Trims the given character from the begining of the string
+     * @param str The string you wish to trim the character from
+     * @param chr The character you wish to trim from the string
+     * @return
+     */
+    public static final String lTrim(String str, char chr){
+    	return Util.trim(str, chr, true, false);
+    }
 
     /**
 	 * Java version of Perl's <code>join</code> operator. Returns a single
@@ -795,18 +933,46 @@ public final class Util
 	 * <code>between</code>.
 	 */
 	public static <E extends Object> String join(String between, E ... items) {
-		String joined = "";
-		for (int i = 0; i < items.length; i++)
-			joined += i == 0 ? items[i] : between + items[i];
-		return joined;
+		StringBuffer joined = new StringBuffer();
+		for (int i = 0; i < items.length; i++){
+			if (i > 0)
+				joined.append(between);
+			joined.append(items[i]);
+		}
+		return joined.toString();
 	}
     
     public static String join(String between, Collection list) {
-    	String joined = "";
-    	for(Iterator it=list.iterator(); it.hasNext(); )
-    	    joined += (joined.length()==0 ? "" : between) + it.next().toString();
-    	return joined;
+    	StringBuffer joined = new StringBuffer();
+    	int i=0;
+    	for(Iterator it=list.iterator(); it.hasNext(); ){
+    		if (i > 0)
+    			joined.append(between);
+    		joined.append(it.next().toString());
+    		i++;
+    	}
+    	return joined.toString();
     }
+    
+	public static String join(String between, double[] items) {
+		StringBuffer joined = new StringBuffer();
+		for (int i = 0; i < items.length; i++){
+			if (i > 0)
+				joined.append(between);
+			joined.append(items[i]);
+		}
+		return joined.toString();
+	}
+    
+	public static String join(String between, int[] items) {
+		StringBuffer joined = new StringBuffer();
+		for (int i = 0; i < items.length; i++){
+			if (i > 0)
+				joined.append(between);
+			joined.append(items[i]);
+		}
+		return joined.toString();
+	}
     
     /**
      * Escape an SQL string. Every instance of single-quote which appears
@@ -959,29 +1125,6 @@ public final class Util
 	return fpath;
      }
 
-    /**
-     ** The Mars polar radius, in km.
-     **/
-    public static double MARS_POLAR = 3376.20;
-    
-    /** The Mars mean radius */
-    public static double MARS_MEAN = 3386.0;
-    
-    /**
-     ** The Mars equatorial radius, in km.
-     **/
-    public static double MARS_EQUAT = 3396.19;
-
-    /**
-     ** The flattening coefficient of the Mars ellipsoid.
-     **/
-    private static double MARS_FLATTENING = 1 - (MARS_POLAR / MARS_EQUAT);
-
-    /**
-     ** Convenience constant for conversions.
-     **/
-    private static double G2C_SCALAR = (1-MARS_FLATTENING)*(1-MARS_FLATTENING);
-
     /** Converts a latitude value given as an "ographic" coordinate reference
      ** to an "ocentric" one.
      ** 
@@ -1028,9 +1171,10 @@ public final class Util
      **/
     public static double getMarsSunDistance(double et)
      {
+		 // TODO: make getSunDistance() and set a body parameter for the orbit equations to use in jmars.config
 	try
 	 {
-	    TimeCache tc = TimeCache.getInstance("ODY");
+	    TimeCache tc = TimeCacheFactory.instance().getTimeCacheInstance("ODY");
 
 	    StringTokenizer tok = new StringTokenizer(
 		UTC_DF.format(tc.et2date(et)));
@@ -1211,17 +1355,18 @@ public final class Util
      ** is within the x-range [0:360], and that there is no
      ** wrap-around (that is, the shape simply pushes past 360).
      **/
-    public static Shape normalize360(Shape s)
-     {
-	double x = s.getBounds2D().getMinX();
-	if(x < 0  ||  x >= mod)
-	    s = modify(s, cmModulo);
+	 public static Shape normalize360(Shape s)
+	 {
+		 Rectangle2D bounds = s.getBounds2D();
+		 double x = bounds.getMinX();
+		 if(x < 0  ||  x >= mod)
+			 s = modify(s, cmModulo);
 
-	if(s.getBounds2D().getWidth() >= mod/2)
-	    s = modify(s, cmWrapping);
+		 if(bounds.getWidth() >= mod/2)
+			 s = modify(s, cmWrapping);
 
-	return	s;
-     }
+		 return	s;
+	 }
 
 	/**
 	 * Normalize the given vertices w.r.t. to the first vertex.
@@ -1388,7 +1533,12 @@ public final class Util
      {
 	return	val >= min  &&	val <= max;
      }
-
+    
+    /** Returns true if the range (minA,maxA) completely encloses the range (minB, maxB) */
+    public static final boolean encloses(double minA, double maxA, double minB, double maxB) {
+    	return Util.between(minA, minB, maxA) && Util.between(minA, maxB, maxA);
+    }
+    
     /**
      ** Handy util method for combination min/max bounding
      ** calls. Equivalent to <code>Math.min(Math.max(value, min),
@@ -1664,18 +1814,75 @@ public final class Util
 	    return;
 	try
 	 {
-	    BrowserLauncher.openURL(url);
+		//Check for a user defined browser
+	    String browseCmd = DefaultBrowser.getBrowser();
+	    String urltag = DefaultBrowser.getURLTag();
+	    if (browseCmd != null && browseCmd.length() > 0){
+	    	int index = browseCmd.toLowerCase().indexOf(urltag.toLowerCase());
+	        if (index < 0){
+	        	log.aprintln("Missing webpage placeholder " + urltag +
+	                             " in custom browser command");
+	        } else {
+	        // Replace the url placeholder in case-insensitive fashion with
+	        // the webpage reference.  Try to launch custom browser with webpage.
+	        	browseCmd = browseCmd.substring(0, index) + url + 
+	                            browseCmd.substring(index + urltag.length());
+	        	try {
+	        		Runtime.getRuntime().exec(browseCmd);
+	        		log.aprintln(url);
+	        	}
+	        	catch (Exception e1) {
+	        		log.println(e1);
+	        		log.aprintln("Custom webbrowser command '" + browseCmd + "' failed: " +
+	                             e1.getMessage());
+	        		log.aprint("Will launch default webbrowser instead");
+	        	    BrowserLauncher.openURL(url);
+	        	}
+	        }
+	    } else{
+	    	 BrowserLauncher.openURL(url);
+	    }
+
 	    log.aprintln(url);
 	 }
 	catch(Throwable e)
 	 {
-	    log.aprintln("Failed to open url due to " + e);
-	    JOptionPane.showMessageDialog(null,
-					  "Unable to open your browser!\n"
-					  + "Details are on the command-line.",
-					  "Browse URL",
-					  JOptionPane.ERROR_MESSAGE);
-	 }
+		// Code partially lifted from BareBonesBrowser.  The full code didn't work properly, but as a fall-through second case, it seems like a viable option
+		final String[] browsers = { "google-chrome", "firefox", "opera",
+			      "epiphany", "konqueror", "conkeror", "midori", "kazehakase", "mozilla" };
+		// Second try:
+        String osName = System.getProperty("os.name");
+        try {
+           if (osName.startsWith("Mac OS")) {
+              Class.forName("com.apple.eio.FileManager").getDeclaredMethod(
+                 "openURL", new Class[] {String.class}).invoke(null,
+                 new Object[] {url});
+              }
+           else if (osName.startsWith("Windows"))
+              Runtime.getRuntime().exec(
+                 "rundll32 url.dll,FileProtocolHandler " + url);
+           else { //assume Unix or Linux
+              String browser = null;
+              for (String b : browsers)
+                 if (browser == null && Runtime.getRuntime().exec(new String[]
+                       {"which", b}).getInputStream().read() != -1)
+                    Runtime.getRuntime().exec(new String[] {browser = b, url});
+              if (browser == null)
+                 throw new Exception(Arrays.toString(browsers));
+              }
+           }
+        catch (Exception e1) {
+    	    log.aprintln("Failed to open url due to " + e1);
+    	    e1.printStackTrace();
+    	    JOptionPane.showMessageDialog(null,
+    					  "Unable to open your browser!\n"
+    					  + "Details are on the command-line.",
+    					  "Browse URL",
+    					  JOptionPane.ERROR_MESSAGE);
+           }
+        }
+		
+		
      }
 
     /**
@@ -1840,65 +2047,30 @@ public final class Util
     /** You most likely won't care about this function */
     public static final boolean waitForImage(Image image)
      {
-	int id;
+		int id;
 	synchronized(sComponent) { id = sID++; }
-	sTracker.addImage(image, id);
+		sTracker.addImage(image, id);
 	try
 	 {
-	    sTracker.waitForID(id);
+			sTracker.waitForID(id);
 	 }
 	catch(InterruptedException ie)
 	 {
 	    log.println("Unable to waitForImage:");
 //	    log.aprintln(ie);
-	    sTracker.removeImage(image, id);
-	    return  false;
-	 }
+		    sTracker.removeImage(image, id);
+		    return  false;
+		}
 	if(sTracker.isErrorID(id))
 	 {
 	    log.println("Failed waitForImage, id " + id);
-	    sTracker.removeImage(image, id);
-	    return  false;
-	 }
-	sTracker.removeImage(image, id);
-
-	return	true;
-     }
-
-    /** Loads a given filename into a BufferedImage */
-    public static final BufferedImage loadBufferedImage(String path)
-     {
-	return	makeBufferedImage(blockingLoad(path));
-     }
-
-    /** Loads a given url into a BufferedImage */
-    public static final BufferedImage loadBufferedImage(URL url)
-     {
-	return	makeBufferedImage(blockingLoad(url));
-     }
-
-    /** Given a filename, returns a fully-loaded image */
-    public static final Image blockingLoad(String path)
-     {
-	Image image = Toolkit.getDefaultToolkit().createImage(path);
-	if(waitForImage(image) == false)
-	 {
-	    log.println("Failed to load image: " + path);
-	    return  null;
-	 }
-	return	image;
-     }
-
-    /** Given a url, returns a fully-loaded image */
-    public static final Image blockingLoad(URL url)
-     {
-	Image image = Toolkit.getDefaultToolkit().createImage(url);
-	if(waitForImage(image) == false)
-	 {
-	    log.println("Failed to load image: " + url);
-	    return  null;
-	 }
-	return	image;
+		    sTracker.removeImage(image, id);
+		    return  false;
+		}
+		
+		sTracker.removeImage(image, id);
+	
+		return	true;
      }
 
     /** Given an image reference, returns a BufferedImage "of it", with
@@ -1907,6 +2079,7 @@ public final class Util
      {
 	if(waitForImage(image) == false)
 	    return  null;
+	
 	BufferedImage bufferedImage = null;
 
 	try 
@@ -1972,17 +2145,23 @@ public final class Util
     /** Returns a new BufferedImage of the given size, with the
      ** default pixel format (as determined by what's most-compatible
      ** with the native screen's preferred pixel format).
+     *
+     *  Now forces the returned image to have NON premultiplied transparency values to avoid
+     *  issues on the Mac where transparent pixels became colored when applying ColorStretchers
      **/
-    public static final BufferedImage newBufferedImage(int w, int h)
-     {
-	if(w == 0  ||  h == 0)
-	    log.aprintln("BAD IMAGE SIZE REQUESTED: " + w + "x" + h);
-	return
-	    GraphicsEnvironment
-	    .getLocalGraphicsEnvironment()
-	    .getDefaultScreenDevice()
-	    .getDefaultConfiguration()
-	    .createCompatibleImage(w, h, Transparency.TRANSLUCENT);
+    public static final BufferedImage newBufferedImage(int w, int h) {
+		if(w == 0  ||  h == 0)
+		    log.aprintln("BAD IMAGE SIZE REQUESTED: " + w + "x" + h);
+		
+		BufferedImage bi = GraphicsEnvironment
+		    .getLocalGraphicsEnvironment()
+		    .getDefaultScreenDevice()
+		    .getDefaultConfiguration()
+		    .createCompatibleImage(w, h, Transparency.TRANSLUCENT);
+	 
+		bi.coerceData(false);
+		
+		return bi;
      }
 
     /** Returns a new BufferedImage of the given size, with the
@@ -2001,115 +2180,14 @@ public final class Util
 	    .createCompatibleImage(w, h, Transparency.OPAQUE);
      }
 
-    /**
-     ** Convenience method to perform {@link #urlToDisk1} repeatedly
-     ** until it succeeds without error. Attempts the download up to
-     ** <code>retryCount</code> times, catching any exceptions. On the
-     ** last run, throws whatever exception was generated.
-     **/
-    public static void urlToDisk(int retryCount,
-				 String urlAddress,
-				 String filename)
-     throws IOException
-     {
-	while(true)
-	    try
-	     {
-		urlToDisk1(urlAddress, filename);
-		return;
-	     }
-	    catch(IOException	   e) { if(retryCount-- <= 0) throw e; }
-	    catch(RuntimeException e) { if(retryCount-- <= 0) throw e; }
-	// The RuntimeException handler is to allow for retry on
-	// unchecked exceptions (such as NullPointerException).
-     }
-
-    /**
-     ** Attempts (once) to retrieve all data from the given url and
-     ** store it in the given file. Throws an exception if any errors
-     ** are encountered. Use {@link #urlToDisk} to automatically retry
-     ** a given number of times before giving up.
-     **/
-    public static void urlToDisk1(String urlAddress, String filename)
-     throws IOException
-     {
-	URL url = null;
-	try
-	 {
-	    url = new URL(urlAddress);
-	 }
-	catch(MalformedURLException e)
-	 {
-	    throw  new FileNotFoundException(urlAddress + " (" + e + ")");
-	 }
-	
-	urlToDisk1( url, filename);
-     }
-
-
-    /**
-     * 
-     * Attempts (once) to retrieve all data from the given url and
-     * store it in the given file. Throws an exception if any
-     * errors are encountered. Use {@link #urlToDisk} to
-     * automatically retry a given number of times before giving
-     * up.
-     */
-     public static void urlToDisk1(URL url, String filename) {
-		
-	 InputStream in = null;
-	 OutputStream out = null;
-	 try {
-	     in = url.openStream();
-	     out = new BufferedOutputStream(new FileOutputStream(filename));
-	     
-	     byte[] buffer = new byte[40960];
-	     int bytes_read;
-	     
-	     while(( bytes_read = in.read(buffer) ) != -1) {
-		 out.write(buffer, 0, bytes_read);
-	     }
-	     
-	     out.close();
-	     
-	 } catch (IOException e){
-	     e.printStackTrace( System.err);
-	 } finally {
-
-	    try {  in.close(); } catch(Throwable e) { }
-	    try { out.close(); } catch(Throwable e) { }
-
-	     // We've been getting some zero length files...let's end it here
-	     File f = new File(filename);
-	     if(f.exists()  &&  f.length() == 0) {
-		 log.println("Deleting downloaded zero-length file");
-		 log.println("(" + filename + ")");
-		 f.delete();
-	     }
-	 }
-     }
-  
-
-
-   public static final String getBaseFileName( String fullPath) {
-
-      String ret = fullPath;
-
-      int pos = fullPath.lastIndexOf(System.getProperty("file.separator"));
-      if ( pos > -1 )
-	ret = fullPath.substring(pos+1);
-
-      return ret;
-   }
-
 	/**
 	 * Read to the end of the given input stream, closing the stream and
 	 * returning the string found. If anything goes wrong, it tries to
 	 * close the stream at that point, and then returns as much of the
-	 * response as was read.
+	 * response as was read. ISO-8859-1 encoding is assumed.
 	 */
 	public static String readResponse(InputStream istream) {
-		BufferedReader br = new BufferedReader(new InputStreamReader(istream));
+		BufferedReader br = new BufferedReader(new InputStreamReader(istream, Charset.forName("ISO-8859-1")));
 		char[] buffer = new char[2048];
 		CharArrayWriter ow = new CharArrayWriter();
 		try {
@@ -2155,7 +2233,13 @@ public final class Util
      {
 	try
 	 {
-	    javax.imageio.ImageIO.write(img, "jpg", new File(fname));
+		// append the .jpg to the end of the file name if it doesn't have a valid jpeg extension
+		if(!(fname.toLowerCase().endsWith(".jpg") || fname.toLowerCase().endsWith(".jpeg"))) {
+			// trim off any dots on the end of the filename
+			fname = Util.rTrim(fname, '.');
+			fname += ".jpg"; 
+		}
+		javax.imageio.ImageIO.write(img, "jpg", new File(fname));
 	 }
 	catch(IOException e)
 	 {
@@ -2164,7 +2248,47 @@ public final class Util
 	    throw new RuntimeException(e.toString(), e);
 	 }
      }
+    
+    public static final void saveAsPng(BufferedImage img, String fname)
+    {
+    	try
+    	{
+    		// append the .png to the end of the file name if it doesn't exist
+    		if(!fname.toLowerCase().endsWith(".png")) { 
+    			// trim off any dots on the end of the filename
+    			fname = Util.rTrim(fname, '.');
+    			fname += ".png"; 
+    		}
+    		javax.imageio.ImageIO.write(img, "png", new File(fname));
+    	}
+    	catch(IOException e)
+    	{
+    		log.println("From " + fname + " " + img);
+    		log.println(e);
+    		throw new RuntimeException(e.toString(), e);
+    	}
+    }
 
+    public static final void saveAsTif(BufferedImage img, String fname)
+    {
+    	try
+    	{
+    		// append the .tif to the end of the file name if it doesn't exist
+    		if(!fname.toLowerCase().endsWith(".tif")) { 
+    			// trim off any dots on the end of the filename
+    			fname = Util.rTrim(fname, '.');
+    			fname += ".tif"; 
+    		}
+    		javax.imageio.ImageIO.write(img, "tif", new File(fname));
+    	}
+    	catch(IOException e)
+    	{
+    		log.println("From " + fname + " " + img);
+    		log.println(e);
+    		throw new RuntimeException(e.toString(), e);
+    	}
+    }
+    
     public static String zeroPadInt(long inV, int totalLength)
     {
 	StringBuffer result = new StringBuffer(Integer.toString((int)inV));
@@ -2199,41 +2323,6 @@ public final class Util
 	return formatter.format(inNumber);
     }
     
-    /**
-     * Formats a spatial Point2D to two decimal places and appends
-     * E to the lon value and N to the lat value for display purposes.
-     * An example return value would be:  222.12E 77.32N
-     * @param spatial
-     * @return
-     */
-	public static String formatSpatial(Point2D spatial)
-	 {
-		DecimalFormat f = new DecimalFormat("0.00");
-		StringBuffer buff = new StringBuffer(20);
-
-		// Format the longitude
-		double x  = 360 - spatial.getX(); // JMARS west lon => USER east lon
-		double xa = Math.abs(x);
-		if(xa < 100)
-			buff.append("  ");
-		if(xa < 10)
-			buff.append("  ");
-		buff.append(f.format(x));
-		buff.append("E ");
-
-		// Format the latitude
-		double y  = spatial.getY();
-		double ya = Math.abs(y);
-		if(y > 0)
-			buff.append("  ");
-		if(ya < 10)
-			buff.append("  ");
-		buff.append(f.format(y));
-		buff.append("N");
-
-		return  buff.toString();
-	 }
-
     public static final BufferedImage createGrayscaleImageRot(int dataW,
 							      int dataH,
 							      byte[] data,
@@ -2331,17 +2420,6 @@ public final class Util
      }
 
 
-    public static final BufferedImage createGrayscaleImage(int w, int h, boolean linearColorSpace, int transparency, Hashtable properties){
-    	ColorSpace destCS = linearColorSpace? getLinearGrayColorSpace(): ColorSpace.getInstance(ColorSpace.CS_GRAY);
-    	ColorModel destCM;
-    	if (transparency == Transparency.OPAQUE) 
-    		destCM = new ComponentColorModel(destCS, false, false, transparency, DataBuffer.TYPE_BYTE);
-    	else
-    		destCM = new ComponentColorModel(destCS, true, false, transparency, DataBuffer.TYPE_SHORT);
-    	
-		return new BufferedImage(destCM, destCM.createCompatibleWritableRaster(w, h), destCM.isAlphaPremultiplied(), properties);
-    }
-    
     /**
      ** @deprecated Don't use, the resulting image is strangely slow.
      **/
@@ -2775,7 +2853,7 @@ public final class Util
 	 */
 	public static int[][] binRanges (int[] indices) {
 		Arrays.sort (indices);
-		java.util.List ranges = new LinkedList ();
+		List<int[]> ranges = new LinkedList<int[]>();
 		if (indices != null && indices.length > 0) {
 			int[] range = new int[2];
 			range[0] = indices[0];
@@ -2872,6 +2950,16 @@ public final class Util
 		return c;
 	}
 	
+	public static Window getDisplayFrame(Component c) {
+		while (c!=null) {
+			if (c instanceof Window) {
+				return (Window)c;
+			}
+			c = c.getParent();
+		}
+
+		return null;
+	}
 	/**
 	 * Read and return all bytes from the specified input stream until an
 	 * end of stream is encountered.
@@ -2977,14 +3065,14 @@ public final class Util
 				new Rectangle2D.Double(minx, y, 360-minx, h)
 			};
 	}
-	
+
 	/**
-	 * Returns all occurrences of wrappedImage in the specified unwrapped
-	 * domain. The results will intersect unwrappedDomain but may not be
-	 * completely contained.
+	 * @return All occurrences of wrappedImage in the specified unwrapped
+	 *         domain. The results will intersect unwrappedDomain but may not be
+	 *         completely contained.
 	 */
 	public static Rectangle2D[] toUnwrappedWorld(Rectangle2D wrappedImage, Rectangle2D unwrappedDomain) {
-		List matches = new LinkedList();
+		List<Rectangle2D> matches = new ArrayList<Rectangle2D>();
 		Rectangle2D query = new Rectangle2D.Double();
 		double start = Math.floor(unwrappedDomain.getMinX() / 360.0) * 360.0 + wrappedImage.getMinX();
 		double y = wrappedImage.getY();
@@ -2996,8 +3084,20 @@ public final class Util
 				matches.add((Rectangle2D)query.clone());
 			}
 		}
-		final Rectangle2D[] type = new Rectangle2D[0];
-		return (Rectangle2D[])matches.toArray(type);
+		return matches.toArray(new Rectangle2D[matches.size()]);
+	}
+	
+	/**
+	 * @return an array of JTS envelopes with x coordinates in the range [0-360]
+	 *         that collectively cover the given unwrapped world rectangle.
+	 */
+	public static Envelope[] rect2env(Rectangle2D unwrappedWorld) {
+		Rectangle2D[] bounds = Util.toWrappedWorld(unwrappedWorld);
+		Envelope[] env = new Envelope[bounds.length];
+		for (int i = 0; i < env.length; i++) {
+			env[i] = new Envelope(bounds[i].getMinX(), bounds[i].getMaxX(), bounds[i].getMinY(), bounds[i].getMaxY());
+		}
+		return env;
 	}
 	
 	/**
@@ -3155,6 +3255,23 @@ public final class Util
 	}
 	
 	/**
+	 * Inserts each key/value in <code>oldIn</code> into <code>emptyOut</code>
+	 * using the key as the value and the value as the key.
+	 * @returns The <code>emptyOut</code> argument is simply returned.
+	 * @throws IllegalArgumentException If the same value occurs more than once.
+	 */
+	public static <E,F> Map<F,E> reverse(Map<E,F> oldIn, Map<F,E> emptyOut) {
+		for (E key: oldIn.keySet()) {
+			F value = oldIn.get(key);
+			if (emptyOut.containsKey(value)) {
+				throw new IllegalArgumentException("Map cannot be reversed; contains duplicate value");
+			}
+			emptyOut.put(value, key);
+		}
+		return emptyOut;
+	}
+
+	/**
 	 * Wrapper around basic HttpClient execution of PostMethod to handle
 	 * redirects.
 	 * 
@@ -3163,30 +3280,30 @@ public final class Util
 	 * @throws NullPointerException Thrown if an empty location header is found
 	 * @throws HttpException Thrown if another kind of HTTP error occurs
 	 * @throws URIException Thrown if an invalid URI is used
-	 */
-	public static int postWithRedirect(HttpClient client, PostMethod post, int maxRedirects)
-			throws URIException, HttpException, NullPointerException, IOException {
-		int code = -1;
-		for (int tries = 0; tries < maxRedirects; tries++) {
-			code = client.executeMethod(post);
-			switch (code) {
-			case 301: // moved permanently
-			case 302: // moved temporarily
-			case 307: // temporary redirect
-				Header loc = post.getResponseHeader("location");
-				if (loc != null) {
-					post.setURI(new URI(loc.getValue(), false));
-				} else {
-					return code;
-				}
-				break;
-			case 200:
-			default:
-				return code;
-			}
-		}
-		return code;
-	}
+	 */ 
+//	public static int postWithRedirect(HttpClient client, PostMethod post, int maxRedirects)               TODO (PW) Remove commented-out code
+//			throws URIException, HttpException, NullPointerException, IOException {
+//		int code = -1;
+//		for (int tries = 0; tries < maxRedirects; tries++) {
+//			code = client.executeMethod(post);
+//			switch (code) {
+//			case 301: // moved permanently
+//			case 302: // moved temporarily
+//			case 307: // temporary redirect
+//				Header loc = post.getResponseHeader("location");
+//				if (loc != null) {
+//					post.setURI(new URI(loc.getValue(), false));
+//				} else {
+//					return code;
+//				}
+//				break;
+//			case 200:
+//			default:
+//				return code;
+//			}
+//		}
+//		return code;
+//	}
 	
 	/**
 	 * Retrieves the given remote file, caches it in cachePath. Subsequent
@@ -3216,30 +3333,34 @@ public final class Util
 				}
 			}
 			
-			URLConnection conn = url.openConnection();
-			conn.setRequestProperty("User-Agent", "Java");
-			if (!(localFile.exists() && localFile.lastModified() == conn.getLastModified())){
-				if (localFile.exists())
-					log.println("File from "+remoteUrl+" is out of date ("+(new Date(localFile.lastModified()))+" vs "+(new Date(conn.getLastModified()))+").");
-				else
-					log.println("File from "+remoteUrl+" is not cached locally.");
-				
-				new File(cachePath).mkdirs();
-				InputStream is = conn.getInputStream();
-				OutputStream os = new BufferedOutputStream(new FileOutputStream(localFile));
-				byte[] buff = new byte[1024];
-				int nread;
-				while((nread = is.read(buff)) > -1)
-					os.write(buff, 0, nread);
-				os.close();
-				if (conn.getLastModified() != 0)
-					localFile.setLastModified(conn.getLastModified());
-				
-				log.println("Downloaded file from " + remoteUrl+ " modification date: "+(new Date(conn.getLastModified())));
-			}
-			else {
-				log.println("Using cached copy for "+remoteUrl+".");
-			}
+            JmarsHttpRequest request = new JmarsHttpRequest(remoteUrl, HttpRequestType.GET, new Date(localFile.lastModified()) );
+            request.addRequestParameter("User-Agent", "Java");
+            boolean successful = request.send();
+            if (successful) {
+                int httpStatus = request.getStatus();
+    			if (!(localFile.exists() && httpStatus == HttpStatus.SC_NOT_MODIFIED)) {
+    				if (localFile.exists()) {
+    				    log.println("File from "+remoteUrl+" is out of date ("+(new Date(localFile.lastModified()))+" vs "+request.getLastModifiedString()+").");
+    				} else {
+    					log.println("File from "+remoteUrl+" is not cached locally.");
+    				}
+    				new File(cachePath).mkdirs();
+    				InputStream is = request.getResponseAsStream();
+    				OutputStream os = new BufferedOutputStream(new FileOutputStream(localFile));
+    				byte[] buff = new byte[1024];
+    				int nread;
+    				while((nread = is.read(buff)) > -1)
+    					os.write(buff, 0, nread);
+    				os.close();
+    				if (request.getLastModifiedDate() != 0)
+    					localFile.setLastModified(request.getLastModifiedDate());
+    				
+    				log.println("Downloaded file from " + remoteUrl+ " modification date: "+request.getLastModifiedDate());
+    			}
+    			else {
+    				log.println("Using cached copy for "+remoteUrl+".");
+    			}
+            }
 			return localFile;
 		} catch (Exception e) {
 			e.printStackTrace();
@@ -3253,6 +3374,16 @@ public final class Util
 		dlg.getRootPane().getActionMap().put("ESCAPE", new AbstractAction() {
 			public void actionPerformed(ActionEvent e) {
 				dlg.setVisible(false);
+			}
+		});
+	}
+	
+	public static void addEscapeDisposesAction(final JDialog dlg) {
+		KeyStroke esc = KeyStroke.getKeyStroke(KeyEvent.VK_ESCAPE, 0, false);
+		dlg.getRootPane().getInputMap(JComponent.WHEN_IN_FOCUSED_WINDOW).put(esc, "ESCAPE");
+		dlg.getRootPane().getActionMap().put("ESCAPE", new AbstractAction() {
+			public void actionPerformed(ActionEvent e) {
+				dlg.dispose();
 			}
 		});
 	}
@@ -3272,4 +3403,414 @@ public final class Util
 			}
 		}
 	}
+	
+	/**
+	 * Gets the jmars icon and returns it as a bufferedImage.
+	 * @return a BufferedImage containing the JMars icon
+	 */
+	public static BufferedImage getJMarsIcon(){
+		return Util.loadImage("resources/jmars_icon.jpg");
+	}
+
+	/**
+	 * Returns the capturing groups in pattern 'p' found in the string 's', or
+	 * an empty array if no groups were found
+	 */
+	public static String[] getMatches(Pattern p, String s) {
+		Matcher m = p.matcher(s);
+		if (!m.matches())
+			return new String[0];
+		String[] out = new String[m.groupCount()];
+		for (int i = 0; i < out.length; i++) {
+			out[i] = m.group(i+1);
+		}
+		return out;
+	}
+	
+	/**
+	 * Returns the capturing groups in pattern 'p' found in the string 's', or
+	 * an empty array if no groups were found
+	 */
+	public static String[] getMatchesWithFind(Pattern p, String s) {
+		Matcher m = p.matcher(s);
+		if (!m.find())
+			return new String[0];
+		String[] out = new String[m.groupCount()];
+		for (int i = 0; i < out.length; i++) {
+			out[i] = m.group(i+1);
+		}
+		return out;
+	}
+	/**
+	 * @return a new grayscale BufferedImage with the linear grayscale colorspace,
+	 * since the default grayscale colorspace has a non-linear ramp that distorts
+	 * image colors.
+	 */
+	public static BufferedImage createGrayscaleImage(int w, int h, boolean hasAlpha) {
+		ColorSpace cs = Util.getLinearGrayColorSpace();
+		int trans = hasAlpha ? ColorModel.TRANSLUCENT: ColorModel.OPAQUE;
+		ColorModel destCM = new ComponentColorModel(cs, hasAlpha, false, trans, DataBuffer.TYPE_BYTE);
+		SampleModel outModel = new BandedSampleModel(DataBuffer.TYPE_BYTE, w, h, destCM.getNumComponents());
+		WritableRaster outRaster = Raster.createWritableRaster(outModel, null);
+		return new BufferedImage(destCM, outRaster, destCM.isAlphaPremultiplied(), null);
+	}
+	
+	/**
+	 * Return an Iterable that iterates over all elements of each collection in
+	 * the given order, without copying into a new collection.
+	 */
+	public static <E> Iterable<E> iterate(final Collection<? extends E> ... cArray) {
+		return new Iterable<E>() {
+			public Iterator<E> iterator() {
+				return new Iterator<E> () {
+					private int idx = 0;
+					private Iterator<? extends E> it = cArray[0].iterator();
+					private Iterator<? extends E> getIt() {
+						if (!it.hasNext()) {
+							idx ++;
+							if (idx < cArray.length) {
+								it = cArray[idx].iterator();
+							}
+						}
+						return it;
+					}
+					public boolean hasNext() {
+						return getIt().hasNext();
+					}
+					public E next() {
+						return getIt().next();
+					}
+					public void remove() {
+						it.remove();
+					}
+				};
+			}
+		};
+	}
+	/**
+	 * This method is used to get the prefix used to retrieve product and body prefixed values in config. For example, 
+	 * jmars.mars.server would return jmars.mars. so that calling methods can just append the value "server" that was desired and
+	 * the value for the current body will be returned. 
+	 * @return
+	 * @since change bodies
+	 */
+	public static String getProductBodyPrefix() {
+		if (configPrefix == null) {//if the prefix has already been determined, just return it
+			configPrefix = "";
+			TreeMap<String, String[]> mapOfBodies = new TreeMap<String,String[]>();//Map to store the bodies and possibly the first level such as "jupiter,{io,europa}".
+			String currentProduct = Config.get(Config.CONFIG_PRODUCT);
+			if (bodyList == null || bodyList.size() == 0) {//if the body list has already been created, do not create it again, it does not change in one session
+				//public releases may have multiple bodies
+				TreeMap<String, String> mapOfLevels = (TreeMap<String, String>) Config.getValuesByPrefix(currentProduct + ".level");//get the levels from the config for the product.
+				if (mapOfLevels.size() > 0) {//if there are no levels set, we will go look for a list of bodies
+					//one entry for each level i.e. jmoj.level.1  Jupiter
+					Iterator<String> levelIter = mapOfLevels.keySet().iterator();//get the keySet for the levels from config
+					while(levelIter.hasNext()) {
+						//get all of the bodies for that level i.e. jmoj.jupiter.io
+						String levelStr = mapOfLevels.get(levelIter.next()).toLowerCase();//get the value from the level "jmoj.level.1 = Jupiter, lowercase it
+						//put each level into the list of bodies
+						mapOfBodies.put(levelStr, new String[]{levelStr});
+						
+						//now check for sub levels for that level
+						String configTempValue = currentProduct + ".sub_level." + levelStr;
+						TreeMap<String, String> mapOfOneLevel = (TreeMap<String, String>) Config.getValuesByPrefix(configTempValue);//get the bodies for product.sub_level i.e. jmoj.jupiter.1
+						Iterator<String> bodyIter = mapOfOneLevel.keySet().iterator();//get the keySet for the product.level entries
+						if (bodyIter.hasNext()) {
+							mapOfBodies.put(levelStr, null);
+						}
+						int ct = 0;
+						while(bodyIter.hasNext()) {
+							String body = mapOfOneLevel.get(bodyIter.next());//get the body for the product.level
+							String[] oneLevel = mapOfBodies.get(levelStr);//get the String[] for this level i.e. jupiter
+							if (oneLevel == null) {
+								//jupiter - {io,europa...}
+								oneLevel = new String[mapOfOneLevel.size()];//if it has not yet been set, create a new String[] for this level
+								mapOfBodies.put(levelStr,oneLevel);//put the String[] in the main Map by level - String[]
+							}
+							oneLevel[ct] = body;//set the value of the body in the String[] for this level
+							ct++;
+						}
+					}
+				} else {
+					//get the config values that defines what bodies are associated with which product (i.e. jmars.bodies.1  Mars)
+					Map<String,String> tempBodyList = Config.getValuesByPrefix(currentProduct + ".bodies");//get the values from config for product.bodies
+					Iterator<String> iterator = tempBodyList.keySet().iterator();//get the iterator for the keyset
+					mapOfBodies.put("",new String[tempBodyList.size()]);//put a new entry in the mapOfBodies that will have an empty String as the key
+					int ct = 0;
+					while (iterator.hasNext()) {
+						String[] bodyStrArr = mapOfBodies.get("");//get the empty key String[] to store the bodies
+						String body =  tempBodyList.get(iterator.next());//get the body from the config list
+						bodyStrArr[ct] = body;//put the body in the String array
+						ct++;
+					} 
+				}
+			}//end create body list
+			//at this point we have a Map (mapOfBodies) that either has names for the first level, such as jupiter, {io,europa}, or has empty string "",{io,europa,ganymede}. If we have "", we will not display
+			//a first level
+			String currentBody = Main.getCurrentBody();//get the currentBody from Main
+			if (currentBody == null) {//startup
+				String selectedBody = Config.get(Config.CONFIG_SELECTED_BODY,"");//did they have a recently selected body in config
+				if (selectedBody != null && !"".equals(selectedBody.trim())) {
+					//use the selected body, but first, let's make sure that it is one in our list. It may not be if they last used a different product
+					Iterator<String> iter = mapOfBodies.keySet().iterator();//get the bodies
+					while (iter.hasNext()) {
+						String[] bodies = mapOfBodies.get(iter.next());//bodies for a level
+						for (String body : bodies) {
+							if (selectedBody.trim().equals(body.trim())) {//if selectedBody matches, set the currentBody
+								currentBody = selectedBody;
+							}
+						}
+					}
+				}
+				if (currentBody == null) {
+					//we did not find a valid selected body either because it did not match any valid bodies, or it was not set
+					if (mapOfBodies.get(mapOfBodies.firstKey()).length > 0) {
+						if (mapOfBodies.containsKey("mars")) {
+							currentBody = mapOfBodies.get("mars")[0];
+						} else {
+							currentBody = mapOfBodies.get(mapOfBodies.firstKey())[0];//get the first Map entry and the first value in the String[] for that entry
+						}
+					} else {
+						currentBody = "Mars";
+					}
+				}
+				configPrefix = currentBody.toLowerCase()+".";//this is our body prefix
+				bodyList = mapOfBodies;//set the body list for Main
+				Main.setCurrentBody(currentBody);//set the current body on Main
+			} else {
+				configPrefix = currentBody.toLowerCase()+".";//body prefix
+			}
+		}
+		return configPrefix;
+	}
+	/**
+	 * This method is used when switching bodies and do not have relevant default values
+	 * @since change bodies 
+	*/
+	public static void updateRadii() {
+		updateRadii(0.0,0.0,0.0);//make these doubles so that it uses the Config method that gets doubles. Some radius values may be doubles. 
+	}
+	/**
+	 * This method is used to initially set the polar values or update them to make sure they are updated for the current body
+	 * @param defaultPolar
+	 * @param defaultEquat
+	 * @param defaultMean
+	 * @since change bodies
+	 */
+	public static void updateRadii(double defaultPolar, double defaultEquat, double defaultMean) {
+		//we have changed bodies, so reset the configPrefix value
+		configPrefix = null;
+		//now set the value so all other classes can access the new value
+		configPrefix = getProductBodyPrefix();
+		
+		//update the radii 
+		POLAR_RADIUS = Config.get(configPrefix + "polar_radius",defaultPolar);
+		EQUAT_RADIUS = Config.get(configPrefix + "equat_radius", defaultEquat);
+		MEAN_RADIUS = Config.get(configPrefix + "mean_radius", defaultMean);
+		BODY_FLATTENING = 1 - (POLAR_RADIUS / EQUAT_RADIUS);
+		G2C_SCALAR = (1-BODY_FLATTENING)*(1-BODY_FLATTENING);
+		FeatureProviderSHP.resetValues();
+		MapServerDefault.updateDefaultName();
+		MapSourceDefault.updateDefaultName();
+	}
+    //The following values get initialized in a static block to make sure they get the correct values from the config file
+    /**
+     ** The body polar radius, in km.
+	 ** @since change bodies
+     **/
+    public static double POLAR_RADIUS; 
+
+    /**
+     ** The body equatorial radius, in km.
+	 ** @since change bodies
+     **/
+    public static double EQUAT_RADIUS;
+
+	/**
+	 ** The body mean radius, in km.
+	 ** @since change bodies
+	 **/
+	public static double MEAN_RADIUS;
+
+    /**
+     ** The flattening coefficient of the planetary ellipsoid.
+	 ** @since change bodies
+     **/
+    public static double BODY_FLATTENING;
+
+    /**
+     ** Convenience constant for conversions.
+	 ** @since change bodies
+     **/
+    public static double G2C_SCALAR;
+    
+    // @since change bodies	
+	//initialize the radii, default values sent are for Mars
+	static {
+		updateRadii(3376.20, 3396.19, 3386);
+		setShowBodyMenuFlag();
+	}
+	
+	/**
+	 * @since change bodies
+	 */
+	private static void setShowBodyMenuFlag() {
+		showBodyMenuFlag = Config.get(Config.get(Config.CONFIG_PRODUCT) + "." + Config.CONFIG_SHOW_BODY_MENU,false);
+	}
+	/**
+	 * Proper case a label
+	 */
+	public static String properCase(String val) {
+		String[] arr = val.split(" ");
+		StringBuilder builder = new StringBuilder();
+		for (int x=0; x<arr.length; x++) {
+			builder.append(Character.toUpperCase(arr[x].charAt(0)));
+			builder.append(arr[x].substring(1));
+			builder.append(" ");
+		}
+		return builder.toString();
+	}
+	/**
+	 * Returns the version number from config
+	 * @return
+	 */
+	public static String getVersionNumber() {
+		String versionNum = Config.get("version_number", "n/a");
+		return versionNum;
+	}
+	/**
+	 * Upper cases the String passed in
+	 */
+	public static String toProperCase(String text) {
+		if (text == null) {
+			return "Mars";
+		}
+		return text.substring(0,1).toUpperCase() + text.substring(1);
+	}
+	
+	/**
+	 * @param key
+	 * @param defaultProperty
+	 * @return System property or the supplied default property
+	 */
+	public static String getSafeSystemProperty(String key, String defaultProperty) {
+		String retProp = null;
+		try {
+			retProp = System.getProperty(key, defaultProperty);
+		} catch (SecurityException se) {
+			retProp = defaultProperty;
+		}
+		
+		return retProp;
+	}
+	
+	public static ArrayList<ArrayList<Point2D>> generalPathToCoordinates(GeneralPath gp) {
+
+		double[] prevcoords = new double[6];
+		double[] coords = new double[6]; 
+		ArrayList<ArrayList<Point2D>> paths = new ArrayList<ArrayList<Point2D>>();
+		ArrayList<Point2D> vertices = null;
+
+		PathIterator pi;
+		for (pi = gp.getPathIterator(null); !pi.isDone(); pi.next()){
+
+			switch(pi.currentSegment(coords)){
+
+			case PathIterator.SEG_MOVETO:
+				if (vertices!=null) {
+					paths.add(vertices);
+				}
+				for (int i=0; i<6; i++) prevcoords[i]=Integer.MIN_VALUE;
+				vertices=new ArrayList<Point2D>();
+			case PathIterator.SEG_LINETO:
+				vertices.add(new Point2D.Double(coords[0],coords[1]));
+				System.arraycopy(coords, 0, prevcoords, 0, 6);
+				break;
+
+			case PathIterator.SEG_CLOSE:
+				if (vertices!=null) {
+					paths.add(vertices);
+					vertices=null;
+				}
+				break;
+
+			default:
+			}
+		}
+		
+		return paths;
+	}
+	
+	
+	public static boolean intersectsInWorldCoords(GeneralPath shape, Rectangle2D boundingBox){
+		
+	//Simple check	
+		if(shape.intersects(boundingBox)){
+			return true;
+		}
+		
+	//Next, change the shape: make sure the shape is greater than 0
+		PathIterator pi = shape.getPathIterator(new AffineTransform());
+		GeneralPath newShape = new GeneralPath();
+		ArrayList<Point2D> pts = new ArrayList<Point2D>();
+		while(!pi.isDone()){
+			double[] coords = new double[6];
+			pi.currentSegment(coords);
+			
+			if(coords[0]<0){
+				coords[0] = 360+coords[0];
+			}
+			
+			Point2D pt = new Point2D.Double(coords[0], coords[1]);
+			pts.add(pt);
+			
+			pi.next();
+		}
+		for(Point2D pt : pts){
+			if(newShape.getCurrentPoint() == null){
+				newShape.moveTo(pt.getX(), pt.getY());
+			}else{
+				newShape.lineTo(pt.getX(), pt.getY());
+			}
+		}
+		if(newShape.intersects(boundingBox)){
+			return true;
+		}
+		
+	//Change the box: make sure the box doesn't start past 360
+		double x = boundingBox.getX();
+		if(x>360){
+			while(x>360){
+				x=x-360;
+			}
+			boundingBox = new Rectangle2D.Double(x,boundingBox.getY(),boundingBox.getWidth(), boundingBox.getHeight());
+		}
+
+		if(newShape.intersects(boundingBox)){
+			return true;
+		}
+		
+	//Split the box: if the box starts before 360, but passes over, we have 
+	// to break it into two boxes to catch landing sites on 
+	// both sides.
+		x = boundingBox.getX();
+		double w = boundingBox.getWidth();
+		if(x<360 && (x+w)>360){
+			double w1 = 360-x;
+			Rectangle2D bb1 = new Rectangle2D.Double(x,boundingBox.getY(),w1,boundingBox.getHeight());
+			double w2 = (x+w)-360;
+			Rectangle2D bb2 = new Rectangle2D.Double(0,boundingBox.getY(),w2,boundingBox.getHeight());
+			
+			if(newShape.intersects(bb1)){
+				return true;
+			}
+			if(newShape.intersects(bb2)){
+				return true;
+			}
+		}
+
+		
+		return false;
+	}
+	
 }

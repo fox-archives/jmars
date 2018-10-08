@@ -1,23 +1,3 @@
-// Copyright 2008, Arizona Board of Regents
-// on behalf of Arizona State University
-// 
-// Prepared by the Mars Space Flight Facility, Arizona State University,
-// Tempe, AZ.
-// 
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-// 
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU General Public License for more details.
-// 
-// You should have received a copy of the GNU General Public License
-// along with this program.  If not, see <http://www.gnu.org/licenses/>.
-
-
 package edu.asu.jmars.layer.map2;
 
 import java.awt.Point;
@@ -68,10 +48,10 @@ public class MapRetriever implements Runnable {
 		if (request.getSource().getMaxPPD() < request.getPPD()) {
 			// request data at not more than twice the resolution of the dataset
 			int maxPPD = 1 << Math.max(0, (int)Math.ceil(Math.log(request.getSource().getMaxPPD()) / Math.log(2)));
-			fetchedData = new MapData(new MapRequest(request.getSource(), request.getExtent(), maxPPD, request.getProjection()));
-		} else {
-			fetchedData = new MapData(request);
+			request = new MapRequest(request.getSource(), request.getExtent(), maxPPD, request.getProjection());
 		}
+		
+		fetchedData = new MapData(request);
 	}
 	
 	public void setReceiver(MapProcessor recv) {
@@ -231,7 +211,7 @@ public class MapRetriever implements Runnable {
 			
 			sendUpdate();
 			
-			if (image!=null) {
+			if (image!=null && tile.getRequest().getSource().getMimeType() != null) {
 				CacheManager.storeMapData(tile);
 			}
 		} else {

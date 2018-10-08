@@ -1,23 +1,3 @@
-// Copyright 2008, Arizona Board of Regents
-// on behalf of Arizona State University
-// 
-// Prepared by the Mars Space Flight Facility, Arizona State University,
-// Tempe, AZ.
-// 
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-// 
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU General Public License for more details.
-// 
-// You should have received a copy of the GNU General Public License
-// along with this program.  If not, see <http://www.gnu.org/licenses/>.
-
-
 package edu.asu.jmars.util;
 
 import java.awt.geom.Point2D;
@@ -29,6 +9,7 @@ import java.io.Serializable;
 import java.util.StringTokenizer;
 
 import edu.asu.jmars.Main;
+import edu.asu.jmars.util.Util;
 
 public final class HVector
  implements Cloneable, Serializable
@@ -49,13 +30,6 @@ public final class HVector
 		x = y = z = 0.0;
 	 }
 
-	private static int sign(double x)
-	 {
-		if(x < 0) return  -1;
-		if(x > 0) return  +1;
-		return  0;
-	 }
-
     /**
      ** Convenience method for converting an HVector into world
      ** coordinates.
@@ -73,11 +47,6 @@ public final class HVector
 	public double[] toArray()
 	 {
 		return  new double[] { x, y, z };
-	 }
-
-	private static HVector marsll2vector(Point2D pt)
-	 {
-		return  marsll2vector(pt.getX(), pt.getY());
 	 }
 
 	private static HVector marsll2vector(double lon, double lat)
@@ -257,22 +226,22 @@ public final class HVector
 
 	public HVector addEq(HVector v)
 	 {
-		return  set(this.add(v));
+		return set(x + v.x, y + v.y, z + v.z);
 	 }
 
 	public HVector subEq(HVector v)
 	 {
-		return  set(this.sub(v));
+		return set(x - v.x, y - v.y, z - v.z);
 	 }
 
 	public HVector mulEq(double c)
 	 {
-		return  set(this.mul(c));
+		return set(x*c, y*c, z*c);
 	 }
 
 	public HVector divEq(double c)
 	 {
-		return  set(this.div(c));
+		return set(x/c, y/c, z/c);
 	 }
 
 	// Silly divide, used in QMV
@@ -548,10 +517,20 @@ public final class HVector
 		fromLonLat(lonlat.getX(), lonlat.getY());
 	 }
 
-	private static final HVector ellipsoid_radii = new HVector(3397,
-															   3397,
-															   3375);
-	
+	private static final HVector ellipsoid_radii = new HVector(Util.EQUAT_RADIUS,
+															   Util.EQUAT_RADIUS,
+															   Util.POLAR_RADIUS);
+	/**
+	 * This method is to refresh the x,y,z values for the current body if a new body has been selected. 
+	 * Without a call to this method after selecting a new body, the 
+	 * calculations will not be accurate. 
+	 * @since change bodies
+	 */
+	public static void refreshEllipsoidRadii() {
+		ellipsoid_radii.x = Util.EQUAT_RADIUS;
+		ellipsoid_radii.y = Util.EQUAT_RADIUS;
+		ellipsoid_radii.z = Util.POLAR_RADIUS;
+	}
 	/** @return Mars radii in Km. */
 	public static HVector getMarsRadii(){
 		return new HVector(ellipsoid_radii);

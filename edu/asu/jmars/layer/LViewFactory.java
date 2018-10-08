@@ -1,23 +1,3 @@
-// Copyright 2008, Arizona Board of Regents
-// on behalf of Arizona State University
-// 
-// Prepared by the Mars Space Flight Facility, Arizona State University,
-// Tempe, AZ.
-// 
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-// 
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU General Public License for more details.
-// 
-// You should have received a copy of the GNU General Public License
-// along with this program.  If not, see <http://www.gnu.org/licenses/>.
-
-
 package edu.asu.jmars.layer;
 
 import java.awt.event.ActionEvent;
@@ -33,6 +13,7 @@ import javax.swing.JOptionPane;
 
 import edu.asu.jmars.util.Config;
 import edu.asu.jmars.util.DebugLog;
+import edu.asu.jmars.util.Util;
 
 /**
  ** Encapsulates a mechanism for creating new LView objects, and for
@@ -99,7 +80,7 @@ public abstract class LViewFactory
 	 ** <p><i>Implementation note:</i> This list is populated from the
 	 ** {@link Config config file}.
 	 **/
-	public static List factoryList;
+	public static List<LViewFactory> factoryList;
 
 	/**
 	 ** The main entry point for querying and using LViewFactory
@@ -120,6 +101,26 @@ public abstract class LViewFactory
 	// Fills factoryList properly, mostly by checking the config file.
 	static
 	 {
+		//change bodies - the logic that was called once in a static block needs to now be able to be called when switching bodies
+		refreshAllLViews();
+	 }
+	/**
+	 * This method was created to refresh the LViews when switching bodies
+	 * @since change bodies
+	 */
+	public static void refreshAllLViews() {
+
+		//if we are calling this from change body, we will need to call the resetStoredData method on each factory that is in the list before we populate the lists again
+		if (factoryList2 != null) {//will be null at startup and set when changing bodies
+			for(Object tempObj : factoryList2) {
+				if (tempObj instanceof LViewFactory) {
+					LViewFactory tempLViewFactory = (LViewFactory) tempObj;
+					tempLViewFactory.resetStoredData();
+				}
+				
+			}
+		}
+		
 		// Create the "real" lists of factories.
 		List realList = new ArrayList();
 		List realList2 = new ArrayList();
@@ -127,7 +128,7 @@ public abstract class LViewFactory
 		// Add all the factories listed in the config file.
 		for(int i=1; Config.get("factory."+i,null)!=null; i++)
 		{
-			String line = Config.get("factory."+i);
+		    String line = Config.get("factory."+i);
 			StringTokenizer tok = new StringTokenizer(line);
 			String name = line;
 			if(line.equals(""))
@@ -172,8 +173,15 @@ public abstract class LViewFactory
 		// realLists.
 		factoryList = Collections.unmodifiableList(realList);
 		factoryList2 = Collections.unmodifiableList(realList2);
-	 }
-
+	}
+	/**
+	 * This is an optional method for factories to override if they have static data that will need to be updated when changing bodies.
+	 * @since change bodies
+	 */
+	protected void resetStoredData() {
+		//nothing at this level
+	}
+	
 	/**
 	 ** Indicates an {@link LViewFactory} is unavailable due to some
 	 ** reason. Generally this would be caused by a missing library or
@@ -227,14 +235,16 @@ public abstract class LViewFactory
 	 ** interaction.
 	 **
 	 ** @param callback The created LView will be passed as a
-	 ** parameter to <code>callback.{@link Callback#receiveNewLView
+	 ** parameter to <code>LManager.{@link LManager#receiveNewLView
 	 ** receiveNewLView(newLView)}</code>.
 	 **/
-	public void createLView(Callback callback)
+	public void createLView(boolean async, LayerParameters l)
 	 {
 		Layer.LView view = createLView();
-		if(view != null)
-			callback.receiveNewLView(view);
+		if(view != null){
+			view.setLayerParameters(l);
+			LManager.getLManager().receiveNewLView(view);
+		}
 	 }
 
 	/**
@@ -246,7 +256,26 @@ public abstract class LViewFactory
 	 *
 	 * @return the new LView, or null
 	 */
-	public abstract Layer.LView createLView();
+	public Layer.LView createLView() {
+		// @since change bodies
+		// get the LView from subclasses
+		Layer.LView view = this.showByDefault();
+		if (view != null) {
+			return  view;
+		} else {
+			return null;
+		}
+	}
+	
+	/**
+	 * This method is to be overwritten by factories that want to load by default and have an entry in the config file
+	 * @return String
+	 * @since change bodies
+	 * @see NomenclatureFactory.java
+	 */
+	public Layer.LView showByDefault() {
+		return null;//this is the default behavior
+	}
 
 
 	/**
@@ -305,22 +334,40 @@ public abstract class LViewFactory
 
 	/**
 	 ** The default implementation simply returns a menu item that
-	 ** proxies to {@link #createLView(Callback)}. Sub-classes can
+	 ** proxies to {@link #createLView(boolean)}. Sub-classes can
 	 ** override this to create more sophisticated behavior (such as
 	 ** returning an entire sub-menu).
 	 **/
-	protected JMenuItem[] createMenuItems(final Callback callback) {
+	protected JMenuItem[] createMenuItems() {
 		return new JMenuItem[]{new JMenuItem(new AbstractAction(getName()) {
 			public void actionPerformed(ActionEvent e) {
 				try {
-					createLView(callback);
+					createLView(true, null);
 				}
-				catch(Exception ex) {
-					ex.printStackTrace();
+				catch(Exception ex){
+					log.aprintln(ex);
 					JOptionPane.showMessageDialog(null, ex.getMessage(),
 							"Error creating \""+getName()+"\" layer.", JOptionPane.ERROR_MESSAGE);
 				}
 			}
 		})};
 	 }
+	
+	
+
+	//Used in AddLayer to add the layer
+	public String type;
+	/**
+	 ** Used in AddLayer.  Takes in a keyword and returns the proper
+	 ** factory (TES, LROC, groundtrack, etc) based off the keyword,
+	 ** and then AddLayer uses that to add the new layer.
+	 */
+	public static LViewFactory findFactoryType(String type){
+		for (LViewFactory f : factoryList){
+			if (type.equals(f.type)){
+				return f;
+			}
+		}
+		return null;
+	}
  }

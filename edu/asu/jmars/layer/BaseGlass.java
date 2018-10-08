@@ -1,102 +1,130 @@
-// Copyright 2008, Arizona Board of Regents
-// on behalf of Arizona State University
-// 
-// Prepared by the Mars Space Flight Facility, Arizona State University,
-// Tempe, AZ.
-// 
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-// 
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU General Public License for more details.
-// 
-// You should have received a copy of the GNU General Public License
-// along with this program.  If not, see <http://www.gnu.org/licenses/>.
-
-
 package edu.asu.jmars.layer;
 
-import edu.asu.jmars.*;
-import edu.asu.jmars.swing.*;
-import edu.asu.jmars.util.*;
-import java.awt.*;
-import java.awt.event.*;
-import java.awt.geom.*;
-import java.awt.image.*;
-import java.text.*;
-import java.util.*;
+import java.awt.Color;
+import java.awt.Component;
+import java.awt.Graphics;
+import java.awt.Graphics2D;
+import java.awt.Point;
+import java.awt.Rectangle;
+import java.awt.event.MouseAdapter;
+import java.awt.event.MouseEvent;
+import java.awt.event.MouseWheelEvent;
+import java.awt.event.MouseWheelListener;
+import java.awt.geom.Point2D;
+import java.awt.image.BufferedImage;
+import java.text.DecimalFormat;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Timer;
-import javax.swing.*;
-import javax.swing.event.*;
+import java.util.TimerTask;
+
+import javax.swing.FocusManager;
+import javax.swing.JPanel;
+import javax.swing.SwingUtilities;
+import javax.swing.event.MouseInputListener;
+
+import edu.asu.jmars.Main;
+import edu.asu.jmars.ToolManager;
+import edu.asu.jmars.layer.Layer.LView;
+import edu.asu.jmars.swing.TimeField;
+import edu.asu.jmars.util.Config;
+import edu.asu.jmars.util.DebugLog;
+import edu.asu.jmars.util.Util;
 
 public abstract class BaseGlass extends JPanel {
 	private static final DebugLog log = DebugLog.instance();
+	private static final DecimalFormat decF = new DecimalFormat("0.00");
+	
 	final LViewManager myVMan;
 	final LViewManager mainVMan;
-	private static final DecimalFormat decF = new DecimalFormat("0.00");
 
 	BaseGlass(LViewManager myVMan, LViewManager mainVMan) {
 		this.myVMan = myVMan;
 		this.mainVMan = mainVMan;
 		setOpaque(false);
 		setToolTipText("");
-
+		
+		// have main LView request focus when the user clicks on the base glass
+		addMouseListener(new MouseAdapter() {
+			public void mousePressed(MouseEvent e) {
+				LView view = getActiveView();
+				if (view != null) {
+					view.requestFocusInWindow();
+				}
+			}
+			public void mouseMoved(MouseEvent e) {
+				LView view = getActiveView();
+				if (view != null) {
+					view.requestFocusInWindow();
+				}
+			}
+		});
+		
 		MouseInputListener mouseHandler = createMouseHandler();
 		addMouseListener(mouseHandler);
 		addMouseMotionListener(mouseHandler);
+		if (mouseHandler instanceof MouseWheelListener) {
+			addMouseWheelListener((MouseWheelListener)mouseHandler);
+		}
 	}
-
+	
 	abstract MouseInputListener createMouseHandler();
-
+	
+	private LView getActiveView() {
+		LView view = myVMan.getActiveLView();
+		if (view == null) {
+			return null;
+		}
+		if (myVMan != mainVMan)
+			view = view.getChild();
+		return view;
+	}
+	
 	void proxy(MouseEvent e) {
+		// try to keep the active view focused
+		SwingUtilities.invokeLater(new Runnable() {
+			public void run() {
+				focusActiveView();
+			}
+		});
+		
 		//use duplicate so as not to mess with the original object
 		//- which is passed around.
 		MouseEvent e1 = new WrappedMouseEvent(e);
 
 		double worldX = myVMan.getProj().screen.toWorld(e1.getPoint()).getX();
-		int scale = 360 * myVMan.magnify;
+		int scale = 360 * myVMan.getZoomManager().getZoomPPD();
 		e1.translatePoint(-(int) Math.floor(worldX / 360) * scale, 0);
-		Layer.LView view = myVMan.getActiveLView();
-		if (myVMan != mainVMan)
-			view = view.getChild();
-		if (view != null && view.isVisible() && view.handleMouseEvent(e))
-			view.processEvent(e1);
+		LView view = getActiveView();
+		if (view != null && view.isVisible() && view.handleMouseEvent(e)) {
+			if (e instanceof MouseWheelEvent) {
+				view.processEvent(e);
+			} else {
+				view.processEvent(e1);
+			}
+		}
 	}
-
-	public static String formatCoord(Point2D coord, DecimalFormat f,
-			String xLabel, String yLabel) {
-		StringBuffer buff = new StringBuffer(20);
-
-		double x = coord.getX();
-		double xa = Math.abs(x);
-		if (x > 0)
-			buff.append("  ");
-		if (xa < 100)
-			buff.append("  ");
-		if (xa < 10)
-			buff.append("  ");
-		buff.append(f.format(x));
-		buff.append(xLabel);
-
-		double y = coord.getY();
-		double ya = Math.abs(y);
-		if (y > 0)
-			buff.append("  ");
-		if (ya < 100)
-			buff.append("  ");
-		if (ya < 10)
-			buff.append("  ");
-		buff.append(f.format(y));
-		buff.append(yLabel);
-
-		return buff.toString();
+	
+	/**
+	 * If an LView is the focus owner, this method will ensure that the selected
+	 * LView retains focus, so that e.g. when the user changes the LView
+	 * selection on the LManager and comes back to the map, their keyboard events
+	 * immediately start flowing toward the newly-activated LView.
+	 */
+	private void focusActiveView() {
+		LView active = LManager.getLManager().getActiveLView();
+		Component c = FocusManager.getCurrentKeyboardFocusManager().getFocusOwner();
+		if (c instanceof LView) {
+			LView focus = (LView)c;
+			if (focus.getParentLView() != null) {
+				focus = focus.getParentLView();
+			}
+			if (active != focus) {
+				active.requestFocusInWindow();
+			}
+		}
 	}
-
+	
 	String formatCoordTime(Point2D coord) {
 		StringBuffer buff = new StringBuffer(20);
 
@@ -256,21 +284,11 @@ public abstract class BaseGlass extends JPanel {
 	}
 	
 	void updateLocation(Point screen) {
-		Point2D world = myVMan.getProj().screen.toWorld(screen);
-		Point2D spatial = Main.PO.convWorldToSpatialFromProj(myVMan.getProj(),
-				world);
-
-		// JMARS west lon => USER east lon
-		spatial.setLocation(360 - spatial.getX(), spatial.getY());
-
-		world.setLocation(world.getX() + Main.PO.getServerOffsetX(), world
-				.getY());
-
-		Main.setStatus(formatCoord(spatial, decF, "E ", "N\t"));
+		Main.setStatusFromWorld(myVMan.getProj().screen.toWorld(screen));
 	}
 	
 	/** dx,dy go down and to the right, image coordinates go up and to the right */
-	public static void offsetViews(int w, int h, int dx, int dy, List views){
+	public static void offsetViews(int w, int h, int dx, int dy, List<Layer.LView> views){
 		Rectangle copyRect = new Rectangle();
 		copyRect.x = Math.max(0,-dx);
 		copyRect.y = Math.max(0,-dy);
@@ -298,8 +316,7 @@ public abstract class BaseGlass extends JPanel {
 			topBotRect.setBounds(0, 0, w, Math.abs(dy));
 		}
 		
-		for (Iterator it = views.iterator(); it.hasNext(); ){
-			Layer.LView view = (Layer.LView)it.next();
+		for (Layer.LView view: views) {
 			if (view != null && view.isVisible() && !view.clearOffScreenOnViewChange()) {
 				int nbuf = view.getBufferCount();
 				for(int i=0; i<nbuf; i++) {
@@ -318,19 +335,27 @@ public abstract class BaseGlass extends JPanel {
 	public String getToolTipText(MouseEvent event) {
 		LViewManager vman = myVMan;
 
-		// Look for active layer first
-		Layer.LView view = vman.getActiveLView();
+		if (ToolManager.getToolMode()==ToolManager.INVESTIGATE){
+			return "";
+		}
+		
+		else{
+			// Look for active layer first
+			LView view = vman.getActiveLView();
 
-		int i = -1;
-		while (true) {
-			if (view != null && view.isVisible() && !view.tooltipsDisabled()) {
-				String msg = view.getToolTipText(event);
-				if (msg != null && msg.length() > 0)
-					return msg;
+			int i = -1;
+			while (true) {
+				if (view != null && view.isVisible() && !view.tooltipsDisabled()) {
+					String msg = view.getToolTipText(event);
+					if (msg != null && msg.length() > 0)
+						return msg;
+				}
+				if (++i == vman.viewList.size())
+					return "";
+				view = (LView) vman.viewList.get(i);
 			}
-			if (++i == vman.viewList.size())
-				return null;
-			view = (Layer.LView) vman.viewList.get(i);
 		}
 	}
+
+	
 }

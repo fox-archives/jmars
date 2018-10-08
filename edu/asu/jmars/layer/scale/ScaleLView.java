@@ -1,23 +1,3 @@
-// Copyright 2008, Arizona Board of Regents
-// on behalf of Arizona State University
-// 
-// Prepared by the Mars Space Flight Facility, Arizona State University,
-// Tempe, AZ.
-// 
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-// 
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU General Public License for more details.
-// 
-// You should have received a copy of the GNU General Public License
-// along with this program.  If not, see <http://www.gnu.org/licenses/>.
-
-
 package edu.asu.jmars.layer.scale;
 
 import java.awt.BorderLayout;
@@ -37,16 +17,24 @@ import java.awt.event.MouseListener;
 import java.awt.event.MouseMotionListener;
 import java.awt.geom.Rectangle2D;
 import java.text.MessageFormat;
+import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
+import javax.swing.BorderFactory;
+import javax.swing.Box;
+import javax.swing.BoxLayout;
+import javax.swing.ButtonGroup;
 import javax.swing.JButton;
 import javax.swing.JColorChooser;
 import javax.swing.JComboBox;
 import javax.swing.JLabel;
 import javax.swing.JPanel;
+import javax.swing.JRadioButton;
 import javax.swing.JScrollPane;
 import javax.swing.JSlider;
+import javax.swing.ScrollPaneConstants;
+import javax.swing.UIManager;
 import javax.swing.border.EmptyBorder;
 import javax.swing.event.ChangeEvent;
 import javax.swing.event.ChangeListener;
@@ -55,10 +43,12 @@ import edu.asu.jmars.Main;
 import edu.asu.jmars.graphics.FontRenderer;
 import edu.asu.jmars.graphics.JFontChooser;
 import edu.asu.jmars.layer.FocusPanel;
+import edu.asu.jmars.layer.LManager;
 import edu.asu.jmars.layer.Layer;
 import edu.asu.jmars.layer.WrappedMouseEvent;
 import edu.asu.jmars.layer.Layer.LView;
 import edu.asu.jmars.util.HVector;
+import edu.asu.jmars.util.HighResExport;
 import edu.asu.jmars.util.Util;
 
 public class ScaleLView extends Layer.LView implements MouseMotionListener, MouseListener {
@@ -89,10 +79,14 @@ public class ScaleLView extends Layer.LView implements MouseMotionListener, Mous
 		FontRenderer fr = new FontRenderer(parms.labelFont, parms.fontOutlineColor, parms.fontFillColor);
 		fr.setLabel(label);
 		fr.setAntiAlias(true);
+		fr.setBorder(null);
 		return fr;
 	}
 	
 	public void paintComponent(Graphics g) {
+	    // If we're exporting, don't draw the scale bar on every tile
+		if (HighResExport.exporting) return;
+		
 		Graphics2D g2 = null;
 		try {
 			g2 = (Graphics2D) getOffScreenG2Direct(0);
@@ -102,27 +96,24 @@ public class ScaleLView extends Layer.LView implements MouseMotionListener, Mous
 			}
 			
 			int rulerWidth = (getWidth()-2)*parms.width/100;
-			int rulerHeight = Math.min(10, rulerWidth/10);
+			int rulerHeight = 10;
 			int tickHeight = rulerHeight * 3 / 2;
 			
 			Map<Double,String> units = (parms.isMetric ? siUnits : usUnits);
 			String scale = units.values().iterator().next();
-			int value = 1234;
+			double value = 0;
 			
 			for (int pass = 0; pass < 2; pass++) {
 				// each pass through, we calculate a number of positional
 				// arguments based on the rulerWidth, scale, and value to
 				// display
-				FontRenderer fr = getFontBox(MessageFormat.format("{0,number,#} {1}", value, scale));
+				FontRenderer fr = getFontBox(MessageFormat.format("{0,number,#.#} {1}", value, scale));
 				
 				// box to draw in will be at least as wide as it takes to draw our test label,
 				// and as tall as the font box, the ruler, and some space between them
-				Dimension font = fr.getSize();
+				Dimension font = fr.getPreferredSize();
 				Dimension ruler = new Dimension(rulerWidth, Math.max(rulerHeight, tickHeight));
-				int separatorHeight = ruler.height/2;
-				Dimension box = new Dimension(
-					Math.max(font.width, ruler.width),
-					ruler.height + separatorHeight + font.height);
+				Dimension box = new Dimension(ruler.width, ruler.height + font.height);
 				
 				// confine the offset to keep the corner closest to the edge within the screen
 				int constraintX = getWidth()-box.width;
@@ -164,21 +155,31 @@ public class ScaleLView extends Layer.LView implements MouseMotionListener, Mous
 					for (double s: units.keySet()) {
 						scale = units.get(s);
 						double base = km * s;
-						double trim = Math.pow(10, Math.floor(Math.log(base)/Math.log(10)) - 1);
-						int smaller = (int)(Math.floor(base/trim) * trim);
-						int larger = (int)(Math.ceil(base/trim) * trim);
-						double largeWidth = larger / base * lastBox.width;
+						if (base < 1) continue;
+						int digits = (int)Math.floor(Math.log(base)/Math.log(10));
+						double[] breaks = {1.0, 2.5, 5.0, 7.5, 10.0};
+						int idx = Arrays.binarySearch(breaks, base * Math.pow(10, -digits));
+						if (idx < 0) {
+							idx = -idx - 1;
+						}
+						double base10value = Math.pow(10, digits);
+						double smallest = base10value * breaks[Math.max(0,idx-1)];
+						double nearest = base10value * breaks[Math.min(breaks.length-1,idx)];
+						if (Math.abs(nearest-base) > Math.abs(smallest-base)) {
+							nearest = smallest;
+						}
+						double largeWidth = nearest / base * lastBox.width;
 						if (parms.offsetX < 0) {
 							if (lastBox.getMaxX() - largeWidth < 0) {
-								value = smaller;
+								value = smallest;
 							} else {
-								value = larger;
+								value = nearest;
 							}
 						} else {
 							if (lastBox.getMinX() + largeWidth >= getWidth()-1) {
-								value = smaller;
+								value = smallest;
 							} else {
-								value = larger;
+								value = nearest;
 							}
 						}
 						rulerWidth = (int)Math.ceil(value / base * lastBox.width);
@@ -204,7 +205,32 @@ public class ScaleLView extends Layer.LView implements MouseMotionListener, Mous
 					
 					if (Util.between(-90, getProj().screen.toWorld(getWidth()/2, getHeight()/2).getY(), 90)) {
 						// draw font
-						g2.translate(left, bottom - font.height);
+						int x, y;
+						int labelWidth = fr.getPreferredSize().width;
+						switch (parms.h_alignment) {
+						case Center:
+							x = (left+right)/2-labelWidth/2;
+							break;
+						case Right:
+							x = right - labelWidth;
+							break;
+						case Left:
+						default:
+							x = left;
+							break;
+						}
+						switch (parms.v_alignment) {
+						case Above:
+							y = top - font.height;
+							break;
+						case Below:
+							y = bottom - font.height;
+							break;
+						default:
+							y = top - font.height;
+							break;
+						}
+						g2.translate(x, y);
 						fr.paintComponent(g2);
 					} else {
 						clearOffScreen();
@@ -229,14 +255,10 @@ public class ScaleLView extends Layer.LView implements MouseMotionListener, Mous
 	}
 
 	public FocusPanel getFocusPanel() {
-		if (focusPanel == null)
-			focusPanel = new DelayedFocusPanel() {
-			public JPanel createFocusPanel() {
-				JPanel spacing = new JPanel(new BorderLayout());
-				spacing.add(new JScrollPane(new ScalePanel()), BorderLayout.CENTER);
-				return spacing;
+		if (focusPanel == null){
+			focusPanel = new ScalePanel(this);
+			return focusPanel;
 			}
-		};
 		return focusPanel;
 	}
 	
@@ -258,7 +280,7 @@ public class ScaleLView extends Layer.LView implements MouseMotionListener, Mous
 		}
 	}
 	
-	private class ScalePanel extends JPanel implements ActionListener, ChangeListener {
+	private class ScalePanel extends FocusPanel implements ActionListener, ChangeListener {
 		private static final long serialVersionUID = 3142320762007483904L;
 		JButton modFont;
 		JButton barColorButton;
@@ -274,70 +296,183 @@ public class ScaleLView extends Layer.LView implements MouseMotionListener, Mous
 			return new GridBagConstraints(isData?1:0, row, 1,1, isData?1:0, 0, GridBagConstraints.WEST, isData?GridBagConstraints.HORIZONTAL:GridBagConstraints.NONE,in,px,py);
 		}
 		
-		public ScalePanel() {
-			setLayout(new GridBagLayout());
-			setBorder(new EmptyBorder(10, 5, 5, 5));
+		public ScalePanel(ScaleLView slv) {
+			super(slv, true);		
 			
+			
+	// The Scalebar Adjustments tab on the focus panel consists of two titlebordered panels,
+	// the first containing the label options, the second containing the ruler options
+			
+	// Label options panel		
+			JPanel labelOptions = new JPanel();
+			labelOptions.setBorder(BorderFactory.createTitledBorder("Label Options"));
+			labelOptions.setLayout(new GridBagLayout());
+		
+			int row = 0;
+		//Add space at the top of options panel	
+			labelOptions.add(Box.createGlue(), gbc(row, false));
+			labelOptions.add(Box.createGlue(), gbc(row++, true));
+		//Add units label and dropdown menu to options panel	
 			units = new JComboBox(UnitStrings.values());
 			units.addActionListener(this);
-			add(new JLabel("Units"), gbc(0, false));
-			add(units, gbc(0, true));
+			units.setSelectedItem(parms.isMetric ? UnitStrings.Metric : UnitStrings.Imperial);
+			labelOptions.add(new JLabel("Label Units"), gbc(row, false));
+			labelOptions.add(units, gbc(row++, true));		
+			//Create font button and example and place on font panel	
+			if (parms.labelFont == null) {
+				parms.labelFont = getFont().deriveFont(100f);
+			}
+			frSample = new FontRenderer(parms.labelFont, parms.fontOutlineColor, parms.fontFillColor);
+			frSample.setLabel("1234 km/mi");
+			frSample.setAntiAlias(true);
+				int pad = 4;
+				Insets in = new Insets(pad,pad,pad,pad);
 			
 			modFont = new JButton("Choose Font...");
 			modFont.addActionListener(this);
-			add(modFont, gbc(1, false));
-			frSample = new FontRenderer(parms.labelFont, parms.fontOutlineColor, parms.fontFillColor);
-			frSample.setLabel("1 2 3 4 km mi");
-			frSample.setAntiAlias(true);
-			frSample.setFont(getFont().deriveFont(100f));
-			add(frSample, gbc(1, true));
+			JPanel font = new JPanel(new BorderLayout(4,0));
+			font.add(modFont, BorderLayout.WEST);
+			font.add(frSample, BorderLayout.CENTER);
+		//Add font label and font panel onto options panel	
+			labelOptions.add(new JLabel("Label Font"), gbc(row, false));
+			labelOptions.add(font, gbc(row++, true));
+		//Add alignment label to options panel
+			labelOptions.add(new JLabel("Label Alignment"), gbc(row, false));
+			//Create vertical alignment radio dial group
+			ButtonGroup alignGroup_v= new ButtonGroup();
+			Box alighnBox_v = Box.createHorizontalBox();
+			ScaleParameters.VerticalAlignment[] alignTypes_v = ScaleParameters.VerticalAlignment.values();
+			for (int j = 0; j < alignTypes_v.length; j++) {
+				final JRadioButton choice1 = new JRadioButton(alignTypes_v[j].label);
+				alignGroup_v.add(choice1);
+				if (j > 0) {
+					alighnBox_v.add(Box.createHorizontalStrut(2));
+				}
+				alighnBox_v.add(choice1);
+				final ScaleParameters.VerticalAlignment b = alignTypes_v[j];
+				if (b.equals(parms.v_alignment)) {
+					choice1.setSelected(true);
+				}
+				choice1.addActionListener(new ActionListener() {
+					public void actionPerformed(ActionEvent e) {
+						// ignore disable events caused by the button group
+						if (choice1.isSelected()) {
+							parms.v_alignment = b;
+							ScaleLView.this.repaint();
+						}
+					}
+				});
+			}
+		//Add vertical alignment radio dial group to options panel	
+			labelOptions.add(alighnBox_v, gbc(row++, true));	
+			//Create horizontal alignment radio dial group	
+			ButtonGroup alignGroup_h = new ButtonGroup();
+			Box alignBox_h = Box.createHorizontalBox();
+			ScaleParameters.HorizontalAlignment[] alignTypes_h = ScaleParameters.HorizontalAlignment.values();
+			for (int i = 0; i < alignTypes_h.length; i++) {
+				final JRadioButton choice = new JRadioButton(alignTypes_h[i].label);
+				alignGroup_h.add(choice);
+				if (i > 0) {
+					alignBox_h.add(Box.createHorizontalStrut(2));
+				}
+				alignBox_h.add(choice);
+				final ScaleParameters.HorizontalAlignment a = alignTypes_h[i];
+				if (a.equals(parms.h_alignment)) {
+					choice.setSelected(true);
+				}
+				choice.addActionListener(new ActionListener() {
+					public void actionPerformed(ActionEvent e) {
+						// ignore disable events caused by the button group
+						if (choice.isSelected()) {
+							parms.h_alignment = a;
+							ScaleLView.this.repaint();
+						}
+					}
+				});
+			}
+		//Add horizontal alignment radio dial group to options panel	
+			labelOptions.add(alignBox_h, gbc(row++, true));
 			
-			add(new JLabel("Tick Count"), gbc(2, false));
-			tickNumberSlider = new JSlider(0, 10, parms.numberOfTicks);
-			tickNumberSlider.setSnapToTicks(true);
-			tickNumberSlider.setPaintLabels(true);
-			tickNumberSlider.setMajorTickSpacing(1);
-			tickNumberSlider.setPaintTicks(true);
-			tickNumberSlider.addChangeListener(this);
-			add(tickNumberSlider, gbc(2, true));
 			
-			add(new JLabel("Width %"), gbc(3, false));
-			widthSlider = new JSlider(10, 100, 30);
+
+	// Ruler options panel		
+			JPanel rulerOptions = new JPanel();
+			rulerOptions.setLayout(new GridBagLayout());
+			rulerOptions.setBorder(BorderFactory.createTitledBorder("Ruler Options"));
+			
+			int row2 = 0;
+		//Add space at the head of panel	
+			rulerOptions.add(Box.createGlue(), gbc(row2, false));
+			rulerOptions.add(Box.createGlue(), gbc(row2++, true));
+		//Add the ruler width title and slider	
+			rulerOptions.add(new JLabel("Ruler Length %"), gbc(row2, false));
+			widthSlider = new JSlider(0, 100, parms.width);
 			widthSlider.setPaintTicks(true);
 			widthSlider.setPaintLabels(true);
-			widthSlider.setMajorTickSpacing(10);
+			widthSlider.setMajorTickSpacing(25);
 			widthSlider.setPaintTicks(true);
 			widthSlider.addChangeListener(this);
-			add(widthSlider, gbc(3, true));
-			
-			add(new JLabel("Tick Color"), gbc(4, false));
-			tickColorButton = new JButton(" ");
-			tickColorButton.setBackground(parms.tickColor);
-			tickColorButton.addActionListener(this);
-			add(tickColorButton, gbc(4,true));
-			
-			add(new JLabel("Bar Color"), gbc(5, false));
+			rulerOptions.add(widthSlider, gbc(row2++, true));
+		//Add the ruler color title and options box	
+			rulerOptions.add(new JLabel("Ruler Color"), gbc(row2, false));
 			barColorButton = new JButton(" ");
 			barColorButton.setBackground(parms.barColor);
 			barColorButton.addActionListener(this);
-			add(barColorButton, gbc(5, true));
-			
-			GridBagConstraints endCap = gbc(6, true);
+			rulerOptions.add(barColorButton, gbc(row2++, true));
+		//Add the tick count title and slider	
+			rulerOptions.add(new JLabel("Tick Count"), gbc(row2, false));
+			if(parms!=null && parms.numberOfTicks>25){
+				parms.numberOfTicks=25;
+			}
+			tickNumberSlider = new JSlider(0, 25, parms.numberOfTicks);
+			tickNumberSlider.setPaintLabels(true);
+			tickNumberSlider.setMajorTickSpacing(5);
+			tickNumberSlider.setPaintTicks(true);
+			tickNumberSlider.addChangeListener(this);
+			rulerOptions.add(tickNumberSlider, gbc(row2++, true));
+		//Add the tick color title and slider	
+			rulerOptions.add(new JLabel("Tick Color"), gbc(row2, false));
+			tickColorButton = new JButton(" ");
+			tickColorButton.setBackground(parms.tickColor);
+			tickColorButton.addActionListener(this);
+			rulerOptions.add(tickColorButton, gbc(row2++,true));
+		//Add bottom buffer	
+			GridBagConstraints endCap = gbc(row2, true);
 			endCap.weighty = 1;
-			add(new JLabel(""), endCap);
+			rulerOptions.add(new JLabel(""), endCap);
+			
+			
+	// Put both panels into a body panel to set background color and spacing	
+			JPanel body = new JPanel();
+			body.setLayout(new BoxLayout(body, BoxLayout.PAGE_AXIS));
+			body.setBorder(new EmptyBorder(10, 5, 5, 5));
+			body.setBackground(UIManager.getColor("TabbedPane.selected"));
+			body.add(labelOptions);
+			body.add(Box.createRigidArea(new Dimension(0, 15)));
+			body.add(rulerOptions);
+		//Put body panel inside a scrollPane	
+			JPanel sbOptions = new JPanel(new BorderLayout());
+			sbOptions.add(body, BorderLayout.NORTH);
+			sbOptions.setBackground(UIManager.getColor("TabbedPane.selected"));
+			JScrollPane sbPane = new JScrollPane(sbOptions, ScrollPaneConstants.VERTICAL_SCROLLBAR_AS_NEEDED, 
+					ScrollPaneConstants.HORIZONTAL_SCROLLBAR_AS_NEEDED);
+	//Add the scalebar scrollpane as a focus panel tab		
+			addTab("Scalebar Options", sbPane);
+			
+	//TODO: write the options tab for north arrow....when implemented
+			
 		}
 
 		public void actionPerformed(ActionEvent e) {
 			if (e.getSource() == modFont) {
-				JFontChooser jfc = new JFontChooser(parms.labelFont,
-						parms.fontOutlineColor, parms.fontFillColor);
-				if (null != jfc.showDialog()) {
+				JFontChooser jfc = new JFontChooser(parms.labelFont, parms.fontOutlineColor, parms.fontFillColor);
+				if (null != jfc.showDialog(LManager.getDisplayFrame())) {
 					parms.labelFont = jfc.selectedFont;
 					parms.fontFillColor = jfc.fontColor;
 					parms.fontOutlineColor = jfc.outlineColor;
 					frSample.setOutlineColor(parms.fontOutlineColor);
-					frSample.setFontColor(parms.fontFillColor);
-					frSample.setLabelFont(parms.labelFont);
+					frSample.setForeground(parms.fontFillColor);
+					frSample.setFont(parms.labelFont);
 					ScaleLView.this.repaint();
 				}
 			} else if (e.getSource() == tickColorButton) {
@@ -442,4 +577,13 @@ public class ScaleLView extends Layer.LView implements MouseMotionListener, Mous
 	public void mouseExited(MouseEvent e) {
 		// not used
 	}
+	
+//The following two methods are used to query for the
+// info panel fields (description, citation, etc)	
+ 	public String getLayerKey(){
+ 		return "Map Scalebar";
+ 	}
+ 	public String getLayerType(){
+ 		return "scalebar";
+ 	}
 }

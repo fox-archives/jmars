@@ -1,23 +1,3 @@
-// Copyright 2008, Arizona Board of Regents
-// on behalf of Arizona State University
-// 
-// Prepared by the Mars Space Flight Facility, Arizona State University,
-// Tempe, AZ.
-// 
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-// 
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU General Public License for more details.
-// 
-// You should have received a copy of the GNU General Public License
-// along with this program.  If not, see <http://www.gnu.org/licenses/>.
-
-
 package edu.asu.jmars.samples.layer.threshold;
 
 
@@ -26,7 +6,9 @@ import java.awt.geom.Rectangle2D;
 import java.awt.image.BufferedImage;
 import java.awt.image.Raster;
 import java.awt.image.WritableRaster;
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.List;
 
 import javax.swing.SwingUtilities;
 
@@ -35,6 +17,7 @@ import edu.asu.jmars.layer.map2.MapAttrReceiver;
 import edu.asu.jmars.layer.map2.MapRequest;
 import edu.asu.jmars.layer.map2.MapServer;
 import edu.asu.jmars.layer.map2.MapSource;
+import edu.asu.jmars.layer.map2.MapSourceListener;
 import edu.asu.jmars.layer.map2.NonRetryableException;
 import edu.asu.jmars.layer.map2.RetryableException;
 
@@ -47,6 +30,7 @@ class StaticImageMapSource implements MapSource {
 	NullMapServer mapServer;
 	String name;
 	double[] ignoreValues;
+	private transient List<MapSourceListener> listeners;
 	
 	public StaticImageMapSource(BufferedImage image, String name){
 		this.image = image;
@@ -140,14 +124,35 @@ class StaticImageMapSource implements MapSource {
 		return name;
 	}
 
+	public String getUnits() {
+		return name;
+	}
+	
 	public boolean hasNumericKeyword() {
 		return image.getType() == BufferedImage.TYPE_CUSTOM;
+	}
+
+	public boolean hasElevationKeyword() {
+//		return image.getType() == BufferedImage.TYPE_CUSTOM;
+		return false;
+	}
+	
+	public String getOwner() {
+		return null;
 	}
 
 	public boolean isMovable() {
 		return true;
 	}
 
+	/**
+	 * Sets the ignore value to a new double array.
+	 * @param newIgnoreValue a double array.
+	 */
+	public void setIgnoreValue(double[] newIgnoreValue){
+		this.ignoreValues = newIgnoreValue;
+	}
+	
 	public double[] getIgnoreValue() {
 		return ignoreValues;
 	}
@@ -164,8 +169,30 @@ class StaticImageMapSource implements MapSource {
 		return new Rectangle2D.Double(0,-90,360,180);
 	}
 	
+	/**
+	 * Throws a runtime exception if called.  This is just here to meet the MapSource interface requirement.
+	 * @param newMaxPPD
+	 */
+	public void setMaxPPD(double newMaxPPD){
+		throw new RuntimeException("setMaxPPD can not be called on a StaticImageMapSource.");
+	}
+	
 	public double getMaxPPD() {
 		return Math.max(image.getWidth() / 360d, image.getHeight() / 180d);
+	}
+	
+	public void addListener(MapSourceListener l) {
+		listeners.add(l);
+	}
+	
+	public void removeListener(MapSourceListener l) {
+		listeners.remove(l);
+	}
+	
+	private void changed() {
+		for (MapSourceListener l: new ArrayList<MapSourceListener>(listeners)) {
+			l.changed(this);
+		}
 	}
 }
 

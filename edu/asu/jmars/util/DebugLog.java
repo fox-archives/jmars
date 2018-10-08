@@ -1,25 +1,8 @@
-// Copyright 2008, Arizona Board of Regents
-// on behalf of Arizona State University
-// 
-// Prepared by the Mars Space Flight Facility, Arizona State University,
-// Tempe, AZ.
-// 
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-// 
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU General Public License for more details.
-// 
-// You should have received a copy of the GNU General Public License
-// along with this program.  If not, see <http://www.gnu.org/licenses/>.
-
-
 package edu.asu.jmars.util;
 
+import java.sql.Timestamp;
+import java.text.DateFormat;
+import java.text.SimpleDateFormat;
 import java.util.*;
 import java.io.*;
 
@@ -418,6 +401,8 @@ public class DebugLog
 	// Inner class used as a filter to output in the format we want.
 	private class DebugStream extends OutputStream
 	 {
+		final DateFormat dateFormatter = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS", Locale.US);
+
 		public void close()
 		 {
 			pout.close();
@@ -449,6 +434,9 @@ public class DebugLog
 				// If we're on a fresh line, output the caller
 				if(newLine)
 				 {
+					String timeStamp = dateFormatter.format(new Date());
+					pout.print("" + color + timeStamp + " "+ RESET);
+					
 					if(showThreads)
 						pout.print("" + color + THREAD + '<' +
 								   Thread.currentThread().getName() +
@@ -982,60 +970,65 @@ public class DebugLog
 	 ** different versions of each function to handle different
 	 ** argument types.
 	 ***********************************************************/
-
+	
+	//prepend timestamp to messages
+	private void prependTS() {
+//		realPS.print(new Timestamp(new Date().getTime()).toString()+": ");
+	}
+	
 	/********** CONDITIONAL PRINT ***********/
 
-	public void print(boolean what) { setMode(1, NONE); if(getActive()) { realPS.print(what); uncolor(); } }
-	public void print(   char what) { setMode(1, NONE); if(getActive()) { realPS.print(what); uncolor(); } }
-	public void print( char[] what) { setMode(1, NONE); if(getActive()) { realPS.print(what); uncolor(); } }
-	public void print( double what) { setMode(1, NONE); if(getActive()) { realPS.print(what); uncolor(); } }
-	public void print(  float what) { setMode(1, NONE); if(getActive()) { realPS.print(what); uncolor(); } }
-	public void print(    int what) { setMode(1, NONE); if(getActive()) { realPS.print(what); uncolor(); } }
-	public void print(   long what) { setMode(1, NONE); if(getActive()) { realPS.print(what); uncolor(); } }
-	public void print( Object what) { setMode(1, NONE); if(getActive()) { realPS.print(what); uncolor(); } }
-	public void print( String what) { setMode(1, NONE); if(getActive()) { realPS.print(what); uncolor(); } }
-	public void print(Throwable  e) { setMode(1, EXCEPT); if(getActive()) { printException(e); uncolor(); } }
+	public void print(boolean what) { setMode(1, NONE); if(getActive()) { prependTS(); realPS.print(what); uncolor(); } }
+	public void print(   char what) { setMode(1, NONE); if(getActive()) { prependTS(); realPS.print(what); uncolor(); } }
+	public void print( char[] what) { setMode(1, NONE); if(getActive()) { prependTS(); realPS.print(what); uncolor(); } }
+	public void print( double what) { setMode(1, NONE); if(getActive()) { prependTS(); realPS.print(what); uncolor(); } }
+	public void print(  float what) { setMode(1, NONE); if(getActive()) { prependTS(); realPS.print(what); uncolor(); } }
+	public void print(    int what) { setMode(1, NONE); if(getActive()) { prependTS(); realPS.print(what); uncolor(); } }
+	public void print(   long what) { setMode(1, NONE); if(getActive()) { prependTS(); realPS.print(what); uncolor(); } }
+	public void print( Object what) { setMode(1, NONE); if(getActive()) { prependTS(); realPS.print(what); uncolor(); } }
+	public void print( String what) { setMode(1, NONE); if(getActive()) { prependTS(); realPS.print(what); uncolor(); } }
+	public void print(Throwable  e) { setMode(1, EXCEPT); if(getActive()) { prependTS(); printException(e); uncolor(); } }
 
 	/********** CONDITIONAL PRINT WITH ENDLINE ***********/
 
-	public void println(            ) { setMode(1, NONE); if(getActive()) { realPS.println(""); uncolor(); } }
-	public void println(boolean what) { setMode(1, NONE); if(getActive()) { realPS.println(what); uncolor(); } }
-	public void println(   char what) { setMode(1, NONE); if(getActive()) { realPS.println(what); uncolor(); } }
-	public void println( char[] what) { setMode(1, NONE); if(getActive()) { realPS.println(what); uncolor(); } }
-	public void println( double what) { setMode(1, NONE); if(getActive()) { realPS.println(what); uncolor(); } }
-	public void println(  float what) { setMode(1, NONE); if(getActive()) { realPS.println(what); uncolor(); } }
-	public void println(    int what) { setMode(1, NONE); if(getActive()) { realPS.println(what); uncolor(); } }
-	public void println(   long what) { setMode(1, NONE); if(getActive()) { realPS.println(what); uncolor(); } }
-	public void println( Object what) { setMode(1, NONE); if(getActive()) { realPS.println(what); uncolor(); } }
-	public void println( String what) { setMode(1, NONE); if(getActive()) { realPS.println(what); uncolor(); } }
-	public void println(Throwable  e) { setMode(1, EXCEPT); if(getActive()) { printException(e); uncolor(); } }
+	public void println(            ) { setMode(1, NONE); if(getActive()) { prependTS(); realPS.println(""); uncolor(); } }
+	public void println(boolean what) { setMode(1, NONE); if(getActive()) { prependTS(); realPS.println(what); uncolor(); } }
+	public void println(   char what) { setMode(1, NONE); if(getActive()) { prependTS(); realPS.println(what); uncolor(); } }
+	public void println( char[] what) { setMode(1, NONE); if(getActive()) { prependTS(); realPS.println(what); uncolor(); } }
+	public void println( double what) { setMode(1, NONE); if(getActive()) { prependTS(); realPS.println(what); uncolor(); } }
+	public void println(  float what) { setMode(1, NONE); if(getActive()) { prependTS(); realPS.println(what); uncolor(); } }
+	public void println(    int what) { setMode(1, NONE); if(getActive()) { prependTS(); realPS.println(what); uncolor(); } }
+	public void println(   long what) { setMode(1, NONE); if(getActive()) { prependTS(); realPS.println(what); uncolor(); } }
+	public void println( Object what) { setMode(1, NONE); if(getActive()) { prependTS(); realPS.println(what); uncolor(); } }
+	public void println( String what) { setMode(1, NONE); if(getActive()) { prependTS(); realPS.println(what); uncolor(); } }
+	public void println(Throwable  e) { setMode(1, EXCEPT); if(getActive()) { prependTS(); printException(e); uncolor(); } }
 
 	/********** UNCONDITIONAL PRINT ***********/
 
-	public void aprint(boolean what) { setMode(1, APRINT); realPS.print(what); uncolor(); }
-	public void aprint(   char what) { setMode(1, APRINT); realPS.print(what); uncolor(); }
-	public void aprint( char[] what) { setMode(1, APRINT); realPS.print(what); uncolor(); }
-	public void aprint( double what) { setMode(1, APRINT); realPS.print(what); uncolor(); }
-	public void aprint(  float what) { setMode(1, APRINT); realPS.print(what); uncolor(); }
-	public void aprint(    int what) { setMode(1, APRINT); realPS.print(what); uncolor(); }
-	public void aprint(   long what) { setMode(1, APRINT); realPS.print(what); uncolor(); }
-	public void aprint( Object what) { setMode(1, APRINT); realPS.print(what); uncolor(); }
-	public void aprint( String what) { setMode(1, APRINT); realPS.print(what); uncolor(); }
-	public void aprint(Throwable e ) { setMode(1, AEXCEPT); printException(e); uncolor(); }
+	public void aprint(boolean what) { setMode(1, APRINT); prependTS(); realPS.print(what); uncolor(); }
+	public void aprint(   char what) { setMode(1, APRINT); prependTS();realPS.print(what); uncolor(); }
+	public void aprint( char[] what) { setMode(1, APRINT); prependTS(); realPS.print(what); uncolor(); }
+	public void aprint( double what) { setMode(1, APRINT); prependTS(); realPS.print(what); uncolor(); }
+	public void aprint(  float what) { setMode(1, APRINT); prependTS(); realPS.print(what); uncolor(); }
+	public void aprint(    int what) { setMode(1, APRINT); prependTS(); realPS.print(what); uncolor(); }
+	public void aprint(   long what) { setMode(1, APRINT); prependTS(); realPS.print(what); uncolor(); }
+	public void aprint( Object what) { setMode(1, APRINT); prependTS(); realPS.print(what); uncolor(); }
+	public void aprint( String what) { setMode(1, APRINT); prependTS(); realPS.print(what); uncolor(); }
+	public void aprint(Throwable e ) { setMode(1, AEXCEPT); prependTS(); printException(e); uncolor(); }
 
 	/********** UNCONDITIONAL PRINT WITH ENDLINE ***********/
 
-	public void aprintln(            ) { setMode(1, APRINT); realPS.println(""); uncolor(); }
-	public void aprintln(boolean what) { setMode(1, APRINT); realPS.println(what); uncolor(); }
-	public void aprintln(   char what) { setMode(1, APRINT); realPS.println(what); uncolor(); }
-	public void aprintln( char[] what) { setMode(1, APRINT); realPS.println(what); uncolor(); }
-	public void aprintln( double what) { setMode(1, APRINT); realPS.println(what); uncolor(); }
-	public void aprintln(  float what) { setMode(1, APRINT); realPS.println(what); uncolor(); }
-	public void aprintln(    int what) { setMode(1, APRINT); realPS.println(what); uncolor(); }
-	public void aprintln(   long what) { setMode(1, APRINT); realPS.println(what); uncolor(); }
-	public void aprintln( Object what) { setMode(1, APRINT); realPS.println(what); uncolor(); }
-	public void aprintln( String what) { setMode(1, APRINT); realPS.println(what); uncolor(); }
-	public void aprintln(Throwable e ) { setMode(1, AEXCEPT); printException(e); uncolor(); }
+	public void aprintln(            ) { setMode(1, APRINT); prependTS(); realPS.println(""); uncolor(); }
+	public void aprintln(boolean what) { setMode(1, APRINT); prependTS(); realPS.println(what); uncolor(); }
+	public void aprintln(   char what) { setMode(1, APRINT); prependTS(); realPS.println(what); uncolor(); }
+	public void aprintln( char[] what) { setMode(1, APRINT); prependTS(); realPS.println(what); uncolor(); }
+	public void aprintln( double what) { setMode(1, APRINT); prependTS(); realPS.println(what); uncolor(); }
+	public void aprintln(  float what) { setMode(1, APRINT); prependTS(); realPS.println(what); uncolor(); }
+	public void aprintln(    int what) { setMode(1, APRINT); prependTS(); realPS.println(what); uncolor(); }
+	public void aprintln(   long what) { setMode(1, APRINT); prependTS(); realPS.println(what); uncolor(); }
+	public void aprintln( Object what) { setMode(1, APRINT); prependTS(); realPS.println(what); uncolor(); }
+	public void aprintln( String what) { setMode(1, APRINT); prependTS(); realPS.println(what); uncolor(); }
+	public void aprintln(Throwable e ) { setMode(1, AEXCEPT); prependTS(); printException(e); uncolor(); }
 
 	/**
 	 ** Optimized version of DebugLog for which conditional prints

@@ -1,36 +1,11 @@
-// Copyright 2008, Arizona Board of Regents
-// on behalf of Arizona State University
-// 
-// Prepared by the Mars Space Flight Facility, Arizona State University,
-// Tempe, AZ.
-// 
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-// 
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU General Public License for more details.
-// 
-// You should have received a copy of the GNU General Public License
-// along with this program.  If not, see <http://www.gnu.org/licenses/>.
-
-
 package edu.asu.jmars.layer.map2.stages;
 
 
-import java.awt.color.ColorSpace;
 import java.awt.geom.Area;
 import java.awt.geom.Rectangle2D;
-import java.awt.image.BandedSampleModel;
 import java.awt.image.BufferedImage;
-import java.awt.image.ColorModel;
-import java.awt.image.ComponentColorModel;
 import java.awt.image.DataBuffer;
 import java.awt.image.Raster;
-import java.awt.image.SampleModel;
 import java.awt.image.WritableRaster;
 import java.io.IOException;
 import java.io.ObjectInputStream;
@@ -76,8 +51,7 @@ public class GrayscaleStage extends AbstractStage implements Cloneable, Serializ
 		
 		int w = image.getWidth();
 		int h = image.getHeight();
-		GrayscaleStageSettings settings = (GrayscaleStageSettings)getSettings();
-		double ignore = settings.getIgnore();
+		double ignore = getIgnore(data);
 		boolean outputAlpha = !Double.isNaN(ignore) || image.getColorModel().hasAlpha();
 		
 		double[] minMax = getMinMax(data, changedArea);
@@ -87,12 +61,7 @@ public class GrayscaleStage extends AbstractStage implements Cloneable, Serializ
 		log.println("GrayscaleStage: "+minValue+","+maxValue);
 		
 		// create output image
-		ColorSpace cs = Util.getLinearGrayColorSpace();
-		int trans = outputAlpha ? ColorModel.TRANSLUCENT: ColorModel.OPAQUE;
-		ColorModel destCM = new ComponentColorModel(cs, outputAlpha, false, trans, DataBuffer.TYPE_BYTE);
-		SampleModel outModel = new BandedSampleModel(DataBuffer.TYPE_BYTE, w, h, destCM.getNumComponents());
-		WritableRaster outRaster = Raster.createWritableRaster(outModel, null);
-		BufferedImage outImage = new BufferedImage(destCM, outRaster, destCM.isAlphaPremultiplied(), null);
+		BufferedImage outImage = Util.createGrayscaleImage(w, h, outputAlpha);
 		
 		// rescale the data band
 		double diff = maxValue - minValue;
@@ -121,7 +90,7 @@ public class GrayscaleStage extends AbstractStage implements Cloneable, Serializ
 			}
 		}
 		
-		return data.getDeepCopyShell(outImage);
+		return data.getDeepCopyShell(outImage, null);
 	}
 	
 	/**
@@ -247,7 +216,7 @@ public class GrayscaleStage extends AbstractStage implements Cloneable, Serializ
 		double min, max, oldMin, oldMax;
 		synchronized(s) {
 			auto = s.getAutoMinMax();
-			ignore = s.getIgnore();
+			ignore = getIgnore(data);
 			oldMin = min = s.getMinValue();
 			oldMax = max = s.getMaxValue();
 		}
@@ -325,6 +294,12 @@ public class GrayscaleStage extends AbstractStage implements Cloneable, Serializ
 	public Object clone() throws CloneNotSupportedException {
 		GrayscaleStage stage = (GrayscaleStage)super.clone();
 		return stage;
+	}
+	
+	/** @return the ignore value for the first band from the given MapData object */
+	private double getIgnore(MapData data) {
+		double[] ignoreArray = data.getNullPixel();
+		return ignoreArray == null ? Double.NaN : ignoreArray[0];
 	}
 	
 	private void readObject(ObjectInputStream in) throws IOException, ClassNotFoundException {

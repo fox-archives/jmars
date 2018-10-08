@@ -1,23 +1,3 @@
-// Copyright 2008, Arizona Board of Regents
-// on behalf of Arizona State University
-// 
-// Prepared by the Mars Space Flight Facility, Arizona State University,
-// Tempe, AZ.
-// 
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-// 
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU General Public License for more details.
-// 
-// You should have received a copy of the GNU General Public License
-// along with this program.  If not, see <http://www.gnu.org/licenses/>.
-
-
 /**
  * A class for a button that defines the color of another object.  
  * The button is displayed in an initial color.  Clicking on it 
@@ -31,47 +11,78 @@ package edu.asu.jmars.swing;
 
 // generic java imports.
 import java.awt.Color;
+import java.awt.Graphics;
 import java.awt.event.ActionEvent;
+import java.awt.event.ActionListener;
 
-import javax.swing.AbstractAction;
 import javax.swing.JButton;
 import javax.swing.JColorChooser;
 
-public class ColorButton 
-extends JButton
-{
+import edu.asu.jmars.util.stable.ColorCellEditor;
+
+public class ColorButton extends JButton {
 	private Color  color;
+	private final boolean enableAlpha;
 	
-	public ColorButton( String l, Color c){
+	public ColorButton(String l, Color c) {
+		this(l, c, false);
+	}
+	
+	public ColorButton(String l, Color c, boolean enableAlpha) {
 		super(l);
-		setColor( c);
+		this.enableAlpha = enableAlpha;
+		setColor(c);
 		setFocusPainted( false);
-		addActionListener( new AbstractAction() {
-			public void actionPerformed ( ActionEvent e) {
-				final Color newColor = JColorChooser.showDialog (ColorButton.this, getText(), color);
+		addActionListener(buttonPressed);
+		setOpaque(true);
+	}
+	
+	private final ActionListener buttonPressed = new ActionListener() {
+		public void actionPerformed(ActionEvent e) {
+			if (enableAlpha) {
+				ColorCellEditor ce = new ColorCellEditor(color);
+				ce.showEditor(ColorButton.this, true);
+				if (ce.isInputAccepted()) {
+					setColor((Color)ce.getCellEditorValue());
+				}
+			} else {
+				Color newColor = JColorChooser.showDialog (ColorButton.this, getText(), color);
 				if (newColor != null){
 					setColor( newColor);
 				}
 			}
-		});
-	}
-
+		}
+	};
+	
 	// sets the background as the color of the button.  If the color is lighter
 	// than gray, then black is used for the color of the button's text instead
 	// of white.
-	public void setColor( Color c){
-		color = c;
+	public void setColor(Color c) {
+		color = enableAlpha ? c : dupColor(c, 255);
 		setBackground( c);
-		if ( (c.getRed() + c.getGreen() + c.getBlue()) > (128 + 128 + 128) ){
-			setForeground( Color.black);
+		if (c.getAlpha() < 100 || (c.getRed() + c.getGreen() + c.getBlue()) > (128 + 128 + 128) ) {
+			setForeground(Color.black);
 		} else {
-			setForeground( Color.white);
+			setForeground(Color.white);
 		}
 	}
-
-	public Color getColor(){
+	
+	/**
+	 * Special painter that ensures any garbage behind the component is cleared
+	 * before the partially transparent component is painted over it.
+	 */
+	public void paintComponent(Graphics g) {
+		g.setColor(Color.white);
+		g.clearRect(0, 0, getWidth(), getHeight());
+		super.paintComponent(g);
+	}
+	
+	public Color getColor() {
 		return color;
 	}
-
+	
+	private static Color dupColor(Color c, int alpha) {
+		return new Color(c.getRed(), c.getGreen(), c.getBlue(), alpha);
+	}
 } // end: ColorButton
 

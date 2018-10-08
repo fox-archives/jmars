@@ -1,23 +1,3 @@
-// Copyright 2008, Arizona Board of Regents
-// on behalf of Arizona State University
-// 
-// Prepared by the Mars Space Flight Facility, Arizona State University,
-// Tempe, AZ.
-// 
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-// 
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU General Public License for more details.
-// 
-// You should have received a copy of the GNU General Public License
-// along with this program.  If not, see <http://www.gnu.org/licenses/>.
-
-
 /**
  **  An abstraction of the methods and objects that deal with properties of JMARS rulers.
  **
@@ -29,9 +9,14 @@ import java.awt.Color;
 import java.awt.Component;
 import java.util.Hashtable;
 
+import javax.swing.JCheckBox;
+import javax.swing.JSlider;
+
+import edu.asu.jmars.swing.ColorButton;
+
 public  class RulerProperty {
-	private Object   prop;
-	private String   name;
+	private RulerComponent prop;
+	private String name;
 
 	/**
 	 ** Constructor
@@ -41,7 +26,7 @@ public  class RulerProperty {
 	 **       be the same as the object name.
 	 ** @param property  - A component that is to be drawn in the properties panel.
 	 **/ 
-	public RulerProperty( String name, Object property){
+	public RulerProperty( String name, RulerComponent property){
 		this.prop = property;
 		this.name = name;
 	}
@@ -57,9 +42,8 @@ public  class RulerProperty {
 	 **/
 	public Component getProp(){
 		return (Component)prop;
-	}			
+	}
 	
-
 	/**
 	 ** Returns the boolean value of the component if the component is a JCheckBox.  False
 	 ** is returned if it is not a JCheckBox.
@@ -68,8 +52,8 @@ public  class RulerProperty {
 	 ** @return the boolean value of a JCheckBox component.
 	 **/
 	public boolean getBool(){
-		if (prop instanceof RulerCheckBox) {
-			return ((RulerCheckBox)prop).isSelected();
+		if (prop instanceof JCheckBox) {
+			return ((JCheckBox)prop).isSelected();
 		} else {
 			return false;
 		}
@@ -83,20 +67,20 @@ public  class RulerProperty {
 	 ** @return the color of the ColorButton component.
 	 **/
 	public Color getColor(){
-		if (prop instanceof RulerColorButton) {
-			return ((RulerColorButton)prop).getColor();
+		if (prop instanceof ColorButton) {
+			return ((ColorButton)prop).getColor();
 		} else {
 			return null;
 		}
 	}
 
 	/**
-	 * Returns the int value for the RulerStepSlider component or zero otherwise.
-	 * @return Slider's current value.
+	 * Returns the int value for a JSlider component or zero otherwise.
+	 * @return Current value of JSlider.
 	 */
 	public int getIntValue(){
-		if (prop instanceof RulerStepSlider) {
-			return ((RulerStepSlider)prop).getValue();
+		if (prop instanceof JSlider) {
+			return ((JSlider)prop).getValue();
 		}
 		return 0;
 	}
@@ -108,9 +92,8 @@ public  class RulerProperty {
 	public String getName(){
 		return name;
 	}
-
 	
-	/**  
+	/**
 	 **  Loads the property from the config file if the key for the Compoent exists.
 	 **
 	 **  @param a Hashtable that is all of the properties retrieved from the config file.

@@ -1,32 +1,26 @@
-// Copyright 2008, Arizona Board of Regents
-// on behalf of Arizona State University
-// 
-// Prepared by the Mars Space Flight Facility, Arizona State University,
-// Tempe, AZ.
-// 
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-// 
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU General Public License for more details.
-// 
-// You should have received a copy of the GNU General Public License
-// along with this program.  If not, see <http://www.gnu.org/licenses/>.
-
-
 package edu.asu.jmars.layer;
 
-import edu.asu.jmars.*;
-import java.awt.*;
-import java.awt.event.*;
-import java.awt.geom.*;
-import java.text.*;
-import javax.swing.*;
-import javax.swing.event.*;
+import java.awt.BasicStroke;
+import java.awt.Color;
+import java.awt.Graphics;
+import java.awt.Graphics2D;
+import java.awt.Point;
+import java.awt.event.ActionEvent;
+import java.awt.event.MouseEvent;
+import java.awt.geom.Line2D;
+import java.awt.geom.Point2D;
+
+import javax.swing.AbstractAction;
+import javax.swing.ButtonGroup;
+import javax.swing.JMenu;
+import javax.swing.JMenuItem;
+import javax.swing.JPopupMenu;
+import javax.swing.JRadioButtonMenuItem;
+import javax.swing.SwingUtilities;
+import javax.swing.event.MouseInputAdapter;
+import javax.swing.event.MouseInputListener;
+
+import edu.asu.jmars.Main;
 
 public final class PannerGlass extends BaseGlass {
 	PannerGlass(final LViewManager pannVMan, final LViewManager mainVMan) {
@@ -40,19 +34,15 @@ public final class PannerGlass extends BaseGlass {
 
 		sub = new JMenu("Zoom");
 		ButtonGroup group = new ButtonGroup();
-		for (int i = 0; i < LocationManager.INITIAL_MAX_ZOOM_POWER; i++) {
-			final int zoom = 1 << (i * LocationManager.ZOOM_MULTIPLIER);
-			menuItem = new JRadioButtonMenuItem(new AbstractAction(zoom
-					+ " Pix/Deg") {
+		for (final int zoom: myVMan.getZoomManager().getZoomFactors()) {
+			menuItem = new JRadioButtonMenuItem(new AbstractAction(zoom + " Pix/Deg") {
 				public void actionPerformed(ActionEvent e) {
-					myVMan.setMagnify(zoom);
-					myVMan.setLocationAndZoom(myVMan.anchorPoint, zoom);
+					myVMan.getZoomManager().setZoomPPD(zoom, true);
 				}
 			});
 			group.add(menuItem);
 			sub.add(menuItem);
-			if (zoom == myVMan.magnify)
-				menuItem.setSelected(true);
+			menuItem.setSelected(zoom == myVMan.getZoomManager().getZoomPPD());
 		}
 		popup.add(sub);
 
@@ -109,8 +99,6 @@ public final class PannerGlass extends BaseGlass {
 				proxy(e);
 			}
 
-			DecimalFormat f = new DecimalFormat("0.00");
-
 			public void mouseMoved(MouseEvent e) {
 				updateLocation(e.getPoint());
 				proxy(e);
@@ -134,23 +122,9 @@ public final class PannerGlass extends BaseGlass {
 					drawLine(mouseDown.x, mouseDown.y, mouseLast.x, mouseLast.y);
 				drawLine(mouseDown.x, mouseDown.y, mouseCurr.x, mouseCurr.y);
 
-				Point2D downW = myVMan.getProj().screen.toWorld(mouseDown);
-				Point2D currW = myVMan.getProj().screen.toWorld(mouseCurr);
-
-				Point2D downS = Main.PO.convWorldToSpatial(downW);
-				Point2D currS = Main.PO.convWorldToSpatial(currW);
-				double angDistance = myVMan.getProj().spatial.distance(downS, currS);
-				double linDistance = angDistance * 3390.0 * 2 * Math.PI / 360.0;
-
-				// JMARS west lon => USER east lon
-				currS.setLocation(360 - currS.getX(), currS.getY());
-
-				Main.setStatus(formatCoord(currS, new DecimalFormat("0.00"),
-						"E ", "N")
-						+ "\tdist = "
-						+ f.format(angDistance)
-						+ "deg = "
-						+ f.format(linDistance) + "km");
+				Main.setStatusFromWorld(
+					myVMan.getProj().screen.toWorld(mouseDown),
+					myVMan.getProj().screen.toWorld(mouseCurr));
 
 				mouseLast = mouseCurr;
 

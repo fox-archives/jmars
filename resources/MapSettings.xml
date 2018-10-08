@@ -20,12 +20,18 @@
 									</cellconstraints>
 									<cellconstraints xy="2,6">
 										<panel>
-											<formlayout columnspec="pref, 4dlu, pref, fill:4dlu:grow" rowspec="pref">
+											<formlayout columnspec="pref, 4dlu, pref, 4dlu, pref, 4dlu, pref, 4dlu, pref" rowspec="pref">
 												<cellconstraints xy="1,1">
 													<button id="uploadMapPB" label="Upload Map..."/>
 												</cellconstraints>
 												<cellconstraints xy="3,1">
-													<button id="deleteMapPB" label="Delete Map"/>
+													<button id="deleteMapPB" label="Delete Map..."/>
+												</cellconstraints>
+												<cellconstraints xy="5,1">
+													<button id="shareMapPB" label="Share Map..."/>
+												</cellconstraints>
+												<cellconstraints xy="7,1">
+													<button id="adminPB" label="Groups..."/>
 												</cellconstraints>
 											</formlayout>
 										</panel>

@@ -1,23 +1,3 @@
-// Copyright 2008, Arizona Board of Regents
-// on behalf of Arizona State University
-// 
-// Prepared by the Mars Space Flight Facility, Arizona State University,
-// Tempe, AZ.
-// 
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-// 
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU General Public License for more details.
-// 
-// You should have received a copy of the GNU General Public License
-// along with this program.  If not, see <http://www.gnu.org/licenses/>.
-
-
 package edu.asu.jmars.layer.stamp.chart;
 
 import java.awt.Color;
@@ -34,6 +14,7 @@ import java.awt.geom.Point2D;
 
 import edu.asu.jmars.layer.WrappedMouseEvent;
 import edu.asu.jmars.layer.stamp.StampLView;
+import edu.asu.jmars.layer.stamp.StampLayer;
 import edu.asu.jmars.util.HVector;
 import edu.asu.jmars.util.Util;
 
@@ -80,8 +61,7 @@ public class ProfileLineCueingListener extends MouseMotionAdapter {
 	 *        mouse coordinate "falls within" the profileLine range or not.
 	 */
 	private Shape computeCueLine(Point2D worldMouse){
-		Shape profileLine = myLView.getProfileLine();
-		
+		Shape profileLine = getProfileLine();
 		if (profileLine == null)
 			return null;
 		
@@ -155,7 +135,7 @@ public class ProfileLineCueingListener extends MouseMotionAdapter {
 
 	
 	public void paintCueLine(Graphics2D g2){
-		Shape profileLine = myLView.getProfileLine();
+		Shape profileLine = getProfileLine();
 		if (profileLine != null && cueShape != null){
 			g2.setColor(Color.yellow);
 			g2.draw(cueShape);
@@ -163,7 +143,7 @@ public class ProfileLineCueingListener extends MouseMotionAdapter {
 	}
 	
 	public void mouseMoved(MouseEvent e) {
-		Shape profileLine = myLView.getProfileLine();
+		Shape profileLine = getProfileLine();
 		if (profileLine == null)
 			return;
 		
@@ -171,15 +151,42 @@ public class ProfileLineCueingListener extends MouseMotionAdapter {
 		
 		Point2D pt = clampedWorldPoint(ChartView.getFirstPoint(profileLine), e);
 		
+		//Figure out if the shape goes into negative world coordinates, or is
+		// in positive world coordinates
+		PathIterator pi = profileLine.getPathIterator(null);
+		double minX = 0;
+		double coords[] = new double[6];
+		while(!pi.isDone()){
+			pi.currentSegment(coords);
+			double newX = coords[0];
+			if(newX<minX){
+				minX = newX;
+			}
+			pi.next();
+		}
+		
+		//If the minimum x value is not negative, then check the x coordinate
+		// on the mouse point pt, and add 360 to bring it back into the 
+		// positive coordinate space of world coordinates
+		if(minX>=0 && pt.getX()<0){
+			pt = new Point2D.Double(pt.getX()+360, pt.getY());
+		}
+		
 		double[] distance = new double[1];
 		Point2D mid = ChartView.interpolate(profileLine, ChartView.uninterpolate(profileLine, pt, distance, myLView.getProj()), myLView.getProj());
 		int distInPixels = (int)Math.round(distance[0] * myLView.getProj().getPPD());
-		//log.aprintln("mid:"+mid+"  pt:"+pt+"  dist:"+distance[0]+"  pixDist:"+distInPixels);
+//		System.out.println("mid:"+mid+"  pt:"+pt+"  dist:"+distance[0]+"  pixDist:"+distInPixels);
 		if (distInPixels <= 50){
 			myLView.tooltipsDisabled(true);
 			if (chartView!=null) {
 				chartView.cueChanged(mid);
 			}
+			else if(myLView.stampLayer.lineShapes()){
+				//Needs the point to be in spatial coordinates
+				Point2D spMid = myLView.getProj().world.toSpatial(mid);
+				myLView.myFocus.getRadarView().setCuePoint(spMid);
+			}
+			
 			setCuePoint(mid);
 		}
 		else {
@@ -208,5 +215,19 @@ public class ProfileLineCueingListener extends MouseMotionAdapter {
 		return new Point2D.Double(x, y);
 	}
 
+	
+	private Shape getProfileLine(){
+		Shape profileLine = null;
+		
+		StampLayer sl = myLView.stampLayer;
+		
+		if(sl.lineShapes() && sl.getSelectedStamps().size()>0){
+			profileLine = myLView.stampLayer.getSelectedStamps().get(0).getPath();
+		}else{
+			profileLine = myLView.getProfileLine();
+		}
+		
+		return profileLine;
+	}
 }
 

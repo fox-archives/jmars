@@ -1,23 +1,3 @@
-// Copyright 2008, Arizona Board of Regents
-// on behalf of Arizona State University
-// 
-// Prepared by the Mars Space Flight Facility, Arizona State University,
-// Tempe, AZ.
-// 
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-// 
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU General Public License for more details.
-// 
-// You should have received a copy of the GNU General Public License
-// along with this program.  If not, see <http://www.gnu.org/licenses/>.
-
-
 package edu.asu.jmars.layer.stamp.chart;
 
 import java.awt.Color;
@@ -29,7 +9,6 @@ import java.awt.event.KeyListener;
 import java.awt.event.MouseEvent;
 import java.awt.geom.GeneralPath;
 import java.awt.geom.Point2D;
-import java.text.DecimalFormat;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -154,16 +133,11 @@ public class ProfileLineDrawingListener implements MouseInputListener, KeyListen
 
 		if (!closed && !profileLinePts.isEmpty()){
 			p2 = clampedWorldPoint(profileLinePts.get(0), e);
-
-			// Update status bar angular and linear distance values
-			// TODO This approach is a kludge, which needs fixing.
-			double[] totalDistances = ChartView.perimeterLength(convert(profileLinePts, p2), myLView.getProj());
-			double[] distances = Util.angularAndLinearDistanceW(profileLinePts.get(profileLinePts.size()-1), p2, myLView.getProj());
-			DecimalFormat f = new DecimalFormat("0.00");
-			Main.setStatus(Util.formatSpatial(myLView.getProj().world.toSpatial(p2)) +
-					"  deg = " + f.format(distances[0]) + "/" + f.format(totalDistances[0]) + 
-					"  dist = " + f.format(distances[1]) + "/" + f.format(totalDistances[1]) + " km");
-
+			
+			List<Point2D> points = new ArrayList<Point2D>(profileLinePts);
+			points.add(p2);
+			Main.setStatusFromWorld(points.toArray(new Point2D[points.size()]));
+			
 			// Update the view so that it can display the in-progress profile line
 			myLView.repaint();
 		}

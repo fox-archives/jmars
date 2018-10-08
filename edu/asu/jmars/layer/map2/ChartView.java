@@ -1,23 +1,3 @@
-// Copyright 2008, Arizona Board of Regents
-// on behalf of Arizona State University
-// 
-// Prepared by the Mars Space Flight Facility, Arizona State University,
-// Tempe, AZ.
-// 
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-// 
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU General Public License for more details.
-// 
-// You should have received a copy of the GNU General Public License
-// along with this program.  If not, see <http://www.gnu.org/licenses/>.
-
-
 package edu.asu.jmars.layer.map2;
 
 import java.awt.BasicStroke;
@@ -42,6 +22,7 @@ import java.io.File;
 import java.io.FileNotFoundException;
 import java.io.FileOutputStream;
 import java.io.PrintStream;
+import java.text.DecimalFormat;
 import java.text.NumberFormat;
 import java.util.Arrays;
 
@@ -244,6 +225,7 @@ public class ChartView extends JPanel implements DataReceiver, MapChannelReceive
 		Shape effLine = getEffProfileLineSpan();
 		double aSpan = mapLView.perimeterLength(effLine)[0];
 		double pixSpan = chartPanel.getScreenDataArea().getWidth();
+		if (pixSpan==0.0) return false;   // Do not set the interface to 1 ppd if the components haven't been sized yet
 		int maxPpdIndex = aSpan > 0.0 && pixSpan > 0? (int)Math.ceil(Math.log(pixSpan / aSpan)/Math.log(2.0)): 0;
 		maxPpdIndex = Math.max(0, Math.max(maxPpdIndex, minPpdIndex));
 		log.println("aSpan:"+aSpan+"  pixSpan:"+pixSpan+"  maxPpdIndex:"+maxPpdIndex);
@@ -406,15 +388,23 @@ public class ChartView extends JPanel implements DataReceiver, MapChannelReceive
 	}
 
 	private void saveAsTextActionPerformed(ActionEvent e){
-		int rc = fileChooser.showSaveDialog(this);
-		if (rc != JFileChooser.APPROVE_OPTION || fileChooser.getSelectedFile() == null)
-			return;
-
-		try {
-			saveAsText(fileChooser.getSelectedFile());
-		}
-		catch(Exception ex){
-			JOptionPane.showMessageDialog(this, "Unable to save file: "+ex.getMessage(), "Error!", JOptionPane.ERROR_MESSAGE);
+		while (true) {
+			int rc = fileChooser.showSaveDialog(this);
+			if (rc != JFileChooser.APPROVE_OPTION || fileChooser.getSelectedFile() == null) {
+				break;
+			}
+			File selected = fileChooser.getSelectedFile();
+			if (!selected.exists() ||
+					JOptionPane.YES_OPTION == JOptionPane.showConfirmDialog(
+						this, "File exists, overwrite?", "File already exists",
+						JOptionPane.YES_NO_OPTION)) {
+				try {
+					saveAsText(fileChooser.getSelectedFile());
+				} catch(Exception ex) {
+					JOptionPane.showMessageDialog(this, "Unable to save file: "+ex.getMessage(), "Error!", JOptionPane.ERROR_MESSAGE);
+				}
+				break;
+			}
 		}
 	}
 	
@@ -438,8 +428,10 @@ public class ChartView extends JPanel implements DataReceiver, MapChannelReceive
 			sampleData = samples.getSampleData(km);
 		}
 		
-		setCrosshair(km);
-		updateReadouts(sampleData);
+		if(chart.getXYPlot().getDomainAxis().getRange().contains(km)){
+			setCrosshair(km);
+			updateReadouts(sampleData, km);
+		}
 		
 		// Forward the event to mapView so that it can show a cueing line as well.
 		mapLView.cueChanged(cuePoint);
@@ -459,16 +451,18 @@ public class ChartView extends JPanel implements DataReceiver, MapChannelReceive
 			//log.aprintln("worldCuePoint:"+worldCuePoint+"  -> km:"+km+"  -> worldPt:"+samples.getPointAtDist(km));
 			sampleData = samples.getSampleData(worldCuePoint);
 		}
-		setCrosshair(km);
-		updateReadouts(sampleData);
+		if(chart.getXYPlot().getDomainAxis().getRange().contains(km)){
+			setCrosshair(km);
+			updateReadouts(sampleData, km);
+		}
 	}
 		
 	public void setCrosshair(double km){
 		chart.getXYPlot().setDomainCrosshairValue(km);
 	}
 	
-	public void updateReadouts(double[] sampleData){
-		roTableModel.setSampleData(sampleData);
+	public void updateReadouts(double[] sampleData, double xValue){
+		roTableModel.setSampleData(sampleData, xValue);
 	}
 	
 	private void configurePlot(Pipeline[] pipeline){
@@ -480,7 +474,12 @@ public class ChartView extends JPanel implements DataReceiver, MapChannelReceive
 		int i;
 		for(i=0; pipeline != null && i<pipeline.length; i++){
 			
-			final String label = pipeline[i].getSource().getTitle();
+			final String label;
+			if(pipeline[i].getSource().getUnits()!=null){
+				label = pipeline[i].getSource().getUnits();
+			}else{
+				label = "Units not available for "+pipeline[i].getSource().getName();
+			}
 			
 			XYSeries s = new XYSeries(label);
 			XYDataset newDataset = new XYSeriesCollection(s);
@@ -714,7 +713,8 @@ public class ChartView extends JPanel implements DataReceiver, MapChannelReceive
 			ps.print(nf.format(distances[k]));
 			if (samplePtsW[k] != null){
 				Point2D ptS = mapLView.getProj().world.toSpatial(samplePtsW[k]);
-				ps.print(delim); ps.print(nf.format(ptS.getX()));
+				// should output east-leading longitude, ocentric latitude
+				ps.print(delim); ps.print(nf.format(360-ptS.getX()));
 				ps.print(delim); ps.print(nf.format(ptS.getY()));
 			}
 			else {
@@ -769,16 +769,26 @@ public class ChartView extends JPanel implements DataReceiver, MapChannelReceive
 	class ReadoutTableModel extends AbstractTableModel {
 		private static final long serialVersionUID = 1L;
 		
+		private final String TITLE_COL = "Title";
+		private final String COLOR_COL = "Color";
+		private final String VAL_COL = "Value";
+		private final String KM_COL = "Distance";
+		private final String UNIT_COL = "Units";
+		
 		public final String[] columns = new String[] {
-			"Title",
-			"Color",
-			"Value"
+			TITLE_COL,
+			COLOR_COL,
+			VAL_COL,
+			UNIT_COL,
+			KM_COL
 		};
 		
 		private Pipeline[] pipeline = null;
 		//private Point2D samplePt = null;
 		private double[] sampleData = null;
+		private double xValue = Double.NaN;
 		private JFreeChart chart = null;
+		private DecimalFormat df = new DecimalFormat("#,###,##0.00");
 		
 		public ReadoutTableModel(Pipeline[] pipeline, JFreeChart chart){
 			this.pipeline = pipeline;
@@ -790,10 +800,12 @@ public class ChartView extends JPanel implements DataReceiver, MapChannelReceive
 		}
 		
 		public Class<?> getColumnClass(int columnIndex){
-			switch(columnIndex){
-				case 0: return String.class;
-				case 1: return Color.class;
-				case 2: return Number.class;
+			switch(getColumnName(columnIndex)){
+				case TITLE_COL: 
+				case UNIT_COL:
+				case KM_COL: return String.class;
+				case COLOR_COL: return Color.class;
+				case VAL_COL: return Number.class; 
 			}
 			
 			return Object.class;
@@ -825,26 +837,47 @@ public class ChartView extends JPanel implements DataReceiver, MapChannelReceive
 			// This should be thread-safe since all updates to the chart occur on the AWT thread.
 			XYPlot plot = chart.getXYPlot();
 			if (datasetIndex < plot.getDatasetCount() && seriesIndex < plot.getDataset(datasetIndex).getSeriesCount()){
-				if (columnIndex == 1){
+				//color
+				if (getColumnName(columnIndex).equals(COLOR_COL)){
 					Paint p = ((XYLineAndShapeRenderer)plot.getRenderer(datasetIndex)).getSeriesPaint(seriesIndex);
 					if (p instanceof Color)
 						return (Color)p;
 					return null;
 				}
-				else if (columnIndex == 2){
+				//value
+				else if (getColumnName(columnIndex).equals(VAL_COL)){
 					if (sampleData != null && sampleData.length > rowIndex)
 						return new Double(sampleData[rowIndex]);
+				}
+				//km
+				else if (getColumnName(columnIndex).equals(KM_COL)){
+				
+					String unit = "km";
+					if(xValue < 1){
+						xValue = xValue*1000;
+						unit= "m";
+					}
+				
+					return df.format(xValue)+" "+unit;
+				}
+				//units
+				else if (getColumnName(columnIndex).equals(UNIT_COL)){
+					String units = pipeline[rowIndex].getSource().getUnits();
+					if(units == null){
+						units = "Not Available";
+					}
+					return units;
 				}
 			}
 			return null;
 		}
 		
 		public boolean isCellEditable(int rowIndex, int colIndex){
-			return (colIndex == 1);
+			return (getColumnName(colIndex).equals(COLOR_COL));
 		}
 		
 		public void setValueAt(Object value, int rowIndex, int columnIndex){
-			if (columnIndex != 1)
+			if (!getColumnName(columnIndex).equals(COLOR_COL))
 				throw new IllegalArgumentException("Columns other than the color column are uneditable.");
 			
 			int datasetIndex = rowIndex;
@@ -856,8 +889,9 @@ public class ChartView extends JPanel implements DataReceiver, MapChannelReceive
 			}
 		}
 		
-		public void setSampleData(double[] newSampleData){
+		public void setSampleData(double[] newSampleData, double xValue){
 			sampleData = newSampleData;
+			this.xValue = xValue;
 			//fireTableChanged(new TableModelEvent(this, 0, getRowCount(), 2, TableModelEvent.UPDATE));
 			fireTableDataChanged();
 		}
@@ -940,6 +974,13 @@ public class ChartView extends JPanel implements DataReceiver, MapChannelReceive
 			Raster raster = image.getData();
 			Rectangle rasterBounds = raster.getBounds();
 			
+			// Each band can potentially have it's own array of ignore values
+			double ignoreValues[][] = new double[nBands][]; 
+			
+			for (int i=0; i<nBands; i++) {
+				ignoreValues[i]=ch.getPipeline()[i].getSource().getIgnoreValue();
+			}
+			
 			//log.aprintln("extent:"+mapData.getRequest().getExtent()+" rasterBounds:"+rasterBounds);
 			Point2D pix = new Point2D.Double();
 			
@@ -951,10 +992,18 @@ public class ChartView extends JPanel implements DataReceiver, MapChannelReceive
 				ext2Pix.transform(pts[i], pix);
 				//if (i < 3 || i > (nSamples-3))
 					//log.aprintln("i:"+i+" t:"+t+" pts[i]:"+pts[i]+" dist[i]:"+dist[i]+" pix:"+pix+" contains?"+rasterBounds.contains(pix));
-				if (rasterBounds.contains(pix))
+				if (rasterBounds.contains(pix)) {
 					raster.getPixel((int)pix.getX(), (int)pix.getY(), data[i] = new double[nBands]);
-				else
+					for (int b=0; b<nBands; b++) {
+						if (ignoreValues[b]!=null) {
+							for (int v=0; v<ignoreValues[b].length; v++) {
+								if (data[i][b]==ignoreValues[b][v]) data[i][b]=Double.NaN;
+							}
+						}
+					}
+				} else {
 					data[i] = null;
+				}
 			}
 		}
 		

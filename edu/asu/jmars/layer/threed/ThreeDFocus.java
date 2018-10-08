@@ -1,514 +1,855 @@
-// Copyright 2008, Arizona Board of Regents
-// on behalf of Arizona State University
-// 
-// Prepared by the Mars Space Flight Facility, Arizona State University,
-// Tempe, AZ.
-// 
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-// 
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU General Public License for more details.
-// 
-// You should have received a copy of the GNU General Public License
-// along with this program.  If not, see <http://www.gnu.org/licenses/>.
-
-
 package edu.asu.jmars.layer.threed;
 
 import java.awt.BorderLayout;
 import java.awt.Color;
 import java.awt.Container;
+import java.awt.Cursor;
 import java.awt.Dimension;
-import java.awt.Frame;
+import java.awt.Font;
 import java.awt.GridBagConstraints;
 import java.awt.GridBagLayout;
+import java.awt.GridLayout;
+import java.awt.Insets;
 import java.awt.event.ActionEvent;
 import java.awt.event.ActionListener;
-import java.util.ArrayList;
-import java.util.Iterator;
-import java.util.List;
-import java.util.Observable;
-import java.util.Observer;
+import java.awt.event.FocusEvent;
+import java.awt.event.FocusListener;
+import java.awt.event.WindowAdapter;
+import java.awt.event.WindowEvent;
+import java.awt.font.TextAttribute;
+import java.io.File;
+import java.text.DecimalFormat;
+import java.util.Map;
+import java.util.Vector;
 
 import javax.swing.AbstractAction;
 import javax.swing.BorderFactory;
+import javax.swing.Box;
 import javax.swing.JButton;
 import javax.swing.JCheckBox;
 import javax.swing.JColorChooser;
 import javax.swing.JComboBox;
-import javax.swing.JDialog;
+import javax.swing.JFileChooser;
+import javax.swing.JFrame;
 import javax.swing.JLabel;
+import javax.swing.JMenu;
+import javax.swing.JMenuBar;
+import javax.swing.JMenuItem;
+import javax.swing.JOptionPane;
 import javax.swing.JPanel;
 import javax.swing.JScrollPane;
+import javax.swing.JTextArea;
 import javax.swing.JTextField;
+import javax.swing.border.EmptyBorder;
+import javax.swing.border.TitledBorder;
+import javax.swing.filechooser.FileFilter;
 import javax.vecmath.Color3f;
 import javax.vecmath.Vector3f;
 
 import edu.asu.jmars.layer.FocusPanel;
-import edu.asu.jmars.layer.Layer;
+import edu.asu.jmars.layer.map2.MapSource;
+import edu.asu.jmars.layer.util.NumericMapSourceDialog;
+import edu.asu.jmars.util.Config;
+import edu.asu.jmars.util.DebugLog;
 import edu.asu.jmars.util.Util;
 
+@SuppressWarnings("serial")
 public class ThreeDFocus extends FocusPanel {
-	static final String MOLA_ALTITUDE_STRING = "MOLA altitude data";
-	private final String originalExaggeration = "1.0";
-	private ThreeDLView parent;
 	private ThreeDLayer myLayer;
-	private JDialog viewer;
+	private JFrame viewer;
 	private ThreeDCanvas canvasPanel;
-	private JPanel controlPanel;
-	private JTextField exaggerationText;
-	private JButton resampleButton;
-	private JButton resetButton;
-	private JButton jpegDumpButton;
-	private JCheckBox directionalLightCheckBox;
-	private ColorButton directionalLightColorButton;
-	private DirectionalLightWidget lightDirectionWidget;
-	private ColorButton backgroundColorButton;
-	private JComboBox layersComboBox;
-	private JCheckBox backplaneCheckBox;
-	private ListListener listListener = null;
 	
-	// Attributes that can be stored and retrieved.
-	private boolean directionalLightBoolean = false;
-	private Vector3f directionalLightDirection = new Vector3f(0.0f, 0.0f, 1.0f);
-	private Color directionalLightColor = new Color(128, 128, 128);
-	private Color backgroundColor = new Color(0, 0, 0);
-	private String zScaleString = "1.0";
-	private boolean backplaneBoolean = false;
+	private JButton updateBtn;
+	private JCheckBox lightChk;
+	private ColorButton backgroundCBtn;
+	private JCheckBox backplaneChk;
+	private ColorButton lightCBtn;
+	private DirectionalLightWidget lightWidget;
+	private JTextField sourceTF;
+	private JTextArea mapDescTA;
+	private JLabel ppdLbl;
+	private JLabel unitLbl;
+	private JLabel ignoreLbl;
+	private JLabel minLbl;
+	private JLabel meanLbl;
+	private JLabel maxLbl;
+	private JLabel stdLbl;
+	private JComboBox<String> scaleBx;
+	private JTextField exagTF;
+	private JTextField totalExagTF;
 	
-	public ThreeDFocus(ThreeDLayer layer, ThreeDLView parent, ThreeDSettings settings) {
-		super(parent);
+	private JFrame controlFrame;
+	private JFileChooser stlChooser;
+	private JFileChooser pngChooser;
+	
+	private final String ppdPrompt = "PPD: ";
+	private final String unitPrompt = "Units: ";
+	private final String ignorePrompt = "Ignore Value: ";
+	private final String minPrompt = "Min: ";
+	private final String meanPrompt = "Mean: ";
+	private final String maxPrompt = "Max: ";
+	private final String stdPrompt = "St Dev (σ): ";
+	
+	private StartupParameters settings = null;	
+	
+	private int pad = 3;
+	private Insets in = new Insets(pad, pad, pad, pad);
+	private int row;
+	private Font descripFont = new Font("Dialog", Font.PLAIN, 12);
+	
+	private static DebugLog log = DebugLog.instance();
+	
+	public ThreeDFocus(ThreeDLView parent, StartupParameters settings) {
+		super(parent, false);
 		
-		this.parent = parent;
-		this.myLayer = layer;
+		this.myLayer = (ThreeDLayer)parent.getLayer();
 		
 		if (settings != null) {
-			initSettings(settings);
+			this.settings = settings;
+		} else {
+			this.settings = new StartupParameters();
 		}
 		
-		canvasPanel = null;
-		canvasPanel = new ThreeDCanvas(myLayer, parent);
+		//add the main tab
+		add(createControlPanel(), "Controls");
 		
-		setUpViews();
-		setUpControllers();
+		//set up and display the 3D view window
+		setup3D();
+		
+		//populate map and scale panels with info from intial source
+		updateMapAndScaleInfo(myLayer.getElevationSource());
 	}
 	
-	/**
-	 * called by the focus panel whenever the lview is "cleaned up".
-	 */
-	public void destroyViewer() {
-		if (canvasPanel != null) {
-
-			// remove the listener on the altitude combobox.
-			if (parent != null && parent.viewman2 != null
-					&& listListener != null) {
-				parent.viewman2.listener.deleteObserver(listListener);
-			}
-			viewer.dispose();
-			viewer = null;
-		}
-	}
-
-	// Sets up the panels and components in the focus panel.
-	private void setUpViews() {
-		controlPanel = null;
-		controlPanel = new JPanel();
-		controlPanel.setLayout(new GridBagLayout());
-		GridBagConstraints gc = new GridBagConstraints();
-		gc.fill = GridBagConstraints.BOTH;
-		gc.gridy++;
-
-		JPanel scenePanel = new JPanel();
-		scenePanel.setBorder(BorderFactory
-				.createTitledBorder("Scene Properties"));
-		scenePanel.setLayout(new GridBagLayout());
-		GridBagConstraints sceneConstraints = new GridBagConstraints();
-		{
-			sceneConstraints.gridy++;
-			sceneConstraints.gridx = 1;
-			sceneConstraints.anchor = GridBagConstraints.WEST;
-			backplaneCheckBox = null;
-			backplaneCheckBox = new JCheckBox("Bottom", backplaneBoolean);
-			backplaneCheckBox.setFocusPainted(false);
-			canvasPanel.enableBackplane(backplaneBoolean);
-			scenePanel.add(backplaneCheckBox, sceneConstraints);
-
-			sceneConstraints.gridy++;
-			sceneConstraints.anchor = GridBagConstraints.WEST;
-			sceneConstraints.gridx = 1;
-			resampleButton = null;
-			resampleButton = new JButton("Update Scene");
-			scenePanel.add(resampleButton, sceneConstraints);
-
-			sceneConstraints.gridy++;
-			sceneConstraints.anchor = GridBagConstraints.WEST;
-			sceneConstraints.gridx = 1;
-			backgroundColorButton = null;
-			backgroundColorButton = new ColorButton("Background Color",
-					backgroundColor);
-			canvasPanel.setBackgroundColor(backgroundColor);
-			scenePanel.add(backgroundColorButton, sceneConstraints);
-
-			sceneConstraints.gridy++;
-			sceneConstraints.anchor = GridBagConstraints.EAST;
-			sceneConstraints.gridx = 0;
-			scenePanel.add(new JLabel("Z Scale:"), sceneConstraints);
-			exaggerationText = null;
-			exaggerationText = new JTextField();
-			exaggerationText.setDocument(new FloatDocument());
-			exaggerationText.setText(zScaleString);
-			canvasPanel.setScale(new Float(zScaleString).floatValue());
-			Dimension exagDim = new Dimension(80, 20);
-			exaggerationText.setPreferredSize(exagDim);
-			sceneConstraints.anchor = GridBagConstraints.WEST;
-			sceneConstraints.gridx = 1;
-			scenePanel.add(exaggerationText, sceneConstraints);
-
-			sceneConstraints.gridy++;
-			sceneConstraints.anchor = GridBagConstraints.EAST;
-			sceneConstraints.gridx = 0;
-			scenePanel.add(new JLabel("Altitude:"), sceneConstraints);
-			layersComboBox = null;
-			layersComboBox = new JComboBox();
-			layersComboBox.addItem(MOLA_ALTITUDE_STRING);
-			// Because the viewman does not exist when JMARS is brought up, we can't 
-			// access any layers and so cannot populate this combobox. If the layer is
-			// added AFTER startup, there is no problem.
-			String[] s = getLayerNames();
-			if (s.length > 0) {
-				for (int i = 0; i < s.length; i++) {
-					if (!s[i].equals("3D viewer"))
-						layersComboBox.addItem(s[i]);
-				}
-			}
-			canvasPanel.setAltitudeSource(MOLA_ALTITUDE_STRING);
-			sceneConstraints.anchor = GridBagConstraints.WEST;
-			sceneConstraints.gridx = 1;
-			scenePanel.add(layersComboBox, sceneConstraints);
-		}
+	private void setup3D(){
+		//create the canvas and set initial settings
+		canvasPanel = new ThreeDCanvas(parent, settings);
+		canvasPanel.setBackgroundColor(settings.backgroundColor);
+		canvasPanel.enableBackplane(settings.backplaneBoolean);
+		canvasPanel.setAltitudeSource(myLayer.getElevationSource());
+		canvasPanel.enableDirectionalLight(settings.directionalLightBoolean);
+		canvasPanel.setDirectionalLightColor(settings.directionalLightColor);
+		canvasPanel.setDirectionalLightDirection(
+					settings.directionalLightDirection.x, settings.directionalLightDirection.y,
+					settings.directionalLightDirection.z);
 		
-		gc.gridx = 0;
-		controlPanel.add(scenePanel, gc);
-
-		JPanel orientationPanel = new JPanel();
-		orientationPanel.setBorder(BorderFactory
-				.createTitledBorder("Orientation"));
-		orientationPanel.setLayout(new GridBagLayout());
-		GridBagConstraints gc3 = new GridBagConstraints();
-		{
-			resetButton = null;
-			resetButton = new JButton("Reset Camera");
-			gc3.gridy++;
-			orientationPanel.add(resetButton, gc3);
-			JPanel buttonPanel = new JPanel();
-			buttonPanel.setLayout(new GridBagLayout());
-			GridBagConstraints gc4 = new GridBagConstraints();
-			{
-				gc4.anchor = GridBagConstraints.EAST;
-				gc4.gridx = 0;
-				gc4.gridy = 0;
-				buttonPanel.add(new JLabel("Drag Left Button:"), gc4);
-				gc4.gridy++;
-				buttonPanel.add(new JLabel("Shift Drag Left Button:"), gc4);
-				gc4.gridy++;
-				buttonPanel.add(new JLabel("Drag Right Button:"), gc4);
-				gc4.gridy++;
-				buttonPanel.add(new JLabel("Shift Drag Right Button:"), gc4);
-				gc4.gridy++;
-				buttonPanel.add(new JLabel("Middle Button:"), gc4);
-
-				gc4.anchor = GridBagConstraints.WEST;
-				gc4.gridx = 1;
-				gc4.gridy = 0;
-				buttonPanel.add(new JLabel(" rotate x/y"), gc4);
-				gc4.gridy++;
-				buttonPanel.add(new JLabel(" translate x/y"), gc4);
-				gc4.gridy++;
-				buttonPanel.add(new JLabel(" rotate z"), gc4);
-				gc4.gridy++;
-				buttonPanel.add(new JLabel(" zoom"), gc4);
-				gc4.gridy++;
-				buttonPanel.add(new JLabel(" zoom"), gc4);
-			}
-			gc3.gridy++;
-			orientationPanel.add(buttonPanel, gc3);
-		}
-		gc.gridx = 0;
-		gc.gridy++;
-		controlPanel.add(orientationPanel, gc);
-
-		JPanel dirLightPanel = new JPanel();
-		dirLightPanel.setBorder(BorderFactory
-				.createTitledBorder("Directional Light"));
-		dirLightPanel.setLayout(new GridBagLayout());
-		GridBagConstraints gc2 = new GridBagConstraints();
-		{
-			gc2.gridy++;
-			directionalLightCheckBox = null;
-			directionalLightCheckBox = new JCheckBox("Light on",
-					directionalLightBoolean);
-			directionalLightCheckBox.setFocusPainted(false);
-			canvasPanel.enableDirectionalLight(directionalLightBoolean);
-			dirLightPanel.add(directionalLightCheckBox, gc2);
-			directionalLightColorButton = null;
-			directionalLightColorButton = new ColorButton("Light Color",
-					directionalLightColor);
-			directionalLightColorButton.setEnabled(directionalLightBoolean);
-			canvasPanel.setDirectionalLightColor(directionalLightColor);
-			gc2.gridy++;
-			dirLightPanel.add(directionalLightColorButton, gc2);
-			gc2.gridy++;
-			lightDirectionWidget = null;
-			lightDirectionWidget = new DirectionalLightWidget();
-			lightDirectionWidget.setEnabled(directionalLightBoolean);
-			lightDirectionWidget.setColor(new Color3f(directionalLightColor));
-			lightDirectionWidget.setPosition(directionalLightDirection.x,
-					directionalLightDirection.y);
-			canvasPanel.setDirectionalLightDirection(
-					directionalLightDirection.x, directionalLightDirection.y,
-					directionalLightDirection.z);
-			dirLightPanel.add(lightDirectionWidget, gc2);
-		}
-		gc.gridx = 1;
-		gc.gridy = 0;
-		gc.gridheight = 2;
-		controlPanel.add(dirLightPanel, gc);
-
-		JPanel miscPanel = new JPanel();
-		{
-			jpegDumpButton = null;
-			jpegDumpButton = new JButton("Save");
-			miscPanel.add(jpegDumpButton);
-		}
-		gc.gridy = 2;
-		gc.gridx = 0;
-		gc.gridheight = 1;
-		gc.gridwidth = 2;
-		controlPanel.add(miscPanel, gc);
-
 		// set up external viewer.
-		viewer = null;
-		viewer = new JDialog((Frame) null, "3D View", false);
+		viewer = new JFrame("3D View");
 		Container viewerContentPane = viewer.getContentPane();
 		viewerContentPane.add(canvasPanel, BorderLayout.CENTER);
 		viewer.pack();
 		viewer.setVisible(true);
-
-		// Set up the main pane.
-		setLayout(new BorderLayout());
-		add(new JScrollPane(controlPanel), BorderLayout.CENTER);
 	}
-
-	// Sets up all the controllers for the components.
-	private void setUpControllers() {
-		// get a new exaggeration scale and apply it.
-		exaggerationText.addActionListener(new ActionListener() {
-			public void actionPerformed(ActionEvent e) {
-				zScaleString = exaggerationText.getText();
-				canvasPanel.setScale(new Float(exaggerationText.getText())
-						.floatValue());
-				canvasPanel.refresh();
-				viewer.pack();
+	
+	private JPanel createControlPanel(){
+		//menubar
+		JMenuBar menuBar = new JMenuBar();
+		JMenu fileMenu = new JMenu("File");
+		JMenuItem savePngItm = new JMenuItem(saveScreenAct);
+		JMenuItem saveStlItm = new JMenuItem(saveStlAct);
+		fileMenu.add(savePngItm);
+		fileMenu.add(saveStlItm);
+		JMenu helpMenu = new JMenu("Help");
+		JMenuItem controlsItm = new JMenuItem(viewControlAct);
+		JMenuItem wTutorialItm = new JMenuItem(wTutorialAct);
+		JMenuItem vTutorialItm = new JMenuItem(vTutorialAct);
+		helpMenu.add(controlsItm);
+		helpMenu.add(wTutorialItm);
+		helpMenu.add(vTutorialItm);
+		menuBar.add(fileMenu);
+		menuBar.add(helpMenu);
+		
+		//status panel
+		JPanel statusPnl = new JPanel(new GridBagLayout());
+		statusPnl.setBorder(new TitledBorder("Status"));
+		updateBtn = new JButton(updateAct);
+		JButton resetBtn = new JButton(resetCameraAct);
+		row = 0;
+		statusPnl.add(updateBtn, new GridBagConstraints(0, row, 1, 1, 0, 0, GridBagConstraints.CENTER, GridBagConstraints.NONE, in, pad, pad));
+		statusPnl.add(resetBtn, new GridBagConstraints(0, ++row, 1, 1, 0, 0, GridBagConstraints.CENTER, GridBagConstraints.NONE, in, pad, pad));
+		//display panel
+		JPanel displayPnl = new JPanel(new GridBagLayout());
+		displayPnl.setBorder(new TitledBorder("Display"));
+		backplaneChk = new JCheckBox("Opaque Bottom", settings.backplaneBoolean);
+		backplaneChk.addActionListener(backplaneListener);
+		backgroundCBtn = new ColorButton("Background Color", settings.backgroundColor);
+		backgroundCBtn.addActionListener(backgroundColorListener);
+		row = 0;
+		displayPnl.add(backplaneChk, new GridBagConstraints(0, row, 1, 1, 0, 0, GridBagConstraints.CENTER, GridBagConstraints.NONE, in, pad, pad));
+		displayPnl.add(backgroundCBtn, new GridBagConstraints(0, ++row, 1, 1, 0, 0, GridBagConstraints.CENTER, GridBagConstraints.NONE, in, pad, pad));
+		//lighting panel
+		JPanel lightPnl = new JPanel(new GridBagLayout());
+		lightPnl.setBorder(new TitledBorder("Lighting"));
+		lightChk = new JCheckBox("Light On", settings.directionalLightBoolean);
+		lightChk.addActionListener(lightListener);
+		lightCBtn = new ColorButton("Light Color", settings.directionalLightColor);
+		lightCBtn.addActionListener(lightColorListener);
+		JPanel widgetPnl = new JPanel(new GridLayout(1, 1));
+		widgetPnl.setPreferredSize(new Dimension(65,65));
+		lightWidget = new DirectionalLightWidget(this);
+		lightWidget.setEnabled(settings.directionalLightBoolean);
+		lightWidget.setColor(new Color3f(settings.directionalLightColor));
+		//TODO: talk to Warren, see if we can add some kind of 
+		// mouselistener functionality for the lightWidget, so that
+		// we can get mouse released calls, and then trigger and update
+		// off that instead of requiring the user to hit the update btn
+		widgetPnl.add(lightWidget);
+		row = 0;
+		lightPnl.add(lightChk, new GridBagConstraints(0, row, 1, 1, 0, 0, GridBagConstraints.CENTER, GridBagConstraints.NONE, in, pad, pad));
+		lightPnl.add(widgetPnl, new GridBagConstraints(1, row, 1, 2, 0, 0, GridBagConstraints.CENTER, GridBagConstraints.NONE, new Insets(0,3,0,3), 1, 1));
+		lightPnl.add(lightCBtn, new GridBagConstraints(0, ++row, 1, 1, 0, 0, GridBagConstraints.CENTER, GridBagConstraints.NONE, in, pad, pad));
+		//Top Panel
+		JPanel topPnl = new JPanel(new GridBagLayout());
+		topPnl.setBackground(Util.lightBlue);
+		row = 0;
+		topPnl.add(statusPnl, new GridBagConstraints(0, row, 1, 1, 0, 0, GridBagConstraints.CENTER, GridBagConstraints.NONE, in, pad, pad));
+		topPnl.add(displayPnl, new GridBagConstraints(1, row, 1, 1, 0, 0, GridBagConstraints.CENTER, GridBagConstraints.NONE, in, pad, pad));
+		topPnl.add(lightPnl, new GridBagConstraints(2, row, 1, 1, 0, 0, GridBagConstraints.CENTER, GridBagConstraints.NONE, in, pad, pad));
+		
+		//map panel
+		JPanel mapPnl = new JPanel(new GridBagLayout());
+		mapPnl.setBorder(new TitledBorder("Map Source"));
+		JButton sourceBtn = new JButton(sourceAct);
+		sourceTF = new JTextField(20);
+		sourceTF.setEditable(false);
+		unitLbl = new JLabel(unitPrompt);
+		ppdLbl = new JLabel(ppdPrompt);
+		ignoreLbl = new JLabel(ignorePrompt);
+		JPanel lblPnl = new JPanel();
+		lblPnl.add(unitLbl);
+		lblPnl.add(Box.createHorizontalStrut(10));
+		lblPnl.add(ppdLbl);
+		lblPnl.add(Box.createHorizontalStrut(10));
+		lblPnl.add(ignoreLbl);
+		JPanel mapDescPnl = new JPanel(new GridLayout(1, 1));
+		mapDescPnl.setBorder(new TitledBorder("Description"));
+		mapDescPnl.setPreferredSize(new Dimension(0, 150));
+		mapDescTA = new JTextArea();
+		mapDescTA.setBackground(Util.panelGrey);
+		mapDescTA.setLineWrap(true);
+		mapDescTA.setWrapStyleWord(true);
+		mapDescTA.setEditable(false);
+		JScrollPane mapDescSP = new JScrollPane(mapDescTA);
+		mapDescSP.setBorder(BorderFactory.createEmptyBorder());
+		mapDescPnl.add(mapDescSP);
+		row = 0;
+		mapPnl.add(sourceBtn, new GridBagConstraints(0, row, 1, 1, 0, 0, GridBagConstraints.LINE_END, GridBagConstraints.NONE, in, pad, pad));
+		mapPnl.add(sourceTF, new GridBagConstraints(1, row, 1, 1, 0, 0, GridBagConstraints.LINE_START, GridBagConstraints.HORIZONTAL, in, pad, pad));
+		mapPnl.add(lblPnl, new GridBagConstraints(0, ++row, 2, 1, 0, 0, GridBagConstraints.CENTER, GridBagConstraints.NONE, in, pad, pad));
+		mapPnl.add(mapDescPnl, new GridBagConstraints(0, ++row, 2, 1, .5, .5, GridBagConstraints.CENTER, GridBagConstraints.BOTH, in, pad, pad));
+		
+		//scaling panel
+		JPanel scalePnl = new JPanel(new GridBagLayout());
+		scalePnl.setBorder(new TitledBorder("Scaling"));
+		JPanel sourcePnl = new JPanel(new GridBagLayout());
+		sourcePnl.setBorder(new TitledBorder("Source Values"));
+		minLbl = new JLabel(minPrompt);
+		meanLbl = new JLabel(meanPrompt);
+		maxLbl = new JLabel(maxPrompt);
+		stdLbl = new JLabel(stdPrompt);
+		sourcePnl.add(Box.createHorizontalStrut(5));
+		sourcePnl.add(minLbl);
+		sourcePnl.add(Box.createHorizontalStrut(30));
+		sourcePnl.add(meanLbl);
+		sourcePnl.add(Box.createHorizontalStrut(30));
+		sourcePnl.add(maxLbl);
+		sourcePnl.add(Box.createHorizontalStrut(30));
+		sourcePnl.add(stdLbl);
+		sourcePnl.add(Box.createHorizontalStrut(5));
+		JLabel scaleLbl = new JLabel("Mode:");
+		Vector<String> scaleVec = new Vector<String>();
+		scaleVec.add(ThreeDCanvas.SCALE_MODE_AUTO_SCALE);
+		scaleVec.add(ThreeDCanvas.SCALE_MODE_RANGE);
+		scaleVec.add(ThreeDCanvas.SCALE_MODE_ST_DEV);
+		scaleVec.add(ThreeDCanvas.SCALE_MODE_ABSOLUTE);
+		scaleBx = new JComboBox<String>(scaleVec);
+		//set the scale mode from the settings object
+		scaleBx.setSelectedItem(settings.scaleMode);
+		scaleBx.addActionListener(scaleListener);
+		JLabel exagLbl = new JLabel("Vertical Exaggeration:");
+		exagTF = new JTextField(5);
+		exagTF.setMinimumSize(new Dimension(60,19));
+		exagTF.setText(settings.zScaleString);
+		exagTF.addFocusListener(exagFocusListener);
+		exagTF.addActionListener(exagListener);
+		JLabel totalExagLbl = new JLabel("Total Exaggeration:");
+		totalExagTF = new JTextField(5);
+		totalExagTF.setEditable(false);
+		totalExagTF.setMinimumSize(new Dimension(70,19));
+		float displayScaleFactor = (settings.scaleUnitsInKm) ? 1000 : 1;  // If we are representing scale on body in km, then need to covert to meters for display (otherwise already in meters)
+		totalExagTF.setText(String.format("%7.3f", Math.abs(Float.parseFloat(settings.zScaleString) *settings.scaleOffset * displayScaleFactor)));
+		
+		row = 0;
+		scalePnl.add(sourcePnl, new GridBagConstraints(0, row, 6, 1, 1, 0, GridBagConstraints.CENTER, GridBagConstraints.HORIZONTAL, in, pad, pad));
+		scalePnl.add(scaleLbl, new GridBagConstraints(0, ++row, 1, 1, 0, 0, GridBagConstraints.LINE_END, GridBagConstraints.NONE, in, pad, pad));
+		scalePnl.add(scaleBx, new GridBagConstraints(1, row, 1, 1, 0, 0, GridBagConstraints.LINE_START, GridBagConstraints.NONE, in, pad, pad));
+		scalePnl.add(exagLbl, new GridBagConstraints(2, row, 1, 1, 0, 0, GridBagConstraints.LINE_END, GridBagConstraints.NONE, in, pad, pad));
+		scalePnl.add(exagTF, new GridBagConstraints(3, row, 1, 1, 0, 0, GridBagConstraints.LINE_START, GridBagConstraints.NONE, in, pad, pad));
+		scalePnl.add(totalExagLbl, new GridBagConstraints(4, row, 1, 1, 0, 0, GridBagConstraints.LINE_END, GridBagConstraints.NONE, in, pad, pad));
+		scalePnl.add(totalExagTF, new GridBagConstraints(5, row, 1, 1, 0, 0, GridBagConstraints.LINE_START, GridBagConstraints.NONE, in, pad, pad));
+		JPanel botPnl = new JPanel(new GridLayout(1,1));
+		botPnl.setBorder(new EmptyBorder(3, 0, 0, 0));
+		botPnl.setBackground(Util.lightBlue);
+		botPnl.add(scalePnl);
+		
+		JPanel subPnl = new JPanel();
+		subPnl.setLayout(new BorderLayout());
+		subPnl.setBorder(new EmptyBorder(0, 5, 5, 5));
+		subPnl.setBackground(Util.lightBlue);
+		subPnl.add(topPnl, BorderLayout.NORTH);
+		subPnl.add(mapPnl, BorderLayout.CENTER);
+		subPnl.add(botPnl, BorderLayout.SOUTH);
+		
+		JPanel mainPnl = new JPanel();
+		mainPnl.setLayout(new BorderLayout());
+		mainPnl.add(menuBar, BorderLayout.NORTH);
+		mainPnl.add(subPnl, BorderLayout.CENTER);
+		
+		return mainPnl;
+	}
+	
+	private AbstractAction saveScreenAct = new AbstractAction("Save scene as PNG...") {
+		public void actionPerformed(ActionEvent e) {
+			//set up the chooser
+			if(pngChooser == null){
+				pngChooser = new JFileChooser();
+				pngChooser.setCurrentDirectory(new File(System.getProperty("user.home")));
+				pngChooser.setDialogTitle("Choose PNG Location");
+				//add filter
+				FileFilter pngFilter = new FileFilter() {
+				    public String getDescription() {
+				        return "Image File (.png)";
+				    }
+				    public boolean accept(File f) {
+				        if (f.isDirectory()) {
+				            return true;
+				        } else {
+				            return f.getName().toLowerCase().endsWith(".png");
+				        }
+				    }
+				};
+				pngChooser.addChoosableFileFilter(pngFilter);
+				pngChooser.setFileFilter(pngFilter);
 			}
-		});
-
-		// enable or disable the directional light.
-		directionalLightCheckBox.addActionListener(new ActionListener() {
-			public void actionPerformed(ActionEvent e) {
-				directionalLightBoolean = !directionalLightBoolean;
-				if (directionalLightBoolean == true) {
-					directionalLightColorButton.setEnabled(true);
-					lightDirectionWidget.setEnabled(true);
-				} else {
-					directionalLightColorButton.setEnabled(false);
-					lightDirectionWidget.setEnabled(false);
+			
+			if(pngChooser.showSaveDialog(getFrame()) == JFileChooser.APPROVE_OPTION){
+				String fileStr = pngChooser.getSelectedFile().getPath();
+				//check to see if user added extension, add it if they didn't
+				if (!fileStr.contains(".png")){
+					fileStr += ".png";
 				}
-				canvasPanel.enableDirectionalLight(directionalLightBoolean);
-				canvasPanel.refresh();
-				viewer.pack();
+				//call save code
+				canvasPanel.savePNG(fileStr);
+				JOptionPane.showMessageDialog(getFrame(),
+						"Screen capture saved successfully!",
+						"Save Success", JOptionPane.INFORMATION_MESSAGE);
 			}
-		});
-
-		// enable or disable the backplane.
-		backplaneCheckBox.addActionListener(new ActionListener() {
-			public void actionPerformed(ActionEvent e) {
-				backplaneBoolean = !backplaneBoolean;
-				canvasPanel.enableBackplane(backplaneBoolean);
-				canvasPanel.refresh();
-				viewer.pack();
-			}
-		});
-
-		// On a re-sample event, just set the scene to "dirty".  The engine
-		// deals with actually re-projecting the scene.
-		// Note that the NumBack thread controls THIS redrawing.
-		resampleButton.addActionListener(new ActionListener() {
-			public void actionPerformed(ActionEvent e) {
-				if (canvasPanel.getAltitudeSource()
-						.equals(MOLA_ALTITUDE_STRING)) {
-					myLayer.setStatus(Color.yellow);
-					resampleButton.setEnabled(false);
-					parent.setVisible(true);
-					parent.setDirty(true);
-				} else {
-					canvasPanel.updateElevationLayer();
-					canvasPanel.refresh();
-					viewer.pack();
-				}
-			}
-		});
-
-		// on a reset event, the scene and the widget are both reset.
-		resetButton.addActionListener(new ActionListener() {
-			public void actionPerformed(ActionEvent e) {
-				exaggerationText.setText(originalExaggeration);
-				canvasPanel.goHome();
-				canvasPanel.refresh();
-				viewer.pack();
-			}
-		});
-
-		// dump the image to a jpeg file.
-		jpegDumpButton.addActionListener(new ActionListener() {
-			public void actionPerformed(ActionEvent e) {
-				canvasPanel.dumpJPG();
-			}
-		});
-
-		// get a new color for the background and apply it.
-		backgroundColorButton.addActionListener(new AbstractAction() {
-			public void actionPerformed(ActionEvent e) {
-				final Color newColor = JColorChooser.showDialog(
-						edu.asu.jmars.Main.getLManager(), backgroundColorButton
-								.getText(), backgroundColorButton.getColor());
-				if (newColor != null) {
-					backgroundColor = newColor;
-					backgroundColorButton.setColor(newColor);
-					canvasPanel.setBackgroundColor(newColor);
-				}
-			}
-		});
-
-		// get a new direction for the DirectionalLight and apply it.
-		directionalLightColorButton.addActionListener(new AbstractAction() {
-			public void actionPerformed(ActionEvent e) {
-				final Color newColor = JColorChooser.showDialog(
-						edu.asu.jmars.Main.getLManager(),
-						directionalLightColorButton.getText(),
-						directionalLightColorButton.getColor());
-				if (newColor != null) {
-					directionalLightColor = newColor;
-					directionalLightColorButton.setColor(newColor);
-					canvasPanel.setDirectionalLightColor(newColor);
-					lightDirectionWidget.setColor(new Color3f(newColor));
-				}
-			}
-		});
-
-		layersComboBox.addActionListener(new ActionListener() {
-			public void actionPerformed(ActionEvent e) {
-				String altitudeSource = (String) layersComboBox
-						.getSelectedItem();
-				// altitudeSource is null if removeAllItems() is called on the 
-				// comboBox, which it is when there is a change to the view list.
-				// So, we gots to check for this.
-				if (altitudeSource == null) {
-					return;
-				}
-				canvasPanel.setAltitudeSource(altitudeSource);
-				if (altitudeSource.equals(MOLA_ALTITUDE_STRING)) {
-					update();
-				} else {
-					canvasPanel.updateElevationLayer();
-					canvasPanel.refresh();
-					viewer.pack();
-				}
-			}
-		});
-
-		if (parent != null && parent.viewman2 != null) {
-			listListener = new ListListener();
-			parent.viewman2.listener.addObserver(listListener);
 		}
-	}
-
-	// Listens for changes in the LManager's view list.  When such changes occur,
-	// the items of the layersComboBox is updated.
-	private class ListListener implements Observer {
-		public void update(Observable o, Object arg) {
-
-			/**
-			 ** Prevents the 3d window from re-appearing when we delete
-			 ** the layer. (added by Michael as a quick fix)
-			 **/
-			if (((ThreeDLView) parent).isDead)
-				return;
-
-			// Get the altitude source to be (possibly) restored
-			String altitudeSource = (String) layersComboBox.getSelectedItem();
-
-			// update the items of the box with the current view list.
-			layersComboBox.removeAllItems();
-			layersComboBox.addItem(MOLA_ALTITUDE_STRING);
-			String[] s = getLayerNames();
-			if (s.length > 0) {
-				for (int i = 0; i < s.length; i++) {
-					if (!s[i].equals("3D viewer")) {
-						layersComboBox.addItem(s[i]);
+	};
+	
+	private AbstractAction saveStlAct = new AbstractAction("Save 3D printer file (stl)...") {
+		public void actionPerformed(ActionEvent e) {
+			//set up the directory chooser
+			if(stlChooser == null){
+				stlChooser = new JFileChooser();
+				stlChooser.setCurrentDirectory(new File(System.getProperty("user.home")));
+				stlChooser.setDialogTitle("Choose STL Destination File");
+				//add filter
+				FileFilter stlFilter = new FileFilter() {
+				    public String getDescription() {
+				        return "3D Printer Files (*.stl)";
+				    }
+				    public boolean accept(File f) {
+				        if (f.isDirectory()) {
+				            return true;
+				        } else {
+				            return f.getName().toLowerCase().endsWith(".stl");
+				        }
+				    }
+				};
+				stlChooser.addChoosableFileFilter(stlFilter);
+				stlChooser.setFileFilter(stlFilter);
+			}
+			
+			int val = stlChooser.showSaveDialog(getFrame());
+			String fileStr = "";
+			String nameStr = "";
+			if(val == JFileChooser.APPROVE_OPTION){
+				fileStr = stlChooser.getSelectedFile().getPath();
+				nameStr = stlChooser.getSelectedFile().getName();
+				//check to see if user added extension, add it if they didn't
+				if (!fileStr.contains(".stl")){
+					fileStr += ".stl";
+				}
+			}
+			
+			//call the save code
+			boolean success = true;
+			try {
+				ThreeDFocus.this.setCursor(Cursor.getPredefinedCursor(Cursor.WAIT_CURSOR));
+				
+				canvasPanel.saveBinarySTL(fileStr, nameStr);
+			} catch (Exception e1) {
+				success = false;
+				log.aprintln("Could not save stl file.");
+				e1.printStackTrace();
+			}
+			
+			ThreeDFocus.this.setCursor(Cursor.getDefaultCursor());
+			
+			//if it saved, tell the user with a little dialog
+			if(success){
+				JOptionPane.showMessageDialog(getFrame(),
+						"3D printer file saved successfully!",
+						"Save Success", JOptionPane.INFORMATION_MESSAGE);
+			}
+		}
+	};
+	
+	private AbstractAction viewControlAct = new AbstractAction("View Controls...") {
+		public void actionPerformed(ActionEvent e) {
+			//build the frame and panel to display
+			// we only need to do this if the frame is null,
+			// otherwise we just show it because it doesn't change.
+			if(controlFrame == null){
+				controlFrame = new JFrame("3D Controls");
+				//hide the frame when it's closed, instead of disposing of it
+				controlFrame.setDefaultCloseOperation(JFrame.DO_NOTHING_ON_CLOSE);
+				controlFrame.addWindowListener(new WindowAdapter() {
+					public void windowClosing(WindowEvent windowEvent){
+						controlFrame.setVisible(false);
 					}
-				}
-			}
+				});
+				
+				//build display
+				JPanel backPnl = new JPanel();
+				backPnl.setLayout(new BorderLayout());
+				backPnl.setBackground(Util.lightBlue);
+				backPnl.setBorder(new EmptyBorder(8,8,8,8));
+				JPanel controlPnl = new JPanel();
+				controlPnl.setLayout(new GridBagLayout());
+				controlPnl.setBorder(BorderFactory.createCompoundBorder(new TitledBorder("3D Controls"), new EmptyBorder(0, 5, 5, 5)));
+				JLabel keyLbl = new JLabel("Key Operations");
+				JLabel mouseLbl = new JLabel("Mouse Operations");
+				Font headerFont = new Font("Dialog", Font.BOLD, 14);
+				Map attributes = headerFont.getAttributes();
+				attributes.put(TextAttribute.UNDERLINE, TextAttribute.UNDERLINE_ON);
+				keyLbl.setFont(headerFont.deriveFont(attributes));
+				mouseLbl.setFont(headerFont.deriveFont(attributes));
+				
+				//Control Labels
+				//key labels
+				JLabel leftLbl = createControlLbl("Translate scene to the left");
+				JLabel rightLbl = createControlLbl("Translate scene to the right");
+				JLabel upLbl = createControlLbl("Translate scene up");
+				JLabel downLbl = createControlLbl("Translate scene down");
+				JLabel plusLbl = createControlLbl("Rotate scene counter-clockwise");
+				JLabel minusLbl = createControlLbl("Rotate scene clockwise");
+				JLabel wLbl = createControlLbl("Translate camera view up");
+				JLabel aLbl = createControlLbl("Translate camera view left");
+				JLabel sLbl = createControlLbl("Translate camera view down");
+				JLabel dLbl = createControlLbl("Translate camera view right");
+				JLabel zLbl = createControlLbl("Zoom out");
+				JLabel ZLbl = createControlLbl("Zoom in");
+				JLabel f5Lbl = createControlLbl("Update scene");
+				//mouse labels
+				JLabel scrollLbl = createControlLbl("Zoom in/out");
+				JLabel ctrlScrollLbl = createControlLbl("Zoom in/out faster");
+				JLabel dragLbl = createControlLbl("Rotate scene about x or y axis");
+				JLabel ctrlDragLbl = createControlLbl("Translate scene");
+				JLabel shiftVertLbl = createControlLbl("Zoom in/out");
+				JLabel shiftHorLbl = createControlLbl("Rotate scene about z axis");
+				
+				row = 0;
+				int pad = 1;
+				Insets in = new Insets(pad,5*pad,pad,5*pad);
+				controlPnl.add(keyLbl, new GridBagConstraints(0, row++, 2, 1, 0, 0, GridBagConstraints.CENTER, GridBagConstraints.NONE, in, pad, pad));
+				controlPnl.add(new JLabel("Arrow Left"), new GridBagConstraints(0, row, 1, 1, 0, 0, GridBagConstraints.LINE_END, GridBagConstraints.NONE, in, pad, pad));
+				controlPnl.add(leftLbl, new GridBagConstraints(1, row++, 1, 1, 0, 0, GridBagConstraints.LINE_START, GridBagConstraints.NONE, in, pad, pad));
+				controlPnl.add(new JLabel("Arrow Right"), new GridBagConstraints(0, row, 1, 1, 0, 0, GridBagConstraints.LINE_END, GridBagConstraints.NONE, in, pad, pad));
+				controlPnl.add(rightLbl, new GridBagConstraints(1, row++, 1, 1, 0, 0, GridBagConstraints.LINE_START, GridBagConstraints.NONE, in, pad, pad));
+				controlPnl.add(new JLabel("Arrow Up"), new GridBagConstraints(0, row, 1, 1, 0, 0, GridBagConstraints.LINE_END, GridBagConstraints.NONE, in, pad, pad));
+				controlPnl.add(upLbl, new GridBagConstraints(1, row++, 1, 1, 0, 0, GridBagConstraints.LINE_START, GridBagConstraints.NONE, in, pad, pad));
+				controlPnl.add(new JLabel("Arrow Down"), new GridBagConstraints(0, row, 1, 1, 0, 0, GridBagConstraints.LINE_END, GridBagConstraints.NONE, in, pad, pad));
+				controlPnl.add(downLbl, new GridBagConstraints(1, row++, 1, 1, 0, 0, GridBagConstraints.LINE_START, GridBagConstraints.NONE, in, pad, pad));
+				controlPnl.add(new JLabel("+"), new GridBagConstraints(0, row, 1, 1, 0, 0, GridBagConstraints.LINE_END, GridBagConstraints.NONE, in, pad, pad));
+				controlPnl.add(plusLbl, new GridBagConstraints(1, row++, 1, 1, 0, 0, GridBagConstraints.LINE_START, GridBagConstraints.NONE, in, pad, pad));
+				controlPnl.add(new JLabel("-"), new GridBagConstraints(0, row, 1, 1, 0, 0, GridBagConstraints.LINE_END, GridBagConstraints.NONE, in, pad, pad));
+				controlPnl.add(minusLbl, new GridBagConstraints(1, row++, 1, 1, 0, 0, GridBagConstraints.LINE_START, GridBagConstraints.NONE, in, pad, pad));
+				controlPnl.add(new JLabel("w"), new GridBagConstraints(0, row, 1, 1, 0, 0, GridBagConstraints.LINE_END, GridBagConstraints.NONE, in, pad, pad));
+				controlPnl.add(wLbl, new GridBagConstraints(1, row++, 1, 1, 0, 0, GridBagConstraints.LINE_START, GridBagConstraints.NONE, in, pad, pad));
+				controlPnl.add(new JLabel("a"), new GridBagConstraints(0, row, 1, 1, 0, 0, GridBagConstraints.LINE_END, GridBagConstraints.NONE, in, pad, pad));
+				controlPnl.add(aLbl, new GridBagConstraints(1, row++, 1, 1, 0, 0, GridBagConstraints.LINE_START, GridBagConstraints.NONE, in, pad, pad));
+				controlPnl.add(new JLabel("s"), new GridBagConstraints(0, row, 1, 1, 0, 0, GridBagConstraints.LINE_END, GridBagConstraints.NONE, in, pad, pad));
+				controlPnl.add(sLbl, new GridBagConstraints(1, row++, 1, 1, 0, 0, GridBagConstraints.LINE_START, GridBagConstraints.NONE, in, pad, pad));
+				controlPnl.add(new JLabel("d"), new GridBagConstraints(0, row, 1, 1, 0, 0, GridBagConstraints.LINE_END, GridBagConstraints.NONE, in, pad, pad));
+				controlPnl.add(dLbl, new GridBagConstraints(1, row++, 1, 1, 0, 0, GridBagConstraints.LINE_START, GridBagConstraints.NONE, in, pad, pad));
+				controlPnl.add(new JLabel("Z"), new GridBagConstraints(0, row, 1, 1, 0, 0, GridBagConstraints.LINE_END, GridBagConstraints.NONE, in, pad, pad));
+				controlPnl.add(ZLbl, new GridBagConstraints(1, row++, 1, 1, 0, 0, GridBagConstraints.LINE_START, GridBagConstraints.NONE, in, pad, pad));
+				controlPnl.add(new JLabel("z"), new GridBagConstraints(0, row, 1, 1, 0, 0, GridBagConstraints.LINE_END, GridBagConstraints.NONE, in, pad, pad));
+				controlPnl.add(zLbl, new GridBagConstraints(1, row++, 1, 1, 0, 0, GridBagConstraints.LINE_START, GridBagConstraints.NONE, in, pad, pad));
+				controlPnl.add(new JLabel("F5"), new GridBagConstraints(0, row, 1, 1, 0, 0, GridBagConstraints.LINE_END, GridBagConstraints.NONE, in, pad, pad));
+				controlPnl.add(f5Lbl, new GridBagConstraints(1, row++, 1, 1, 0, 0, GridBagConstraints.LINE_START, GridBagConstraints.NONE, in, pad, pad));
+				controlPnl.add(Box.createVerticalStrut(10), new GridBagConstraints(0, row++, 1, 1, 0, 0, GridBagConstraints.CENTER, GridBagConstraints.NONE, in, pad, pad));
+				controlPnl.add(mouseLbl, new GridBagConstraints(0, row++, 2, 1, 0, 0, GridBagConstraints.CENTER, GridBagConstraints.NONE, in, pad, pad));
+				controlPnl.add(new JLabel("Scroll Wheel"), new GridBagConstraints(0, row, 1, 1, 0, 0, GridBagConstraints.LINE_END, GridBagConstraints.NONE, in, pad, pad));
+				controlPnl.add(scrollLbl, new GridBagConstraints(1, row++, 1, 1, 0, 0, GridBagConstraints.LINE_START, GridBagConstraints.NONE, in, pad, pad));
+				controlPnl.add(new JLabel("Ctrl + Scroll Wheel"), new GridBagConstraints(0, row, 1, 1, 0, 0, GridBagConstraints.LINE_END, GridBagConstraints.NONE, in, pad, pad));
+				controlPnl.add(ctrlScrollLbl, new GridBagConstraints(1, row++, 1, 1, 0, 0, GridBagConstraints.LINE_START, GridBagConstraints.NONE, in, pad, pad));
+				controlPnl.add(new JLabel("Click & Drag"), new GridBagConstraints(0, row, 1, 1, 0, 0, GridBagConstraints.LINE_END, GridBagConstraints.NONE, in, pad, pad));
+				controlPnl.add(dragLbl, new GridBagConstraints(1, row++, 1, 1, 0, 0, GridBagConstraints.LINE_START, GridBagConstraints.NONE, in, pad, pad));
+				controlPnl.add(new JLabel("Ctrl + Click & Drag"), new GridBagConstraints(0, row, 1, 1, 0, 0, GridBagConstraints.LINE_END, GridBagConstraints.NONE, in, pad, pad));
+				controlPnl.add(ctrlDragLbl, new GridBagConstraints(1, row++, 1, 1, 0, 0, GridBagConstraints.LINE_START, GridBagConstraints.NONE, in, pad, pad));
+				controlPnl.add(new JLabel("Shift + Click & Drag Vert."), new GridBagConstraints(0, row, 1, 1, 0, 0, GridBagConstraints.LINE_END, GridBagConstraints.NONE, in, pad, pad));
+				controlPnl.add(shiftVertLbl, new GridBagConstraints(1, row++, 1, 1, 0, 0, GridBagConstraints.LINE_START, GridBagConstraints.NONE, in, pad, pad));
+				controlPnl.add(new JLabel("Shift + Click & Drag Horz."), new GridBagConstraints(0, row, 1, 1, 0, 0, GridBagConstraints.LINE_END, GridBagConstraints.NONE, in, pad, pad));
+				controlPnl.add(shiftHorLbl, new GridBagConstraints(1, row++, 1, 1, 0, 0, GridBagConstraints.LINE_START, GridBagConstraints.NONE, in, pad, pad));
 
-			// restore the altitude source (if that's possible).
-			if (altitudeSource != null) {
-				layersComboBox.setSelectedItem(altitudeSource);
+				backPnl.add(controlPnl);
+				//add to frame
+				controlFrame.setContentPane(backPnl);
+				controlFrame.pack();
+				controlFrame.setLocationRelativeTo(getFrame());
+			}
+			//display frame
+			controlFrame.setVisible(true);
+		}
+	};
+	
+	private JLabel createControlLbl(String text){
+		JLabel label = new JLabel(text);
+		label.setFont(descripFont);
+		return label;
+	}
+	
+	private AbstractAction wTutorialAct = new AbstractAction("View Written Tutorial...") {
+		public void actionPerformed(ActionEvent e) {
+			try {
+				Util.launchBrowser("https://jmars.mars.asu.edu/3d-layer");
+			} catch (Exception e1) {
+				log.aprintln(e1);
 			}
 		}
-	}
+	};
+	
+	private AbstractAction vTutorialAct = new AbstractAction("View Video Tutorial...") {
+		public void actionPerformed(ActionEvent e) {
+			try {
+				Util.launchBrowser("https://jmars.mars.asu.edu/play-video?videoId=7");
+			} catch (Exception e1) {
+				log.aprintln(e1);
+			}
+			
+		}
+	};
+	
+	private AbstractAction updateAct = new AbstractAction("Update Scene") {
+		public void actionPerformed(ActionEvent e) {
+			//if lighting is on, make sure to update the light settings first
+			if(lightChk.isSelected()){
+				Vector3f lightDir = lightWidget.getLightDirection();
+				settings.directionalLightDirection = lightDir;
+				canvasPanel.setDirectionalLightDirection(lightDir.x, lightDir.y, lightDir.z);
+			}
+			update();
+		}
+	};
+	
+	private AbstractAction resetCameraAct = new AbstractAction("Reset Camera") {
+		public void actionPerformed(ActionEvent e) {
+			settings.directionalLightBoolean = false;
+			settings.directionalLightDirection = new Vector3f(0.0f, 0.0f, 20.0f);
+			settings.directionalLightColor = new Color(128, 128, 128);
+			settings.backgroundColor = new Color(0, 0, 0);
+			backgroundCBtn.setColor(settings.backgroundColor);
+			backgroundCBtn.setBackground(settings.backgroundColor);
+			settings.backplaneBoolean = false;
+			backplaneChk.setSelected(settings.backplaneBoolean);
+			lightCBtn.setColor(settings.directionalLightColor);
+			lightCBtn.setEnabled(false);
+			lightWidget.setColor(new Color3f(settings.directionalLightColor));
+			lightWidget.setLightDirection(settings.directionalLightDirection.x,
+					settings.directionalLightDirection.y, settings.directionalLightDirection.z);
+			lightWidget.repaint();
+			lightChk.setSelected(false);
+			settings.alpha = 0f; 
+			settings.beta = 0f;	
+			settings.gamma = 0f; 
+			settings.zoomFactor = 0.88f;
+		    settings.transX = 0f;
+		    settings.transY = 0f;
+		    settings.transZ = 0f;
+		    settings.xOffset = 0f; // JNN: added, should actually be at center of map, see ThreeDPanel's display()
+		    settings.yOffset = 0f; // JNN: added, should actually be at center of map, see ThreeDPanel's display()
+		    settings.zScaleString = "1.0"; //originalExaggeration; // JNN: modified
+		    settings.scaleOffset = (float) Config.get(Util.getProductBodyPrefix()+Config.CONFIG_THREED_SCALE_OFFSET, -0.002f);
+		    settings.scaleUnitsInKm = (settings.scaleOffset < 0.1) ? true : false;
+			exagTF.setText(settings.zScaleString);
+		    canvasPanel.goHome(settings);
+			parent.setVisible(true);
+			parent.setDirty(true);
+		}
+	};
+	
+	//Display the NumericMapSourceDialog to allow the user to select a source.
+	//Update text fields and the 3d panel when the new source is set.
+	private AbstractAction sourceAct = new AbstractAction("Set Vertical Source...") {
+		public void actionPerformed(ActionEvent e) {
+			MapSource altitudeSource = NumericMapSourceDialog.getUserSelectedSources(ThreeDFocus.this, false).get(0);
+			//source can be null if the user cancels out of the dialog
+			if(altitudeSource!=null){
+				//update elevation source
+				canvasPanel.setAltitudeSource(altitudeSource);
+				myLayer.setElevationSource(altitudeSource);
+				settings.setMapSource(altitudeSource);
+				//must call this so the lview requests new tiles
+				// with the new elevation source for the canvas to use
+				parent.setDirty(true);
+				
+				//update 3d canvas and focus panel
+				update();
+			}
+		}
+	};
+	
+	private ActionListener backplaneListener = new ActionListener() {
+		public void actionPerformed(ActionEvent e) {
+			settings.backplaneBoolean = backplaneChk.isSelected();
+			canvasPanel.enableBackplane(settings.backplaneBoolean);
+			viewer.pack();
+			canvasPanel.refresh();
+		}
+	};
+	
+	private ActionListener backgroundColorListener = new ActionListener() {
+		public void actionPerformed(ActionEvent e) {
+			final Color newColor = JColorChooser.showDialog(
+						Util.getDisplayFrame(ThreeDFocus.this), 
+						backgroundCBtn.getText(),
+						backgroundCBtn.getColor());
+			if (newColor != null) {
+				settings.backgroundColor = newColor;
+				backgroundCBtn.setColor(newColor);
+				backgroundCBtn.setBackground(newColor);
+				canvasPanel.setBackgroundColor(newColor);
+				viewer.pack();
+				canvasPanel.refresh();
+			}
+		}
+	};
+	
+	private ActionListener lightListener = new ActionListener() {
+		public void actionPerformed(ActionEvent e) {
+			settings.directionalLightBoolean = !settings.directionalLightBoolean;
+			if (settings.directionalLightBoolean == true) {
+				lightCBtn.setEnabled(true);
+				lightWidget.setEnabled(true);
+			} else {
+				lightCBtn.setEnabled(false);
+				lightWidget.setEnabled(false);
+			}
+			lightWidget.repaint();
+			canvasPanel.enableDirectionalLight(settings.directionalLightBoolean);
+			canvasPanel.refresh();
+			viewer.pack();
+		}
+	};
+	
+	private ActionListener lightColorListener = new ActionListener() {
+		public void actionPerformed(ActionEvent e) {
+			final Color newColor = JColorChooser.showDialog(
+			Util.getDisplayFrame(ThreeDFocus.this),
+			lightCBtn.getText(),
+			lightCBtn.getColor());
+			if (newColor != null) {
+				settings.directionalLightColor = newColor;
+				lightCBtn.setColor(newColor);
+				canvasPanel.setDirectionalLightColor(newColor);
+				lightWidget.setColor(new Color3f(newColor));
+				lightWidget.repaint();
+				canvasPanel.refresh();
+				viewer.pack();
+			}
+		}
+	};
 
+	private ActionListener scaleListener = new ActionListener() {
+		public void actionPerformed(ActionEvent e) {
+			switch((String)scaleBx.getSelectedItem()){
+			case ThreeDCanvas.SCALE_MODE_ST_DEV: // from standard deviation
+				settings.scaleMode = ThreeDCanvas.SCALE_MODE_ST_DEV;
+				scaleBx.setToolTipText("Divides the data by the standard deviation");
+				break;
+			case ThreeDCanvas.SCALE_MODE_RANGE: // from range of values
+				settings.scaleMode = ThreeDCanvas.SCALE_MODE_RANGE;
+				scaleBx.setToolTipText("Multiplies the data by 100% and divides by the range");
+				break;
+			case ThreeDCanvas.SCALE_MODE_AUTO_SCALE: // from auto scale
+				settings.scaleMode = ThreeDCanvas.SCALE_MODE_AUTO_SCALE;
+				scaleBx.setToolTipText("JMARS best guess for visual effect");
+				break;
+			case ThreeDCanvas.SCALE_MODE_ABSOLUTE: // from absolute values
+				settings.scaleMode = ThreeDCanvas.SCALE_MODE_ABSOLUTE;
+				scaleBx.setToolTipText("Uses source data unmodified");
+				break;
+			default: // unknown selection
+				settings.scaleMode = ThreeDCanvas.SCALE_MODE_AUTO_SCALE;
+				scaleBx.setToolTipText("JMARS best guess for visual effect");
+				log.aprintln("Unknown scale mode. Setting to default");
+				break;
+			}
+			canvasPanel.setScaleMode(settings.scaleMode, exagTF.getText());
+			//update the scene by triggering the lview to get new mapdata
+			parent.setDirty(true);
+			updateExaggeration();
+			update();
+		}
+	};
+	
+	private ActionListener exagListener = new ActionListener() {
+		public void actionPerformed(ActionEvent e) {
+			updateExaggeration();
+			update();
+		}
+	};
+	
+	private FocusListener exagFocusListener = new FocusListener() {
+		public void focusLost(FocusEvent e) {
+			updateExaggeration();
+			update();
+		}
+		
+		public void focusGained(FocusEvent e) {
+		}
+	};
+
+	private void updateExaggeration(){
+		String prevExag = settings.zScaleString;
+		
+		//make sure it's a valid number
+		try{
+			String newExag = exagTF.getText();
+			Float.parseFloat(newExag);
+			
+			settings.zScaleString = newExag;
+			
+		}catch(NumberFormatException e){
+			log.aprintln("Invalid exaggeration entry");
+			exagTF.setText(prevExag);
+		}
+		
+		// Set Total Exaggeration field
+		float total = Math.abs(settings.scaleOffset);
+		if (settings.scaleUnitsInKm) {
+			//Convert back to meters to make sense to user
+			total = total * 1000;
+		}
+		totalExagTF.setText(String.format("%7.3f",total));
+
+	}
+	
+	private void updateMapAndScaleInfo(MapSource source){
+		//update the source title
+		String sourceTxt = source.getTitle();
+		sourceTF.setText(sourceTxt);
+		
+		//update the source description
+		if (source.getAbstract() != null) {
+			mapDescTA.setText(source.getAbstract());
+			mapDescTA.setCaretPosition(0);
+		} else {
+			mapDescTA.setText("");
+		}
+		
+		//update the source ppd
+		ppdLbl.setText(ppdPrompt+source.getMaxPPD());
+		
+		//update the source units
+		if(source.getUnits() != null){
+			unitLbl.setText(unitPrompt+source.getUnits());
+		}else{
+			unitLbl.setText(unitPrompt+"Unavailable");
+		}
+		
+		//update ignore value
+		double[] vals = source.getIgnoreValue();
+		if(vals != null){
+			ignoreLbl.setText(ignorePrompt+vals[0]);
+		}else{
+			ignoreLbl.setText(ignorePrompt+"None");
+		}
+		
+		//update the mean/min/max/std values
+		Elevation e = canvasPanel.getElevation();
+		if(e != null){
+			DecimalFormat df = new DecimalFormat("#0.###");
+			minLbl.setText(minPrompt+df.format(e.getMinAltitude()));
+			meanLbl.setText(meanPrompt+df.format(e.getMean()));
+			maxLbl.setText(maxPrompt+df.format(e.getMaxAltitude()));
+			stdLbl.setText(stdPrompt+df.format(e.getStandardDeviation()));
+		}
+	}
+	
 	/** This updates the scene with new elevation data. */
 	public void update() {
 		myLayer.setStatus(Color.yellow);
 
 		// Do whatever needs to be done to re-render the scene
-		canvasPanel.updateElevationMOLA();
+		canvasPanel.updateElevationSource();
+		canvasPanel.setScale(new Float(settings.zScaleString));
 		canvasPanel.refresh();
 
 		/**
 		 ** Prevents the 3d window from re-appearing when we delete
 		 ** the layer. (added by Michael as a quick fix)
 		 **/
-		if (parent.isDead)
-			return;
+		if (((ThreeDLView)parent).isDead)
+			return;//
 
 		viewer.pack();
 		viewer.setVisible(true);
-
+				
 		// clean up
-		resampleButton.setEnabled(true);
-		exaggerationText.setEnabled(true);
+		updateBtn.setEnabled(true);
+		exagTF.setEnabled(true);
+		parent.setVisible(true); // JNN: added
 		parent.setDirty(false);
 
+		//populate map and scale panels with info from intial source
+		updateMapAndScaleInfo(myLayer.getElevationSource());
+		
 		myLayer.setStatus(Util.darkGreen);
 	}
+	
+	public StartupParameters getSettings() {
+		
+		if (canvasPanel != null) {			
+			settings = canvasPanel.getSettings();
+		} 	
+		return settings;
+	}
 
-	// This is an implementation of the abstract LightDirectionWidget class.  When
-	// the light is moved around in the widget, the setLightDirection method is called,
-	// which then changes the direction of the light in the scene.
-	private class DirectionalLightWidget extends LightDirectionWidget {
-		void setLightDirection(float x, float y, float z) {
-			directionalLightDirection.x = x;
-			directionalLightDirection.y = y;
-			directionalLightDirection.z = z;
-			canvasPanel.setDirectionalLightDirection(x, y, z);
+	/**
+	 * called by the focus panel whenever the lview is "cleaned up".
+	 */
+	public void destroyViewer() {
+		if (lightWidget != null) {
+			lightWidget.destroy();
+			lightWidget = null;
+		}
+		if (canvasPanel != null) {
+			canvasPanel.setVisible(false);
+			viewer.getContentPane().remove(canvasPanel);
+			canvasPanel.cleanup();
+			canvasPanel = null;
+			viewer.dispose();
+			viewer = null;
+		}
+		if(controlFrame != null){
+			controlFrame.dispose();
 		}
 	}
 
+	
 	// An inner class that displays a button and allows the user to change a color of some
 	// component or other.  It is used in this application to change the color of the directional
 	// light and the color of the background.
@@ -517,6 +858,7 @@ public class ThreeDFocus extends FocusPanel {
 
 		public ColorButton(String l, Color c) {
 			super(l);
+			setContentAreaFilled(true);
 			setColor(c);
 			setFocusPainted(false);
 		}
@@ -538,37 +880,5 @@ public class ThreeDFocus extends FocusPanel {
 		public Color getColor() {
 			return color;
 		}
-	}
-
-	private void initSettings(ThreeDSettings s) {
-		directionalLightBoolean = s.directionalLightBoolean;
-		directionalLightDirection = s.directionalLightDirection;
-		directionalLightColor = s.directionalLightColor;
-		backgroundColor = s.backgroundColor;
-		zScaleString = s.zScaleString;
-		backplaneBoolean = s.backplaneBoolean;
-	}
-
-	public ThreeDSettings getSettings() {
-		ThreeDSettings s = new ThreeDSettings();
-		s.directionalLightBoolean = directionalLightBoolean;
-		s.directionalLightDirection = directionalLightDirection;
-		s.directionalLightColor = directionalLightColor;
-		s.backgroundColor = backgroundColor;
-		s.zScaleString = zScaleString;
-		s.backplaneBoolean = backplaneBoolean;
-		return s;
-	}
-
-	public String[] getLayerNames() {
-		List<String> list = new ArrayList<String>();
-		if (parent != null && parent.viewman2 != null) {
-			Iterator iter = parent.viewman2.viewList.iterator();
-			while (iter.hasNext()) {
-				Layer.LView view = (Layer.LView) iter.next();
-				list.add(view.getName());
-			}
-		}
-		return list.toArray(new String[0]);
 	}
 }

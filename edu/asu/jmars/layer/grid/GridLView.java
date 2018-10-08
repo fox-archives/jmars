@@ -1,83 +1,116 @@
-// Copyright 2008, Arizona Board of Regents
-// on behalf of Arizona State University
-// 
-// Prepared by the Mars Space Flight Facility, Arizona State University,
-// Tempe, AZ.
-// 
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-// 
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU General Public License for more details.
-// 
-// You should have received a copy of the GNU General Public License
-// along with this program.  If not, see <http://www.gnu.org/licenses/>.
-
-
 package edu.asu.jmars.layer.grid;
 
 import java.awt.BasicStroke;
 import java.awt.Color;
 import java.awt.Graphics2D;
 import java.awt.GridLayout;
-import java.awt.Point;
 import java.awt.Rectangle;
 import java.awt.RenderingHints;
 import java.awt.Toolkit;
 import java.awt.event.ActionEvent;
 import java.awt.event.ActionListener;
-import java.awt.event.MouseEvent;
 import java.awt.geom.GeneralPath;
 import java.awt.geom.Line2D;
-import java.awt.geom.PathIterator;
 import java.awt.geom.Point2D;
 import java.awt.geom.Rectangle2D;
-import java.text.DecimalFormat;
 import java.util.ArrayList;
+import java.util.List;
 
+import javax.swing.AbstractAction;
+import javax.swing.Action;
 import javax.swing.BorderFactory;
+import javax.swing.Box;
+import javax.swing.BoxLayout;
 import javax.swing.JButton;
 import javax.swing.JCheckBox;
 import javax.swing.JColorChooser;
+import javax.swing.JComboBox;
+import javax.swing.JLabel;
 import javax.swing.JOptionPane;
 import javax.swing.JPanel;
 import javax.swing.JTextField;
-import javax.swing.SwingUtilities;
-import javax.swing.event.MouseInputAdapter;
-import javax.swing.event.MouseInputListener;
+import javax.swing.UIManager;
 
 import edu.asu.jmars.Main;
 import edu.asu.jmars.ProjObj;
 import edu.asu.jmars.layer.FocusPanel;
 import edu.asu.jmars.layer.Layer;
+import edu.asu.jmars.layer.scale.ScaleLView;
+import edu.asu.jmars.layer.scale.ScaleParameters;
 import edu.asu.jmars.swing.PasteField;
+import edu.asu.jmars.util.Config;
 import edu.asu.jmars.util.DebugLog;
-import edu.asu.jmars.util.Util;
+import edu.asu.jmars.util.HighResExport;
 
 public class GridLView extends Layer.LView
  {
     private static DebugLog log = DebugLog.instance();
+    
+    private final Color majorLinesColor = new Color(Config.get("gridcolor", 0));
+    
+    GridParameters parms = null; // Used to save user grid selections across a save/restore of session or layer.
+    GridSettings   major = new GridSettings(majorLinesColor, 10.0, true, true, 1);
+    GridSettings   minor = new GridSettings(Color.gray, 2.0, false, false, 1);
+    SettingsPanel  majorSettings = null;
+    SettingsPanel  minorSettings = null;  
 
-	private class GridSettings
+    // These constants make using the visibility member of GridSetings more understandable.
+    static final boolean  MAIN   = true;
+    static final boolean  PANNER = false;
+
+    public GridLView(boolean main, Layer layerParent, GridParameters params) {
+        super(layerParent);
+        setBufferCount(1);
+        this.parms = params;
+        copyParmsToSettings();
+    }
+
+	private void copyParmsToSettings() {
+        major.setColor(new Color(parms.majorColor));
+        major.setLineWidth(parms.majorWidth);
+        major.setSpacing(parms.majorSpacing);
+        major.setVisible(MAIN, parms.majorMainVisible);
+        major.setVisible(PANNER, parms.majorPannerVisible);
+        
+        minor.setColor(new Color(parms.minorColor));
+        minor.setLineWidth(parms.minorWidth);
+        minor.setSpacing(parms.minorSpacing);
+        minor.setVisible(MAIN, parms.minorMainVisible);
+        minor.setVisible(PANNER, parms.minorPannerVisible);
+    }
+
+    public void copySettingsToParms() {
+        parms.majorColor         = major.getColor().getRGB();
+        parms.majorWidth         = major.getLineWidth();
+        parms.majorSpacing       = major.getSpacing();
+        parms.majorMainVisible   = major.isVisible(MAIN);
+        parms.majorPannerVisible = major.isVisible(PANNER);
+        
+        parms.minorColor         = minor.getColor().getRGB();
+        parms.minorWidth         = minor.getLineWidth();
+        parms.minorSpacing       = minor.getSpacing();
+        parms.minorMainVisible   = minor.isVisible(MAIN);
+        parms.minorPannerVisible = minor.isVisible(PANNER);        
+    }
+
+    private static class GridSettings
 	 {
-		private Color   color;
-		private double  spacing;
-		private boolean[] visible = new boolean[2];
-
+		private Color     color;
+		private double    spacing;
+		private boolean[] visible = new boolean[2]; // false=Main View; true=Panner View
+		private int       lineWidth; 
+		
 		// Cached data - same for both main & panner views
 		private double cachedSpacing = 0;
 		private ProjObj cachedProj = null;
 		private GeneralPath[] cachedLines = new GeneralPath[0];
 		
-		public GridSettings(Color color, double spacing, boolean mainVisible, boolean pannerVisible){
+		public GridSettings(Color color, double spacing, boolean mainVisible, boolean pannerVisible, int lineWidth){
 			this.color = color;
 			this.spacing = spacing;
 			this.visible[0] = mainVisible;
 			this.visible[1] = pannerVisible;
+			this.lineWidth = lineWidth; 
 		}
 		
 		public synchronized void setColor(Color newColor){
@@ -86,7 +119,7 @@ public class GridLView extends Layer.LView
 		public synchronized Color getColor(){
 			return color;
 		}
-		
+
 		public synchronized void setSpacing(double newSpacing){
 			spacing = newSpacing;
 		}
@@ -100,7 +133,14 @@ public class GridLView extends Layer.LView
 		public synchronized void setVisible(boolean main, boolean visibility){
 			visible[main? 0: 1] = visibility;
 		}
-		
+
+		public synchronized void setLineWidth(int newLineWidth){
+			lineWidth = newLineWidth;
+		}
+		public synchronized int getLineWidth(){
+			return lineWidth;
+		}
+
 		public GeneralPath[] getLines(ProjObj proj){
 			if (cachedSpacing != spacing || cachedProj != proj){
 				if (spacing == 0)
@@ -115,154 +155,24 @@ public class GridLView extends Layer.LView
 			return cachedLines;
 		}
 	 }
-
-	private GridSettings major = new GridSettings(Color.black, 10.0, true, true);
-	private GridSettings minor = new GridSettings(Color.gray, 2.0, false, false);
-
-	/**
-        * Override to update view specifc settings
-        */
-	protected void updateSettings(boolean saving)
-	 {
-		boolean isMain = getChild() == null;
-		
-		if ( saving ) {
-
-		   viewSettings.put("major", new UserGridSettings(major.getColor(), major.getSpacing(), major.isVisible(isMain)));
-		   viewSettings.put("minor", new UserGridSettings(minor.getColor(), minor.getSpacing(), minor.isVisible(isMain)));
-
-		} else {
-
-		   if ( viewSettings.containsKey("major") ) {
-
-			  UserGridSettings maj = (UserGridSettings) viewSettings.get("major");
-			  major.setColor(new Color(maj.rgbcolor.intValue()));
-			  major.setSpacing(maj.spacing.doubleValue());
-			  major.setVisible(isMain, maj.visible.booleanValue());
-
-		   }
-
-		   if ( viewSettings.containsKey("minor") ) {
-			  UserGridSettings min = (UserGridSettings) viewSettings.get("minor");
-			  minor.setColor(new Color(min.rgbcolor.intValue()));
-			  minor.setSpacing(min.spacing.doubleValue());
-			  minor.setVisible(isMain, min.visible.booleanValue());
-		   }
-		}
-	 }
-
-	/**
-	 ** Draws a screen-coordinate line, using a spatial graphics
-	 ** context
-	 **/
-	private void drawLine(int x1, int y1,
-						  int x2, int y2)
-	 {
-		Graphics2D g2 = getOnScreenG2();
-		prepare(g2);
-		g2.setXORMode(Color.gray);
-		g2.setStroke(new BasicStroke(0));
-		Graphics2D g2s = getProj().createSpatialGraphics(g2);
-		Point2D down = getProj().screen.toSpatial(x1, y1);
-		Point2D curr = getProj().screen.toSpatial(x2, y2);
-		g2s.draw(new Line2D.Double(down, curr));
-		g2s.dispose();
-	 }
-
+	
 	public GridLView()
 	 {
 		super(null);
-
-		MouseInputListener mouseHandler =
-			new MouseInputAdapter()
-			 {
-				Point mouseDown = null;
-
-				public void mousePressed(MouseEvent e)
-				 {
-					if(!SwingUtilities.isRightMouseButton(e))
-						mouseDown = e.getPoint();
-				 }
-
-				public void mouseReleased(MouseEvent e)
-				 {
-					if(mouseLast != null)
-					 {
-						drawLine(mouseDown.x, mouseDown.y,
-								 mouseLast.x, mouseLast.y);
-						mouseLast = null;
-					 }
-					mouseDown = null;
-				 }
-
-				DecimalFormat f = new DecimalFormat("0.00");
-
-				Point mouseLast = null;
-				public void mouseDragged(MouseEvent e)
-				 {
-					// Don't catch menu popup drags
-					if(mouseDown == null)
-						return;
-
-					Point mouseCurr = e.getPoint();
-
-					if(mouseLast != null)
-						drawLine(mouseDown.x, mouseDown.y,
-								 mouseLast.x, mouseLast.y);
-					drawLine(mouseDown.x, mouseDown.y,
-							 mouseCurr.x, mouseCurr.y);
-
-					Point2D down = getProj().screen.toWorld(mouseDown);
-					Point2D curr = getProj().screen.toWorld(mouseCurr);
-					down = Main.PO.convWorldToSpatial(down);
-					curr = Main.PO.convWorldToSpatial(curr);
-
-					double[] distances = Util.angularAndLinearDistanceS(down, curr, getProj());
-					Main.setStatus(Util.formatSpatial(curr) + "\tdist = " +
-								   f.format(distances[0]) + "deg = " +
-								   f.format(distances[1]) + "km");
-
-					mouseLast = mouseCurr;
-				 }
-/*
- * DEBUG CODE for examining the GridDataStore at runtime.
- *
-				public void mouseClicked(MouseEvent e)
-				 {
-					SpatialGraphicsSpOb g2spatial =
-						(SpatialGraphicsSpOb) getProj().createSpatialGraphics(
-							getOffScreenG2());
-					GridDataStore grid = g2spatial.grid;
-					Point cellIdx = grid.getCellPoint(
-						getProj().screen.toWorld(e.getPoint()));
-					log.aprintln("---------- " + cellIdx.x + ", " + cellIdx.y);
-					log.aprintln(grid.getCell(cellIdx.x, cellIdx.y));
-					log.aprintln("gridX = " + g2spatial.minGridX + " to " + g2spatial.maxGridX);
-					log.aprintln("gridY = " + g2spatial.minGridY + " to " + g2spatial.maxGridY);
-				 }
-*/
-			 }
-			;
-		addMouseListener(mouseHandler);
-		addMouseMotionListener(mouseHandler);
 	 }
-
-         /**
-          * This is good - build the focus panel on demand instead of during the view's constructor
-          * That way, the saved session variables get propogated properly.
-          */
-	public FocusPanel getFocusPanel()
-	 {
-		if(focusPanel == null)
-		 {
-			focusPanel = new FocusPanel(this);
-			if(getChild() != null)
-				focusPanel.add(new GridPanel());
-		 }
-		return  focusPanel;
-	 }
-
-	private static final int PRECISION = 1 << 16;
+	
+	
+	/**
+	 * This is good - build the focus panel on demand instead of during the view's constructor
+	 * That way, the saved session variables get propagated properly.
+	 */
+	public FocusPanel getFocusPanel() {
+		if (focusPanel == null) {
+			focusPanel = new FocusPanel(this, true);
+			focusPanel.add("Adjustments",new GridPanel());
+		}
+		return focusPanel;
+	}
 
 	/**
 	 ** Layer-less view; simply returns null, since it's never used.
@@ -288,6 +198,7 @@ public class GridLView extends Layer.LView
 	 {
 		GridLView newLView = new GridLView();
 		
+		newLView.parms = parms;
 		// Share the major/minor settings from the very first LView
 		newLView.major = major;
 		newLView.minor = minor;
@@ -332,7 +243,16 @@ public class GridLView extends Layer.LView
 	 {
 		synchronized(redrawLock)
 		 {
-			clearOffScreen();
+			if(!oldViewChange(id)) {
+				clearOffScreen();
+			} else {
+				return;
+			}
+			
+			if (!isAlive()) {
+				return;
+			}
+			
 			// Determine how many periods to draw (360-degree horizontal boxes)
 			double minX = viewman.getProj().getWorldWindow().getMinX();
 			double maxX = viewman.getProj().getWorldWindow().getMaxX();
@@ -346,7 +266,7 @@ public class GridLView extends Layer.LView
 			prepare(g2);
 			if(g2 == null)
 				return;
-			g2.setStroke(getProj().getWorldStroke(1));
+
 			Graphics2D[] copies = new Graphics2D[count];
 			for(int i=0; i<count; i++)
 			 {
@@ -365,12 +285,12 @@ public class GridLView extends Layer.LView
 	 }
 	private Object redrawLock = new Object();
 
-	private GeneralPath[] generateLines(double spacing){
+	private static GeneralPath[] generateLines(double spacing){
 		log.println("spacing = " + spacing);
 		log.printStack(3);
 		int expected = (int) Math.ceil(360/spacing + 180/spacing);
 		log.println("Expecting " + expected + " paths");
-		ArrayList paths = new ArrayList(expected);
+		List<GeneralPath> paths = new ArrayList<GeneralPath>(expected);
 		GeneralPath gp = new GeneralPath();
 
 		final double prec = 2;
@@ -387,7 +307,7 @@ public class GridLView extends Layer.LView
 			for(double lon=prec; lon-0.0000001<=360; lon+=prec)
 				connectTo(gp, worldPt(lon, lat));
 
-			paths.add(gp.clone());
+			paths.add((GeneralPath)gp.clone());
 		 }
 
 		// Lines of longitude
@@ -402,7 +322,7 @@ public class GridLView extends Layer.LView
 			for(double lat=-90+prec; lat-0.0000001<=+90; lat+=prec)
 				connectTo(gp, worldPt(lon, lat));
 
-			paths.add(gp.clone());
+			paths.add((GeneralPath)gp.clone());
 		 }
 
 		log.println("Generated " + paths.size() + " paths");
@@ -412,17 +332,31 @@ public class GridLView extends Layer.LView
 
 	private void drawLatLon(int id, Graphics2D[] g2s, GridSettings settings)
 	 {
+
+		int lineStroke = 1; // default to thinnest for the panner
+
 		if(settings.isVisible(getChild() != null))
 		 {
 			log.printStack(3);
 			GeneralPath[] lines = settings.getLines(Main.PO);
 
+			int zoomFactor = 1;
+			
+			if (HighResExport.exporting) {
+				zoomFactor = HighResExport.zoomFactor;;
+			}
+			
+			// Determine line width stroke to use. Always use thinnest possible for the Panner.
+			if (getChild() != null)
+				lineStroke = settings.getLineWidth() * zoomFactor;
+			
 			// Draw them all
 			log.println("Drawing " + lines.length +
 						" paths to " + g2s.length + " graphics contexts");
 			for(int i=0; i<g2s.length; i++)
 			 {
 				g2s[i].setColor(settings.getColor());
+				g2s[i].setStroke(getProj().getWorldStroke(lineStroke));
 				for(int j=0; j<lines.length; j++)
 				 {
 					if(oldViewChange(id))
@@ -433,23 +367,7 @@ public class GridLView extends Layer.LView
 		 }
 	 }
 
-
-	private void print(GeneralPath gp)
-	 {
-		PathIterator iter = gp.getPathIterator(null);
-		log.println("-----------");
-		float[] pt = new float[2];
-		DecimalFormat f = new DecimalFormat("0.00");
-		while(!iter.isDone())
-		 {
-			iter.currentSegment(pt);
-			log.print(f.format(pt[0]) + "," + f.format(pt[1]) + "  ");
-			iter.next();
-		 }
-		log.print('\n');
-	 }
-
-	private void connectTo(GeneralPath gp, Point2D next)
+	private static void connectTo(GeneralPath gp, Point2D next)
 	 {
 		//log.println("------------------------------------------");
 		//log.println("connectTo " + next);
@@ -507,7 +425,7 @@ public class GridLView extends Layer.LView
 	 }
 
 	// Handy utility
-	private Point2D worldPt(double lon, double lat)
+	private static Point2D worldPt(double lon, double lat)
 	 {
 		return  Main.PO.convSpatialToWorld(new Point2D.Double(lon, lat));
 	 }
@@ -518,10 +436,11 @@ public class GridLView extends Layer.LView
 	 {
 		GridSettings settings;
 
-		JTextField   txtSpacing;
-		JButton      btnColor;
-		JCheckBox    chkMain;
-		JCheckBox    chkPanner;
+		JTextField txtSpacing;
+		JButton    btnColor;
+		JCheckBox  chkMain;
+		JCheckBox  chkPanner;
+		JComboBox  lineWidthCombo;
 
 		SettingsPanel(final String title,
 					  GridSettings settings)
@@ -538,27 +457,65 @@ public class GridLView extends Layer.LView
 				);
 
 			// Spacing text field
-			txtSpacing = new PasteField(String.valueOf(settings.getSpacing()), 4);
+			add(new JLabel("Spacing:", JLabel.LEFT));
+            txtSpacing = new PasteField(String.valueOf(settings.getSpacing()), 4);
 			txtSpacing.addActionListener(this);
 			add(txtSpacing);
 
 			// Color chooser button
+			add(new JLabel("Color:", JLabel.LEFT));
 			btnColor = new JButton(" ");
 			btnColor.setBackground(settings.getColor());
 			btnColor.addActionListener(this);
 			add(btnColor);
-
+			
 			// Main checkbox
-			chkMain = new JCheckBox("Main Window", settings.isVisible(true));
+			add(new JLabel("Visible on:", JLabel.LEFT));
+			chkMain = new JCheckBox("Main Window", settings.isVisible(MAIN));
 			chkMain.addActionListener(this);
 			add(chkMain);
 
 			// Panner checkbox
-			chkPanner = new JCheckBox("Panner", settings.isVisible(false));
+			chkPanner = new JCheckBox("Panner", settings.isVisible(PANNER));
 			chkPanner.addActionListener(this);
 			add(chkPanner);
-		 }
+			
+			// Grid line width combo box
+			Integer[] widthChoices = { 1,2,3,4,5,6,7,8,9,10 };
 
+			lineWidthCombo = new JComboBox(widthChoices);
+			lineWidthCombo.setSelectedIndex(settings.getLineWidth()-1);
+			lineWidthCombo.addActionListener(this);
+
+			// Place the label and the combo on the same row
+			JPanel lineWidthPanel = new JPanel();
+			lineWidthPanel.setLayout(new GridLayout(1,2,10,0));
+			lineWidthPanel.add(new JLabel("Line width:", JLabel.LEFT));
+			lineWidthPanel.add(lineWidthCombo);
+			add(lineWidthPanel);
+
+		 }	// Constructor
+
+		// Update default settings on the SettingsPanel
+		public void updatePanelSettings(GridSettings newSettings)
+		 {
+			
+			// Spacing text field
+			txtSpacing.setText(String.valueOf(newSettings.getSpacing()));
+
+			// Color chooser button
+			btnColor.setBackground(newSettings.getColor());
+			
+			// Main checkbox
+            chkMain.setSelected(newSettings.isVisible(MAIN));
+
+			// Panner checkbox
+            chkPanner.setSelected(newSettings.isVisible(PANNER));
+			
+			// Grid line width combo box
+			lineWidthCombo.setSelectedIndex(major.getLineWidth()-1);			
+		 }
+		
 		// Handles all events from user
 		public void actionPerformed(ActionEvent e)
 		 {
@@ -634,40 +591,117 @@ public class GridLView extends Layer.LView
 			// Handle main checkbox changes
 			else if(source == chkMain)
 			 {
-				settings.setVisible(true, chkMain.isSelected());
+				settings.setVisible(MAIN, chkMain.isSelected());
 				redrawMain = true;
 			 }
 
 			// Handle panner checkbox changes
 			else if(source == chkPanner)
 			 {
-				settings.setVisible(false, chkPanner.isSelected());
+				settings.setVisible(PANNER, chkPanner.isSelected());
 				redrawPanner = true;
 			 }
 
+			// Handle line width ComboBox changes
+			else if(source == lineWidthCombo)
+			 {
+				settings.setLineWidth( ((Integer) lineWidthCombo.getSelectedItem()).intValue() );
+				redrawMain = true;				
+			 }
+			
+			
 			// Based on what changed, trigger appropriate redraws
 			if(redrawMain)
 				redrawGrid();
 			if(redrawPanner)
 				((GridLView) getChild()).redrawGrid();
+			if(redrawMain || redrawPanner)
+			    copySettingsToParms();  // If changes have been made, we need to save them to the save/load param object.
 		 }
 	 }
+
+
 
 	private class GridPanel
 	 extends JPanel
 	 {
+		JButton refresh;
 		GridPanel()
-		 {
-			add(new SettingsPanel("Major Lines", major));
-			add(new SettingsPanel("Minor Lines", minor));
+		 { 
+            majorSettings = new SettingsPanel("Major Lines", major);
+            minorSettings = new SettingsPanel("Minor Lines", minor);
+		    Color lightblue = UIManager.getColor("TabbedPane.selected");
+			setLayout(new BoxLayout(this, BoxLayout.PAGE_AXIS));
+			setBackground(lightblue);
+			
+			JPanel settings = new JPanel();
+			settings.setLayout(new GridLayout(1, 2));
+			settings.setBackground(lightblue);
+			settings.add(majorSettings);
+			settings.add(minorSettings);
+			
+			JPanel button = new JPanel();
+			button.setBackground(lightblue);
+			refresh = new JButton(refreshAct);
+			button.add(refresh);
+			
+			add(settings);
+			add(Box.createVerticalStrut(10));
+			add(button);
+			add(Box.createVerticalGlue());
 		 }
 
-	 }
+	}
+	
+	
+	Action refreshAct = new AbstractAction("Refresh View"){
+		public void actionPerformed(ActionEvent e) {
+			try{
+				// Check major spacing
+				double majorSpacing;
+				majorSpacing = Double.parseDouble(majorSettings.txtSpacing.getText().trim());
+				if(90.0 / majorSpacing != Math.floor(90.0 / majorSpacing))
+					throw new NumberFormatException();
+				majorSettings.settings.setSpacing(majorSpacing);
+				
+				//Check minor spacing
+				double minorSpacing;
+				minorSpacing = Double.parseDouble(minorSettings.txtSpacing.getText().trim());
+				if(90.0 / minorSpacing != Math.floor(90.0 / minorSpacing))
+					throw new NumberFormatException();
+				minorSettings.settings.setSpacing(minorSpacing);
+				
+			}catch(NumberFormatException nfe){
+				// Handle problems by showing a dialog
+				Toolkit.getDefaultToolkit().beep();
+				JOptionPane.showMessageDialog(
+					majorSettings,
+					"Grid spacing value must be a number that divides " +
+					"evenly into 90.",
+					"Illegal value",
+					JOptionPane.ERROR_MESSAGE);
+
+				return;
+			}
+			// Determine what needs to be redrawn, based on this change
+			boolean redrawMain = minorSettings.chkMain.isSelected() || majorSettings.chkMain.isSelected();
+			boolean redrawPanner = minorSettings.chkPanner.isSelected() || majorSettings.chkMain.isSelected();
+			
+			// Based on what changed, trigger appropriate redraws
+			if(redrawMain)
+				redrawGrid();
+			if(redrawPanner)
+				((GridLView) getChild()).redrawGrid();
+            if(redrawMain || redrawPanner)
+                copySettingsToParms(); // If changes have been made, we need to save them to the save/load param object.
+		}
+	};
 
 	public String getName()
 	{
 		return "Lat/Lon Grid";
 	}
+
     private static void prepare(Graphics2D g2)
      {
 		g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING,
@@ -675,4 +709,13 @@ public class GridLView extends Layer.LView
 		g2.setRenderingHint(RenderingHints.KEY_ALPHA_INTERPOLATION,
 							RenderingHints.VALUE_ALPHA_INTERPOLATION_QUALITY);
      }
+    
+//The following two methods are used to query for the
+// info panel fields (description, citation, etc)	
+   	public String getLayerKey(){
+   		return "Lat/Lon Grid";
+   	}
+   	public String getLayerType(){
+   		return "llgrid";
+   	}
  }

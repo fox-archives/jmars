@@ -1,23 +1,3 @@
-// Copyright 2008, Arizona Board of Regents
-// on behalf of Arizona State University
-// 
-// Prepared by the Mars Space Flight Facility, Arizona State University,
-// Tempe, AZ.
-// 
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-// 
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU General Public License for more details.
-// 
-// You should have received a copy of the GNU General Public License
-// along with this program.  If not, see <http://www.gnu.org/licenses/>.
-
-
 package edu.asu.jmars.layer;
 
 import java.awt.Dimension;
@@ -26,38 +6,31 @@ import java.awt.Insets;
 import java.awt.Rectangle;
 import java.awt.Shape;
 import java.awt.event.ActionEvent;
+import java.awt.event.ActionListener;
 import java.awt.geom.AffineTransform;
 import java.awt.geom.Area;
 import java.awt.geom.Dimension2D;
 import java.awt.geom.Point2D;
 import java.awt.geom.Rectangle2D;
 import java.awt.image.BufferedImage;
-import java.io.File;
-import java.io.IOException;
 import java.util.AbstractList;
 import java.util.ArrayList;
 import java.util.Collections;
-import java.util.Iterator;
 import java.util.List;
 import java.util.Observable;
 
-import javax.imageio.ImageIO;
-import javax.swing.AbstractAction;
-import javax.swing.JLayeredPane;
-import javax.swing.JMenu;
-import javax.swing.JMenuItem;
-import javax.swing.KeyStroke;
-import javax.swing.event.AncestorEvent;
+import javax.swing.*;
 
 import edu.asu.jmars.LocationListener;
 import edu.asu.jmars.LocationManager;
 import edu.asu.jmars.Main;
 import edu.asu.jmars.ProjObj;
+import edu.asu.jmars.ToolManager;
+import edu.asu.jmars.ZoomListener;
+import edu.asu.jmars.ZoomManager;
 import edu.asu.jmars.graphics.GraphicsWrapped;
 import edu.asu.jmars.ruler.RulerManager;
-import edu.asu.jmars.swing.AncestorAdapter;
 import edu.asu.jmars.swing.OverlapLayout;
-import edu.asu.jmars.util.Config;
 import edu.asu.jmars.util.DebugLog;
 import edu.asu.jmars.util.HVector;
 import edu.asu.jmars.util.MovableList;
@@ -69,12 +42,17 @@ import edu.asu.jmars.util.Util;
  ** logical coordinates.
  **
  ** <p>An LViewManager may have a child LViewManager, which is
- ** generally a context view in a panner. All location changes are
- ** proxied to the child, if one exists. The addition/removal of LView
- ** objects is also proxied, by calling {@link Layer.LView#dup} on the
+ ** generally a context view in a panner. The addition/removal of LView
+ ** objects is proxied by calling {@link Layer.LView#dup} on the
  ** originally-added LView to create a new LView to add to the child
  ** LViewManager. During this duplication process, the original LView
  ** also has its child set to point to its duplicate.
+ **
+ ** LViewManager objects are given a LocationManager and a ZoomManager
+ ** in their constructor.  To cause multiple views to share a viewing
+ ** center but allow different zooms (for example for a main and panner
+ ** view) use the same {@link LocationManager} instance and different
+ ** {@link ZoomManager} instances.
  **
  ** <p>The primary entry point for manipulating what LView objects are
  ** displayed in what order is the {@link #viewList} member. Changes
@@ -96,10 +74,7 @@ import edu.asu.jmars.util.Util;
  ** @see Layer.LView
  ** @see Layer.LView#viewman
  **/
-public class LViewManager
- extends JLayeredPane
- implements LocationListener
- {
+public class LViewManager extends JLayeredPane {
 	private static DebugLog log = DebugLog.instance();
 
 	/**
@@ -118,17 +93,20 @@ public class LViewManager
 	 ** {@link List} class that also provides a facility for moving
 	 ** elements around.
 	 **/
-	public MovableList viewList = new InternalList();
+	public MovableList<Layer.LView> viewList = new InternalList();
 
-	LocationManager locMgr;
-	double unitWidth = Main.PO.getUnitWidth();
-	double unitHeight = Main.PO.getUnitHeight();
-	Point2D anchorPoint = new Point2D.Double();
-
-	public Point2D getAnchorPoint()
-	 {
-		return  (Point2D) anchorPoint.clone();
-	 }
+	private LocationManager locMgr;
+	private ZoomManager zoomMgr;
+	private double unitWidth = Main.PO.getUnitWidth();
+	private double unitHeight = Main.PO.getUnitHeight();
+	/** The LViewManager that's listening to our position, and follows us */
+	LViewManager childVMan = null;
+	private int myId = 0;
+	private String myName = "UNKNOWN";
+	/** initial input panel */
+	protected BaseGlass glassPanel = null;
+	LManager lmanager;
+    private static final double radsConv = Math.PI / 180.0;
 
 	/**
 	 ** Returns the panner view manager associated with this view
@@ -138,50 +116,36 @@ public class LViewManager
 	 {
 		return  childVMan;
 	 }
-
-	// The LViewManager that's listening to our position, and follows us
-	LViewManager childVMan = null;
-	int magnify = 32;
-	int magnifyLog2 = getMagnifyLog2(magnify);
-
-	public int getMagnify()
-	 {
-		return  magnify;
-	 }
-
-	void setMagnify(int newMagnify)
-	 {
-		magnify = newMagnify;
-		magnifyLog2 = getMagnifyLog2(newMagnify);
-	 }
-
-	private int getMagnifyLog2(int magnify)
-	 {
-		return  (int) Math.round(Math.log(magnify) / Math.log(2));
-	 }
-
-	/**
-	 ** Try not to use, kludge for {@link Layer.LView#setLocation}.
-	 **/
-	public LocationManager getLocationManager()
-	 {
+	
+	public LocationManager getLocationManager() {
 		return locMgr;
-	 }
-
+	}
+	
+	public ZoomManager getZoomManager() {
+		return zoomMgr;
+	}
+	
 	private static int id = 0;
 	private synchronized static int nextId()
 	 {
 		return  ++id;
 	 }
 
-	private int myId = 0;
-	private String myName = "UNKNOWN";
 	public String getName()
 	 {
 		return  myName;
 	 }
-
-
+	
+	List<PZMenuItem> navItems = new ArrayList<PZMenuItem>();
+	{
+		navItems.add(new PZMenuItem("Pan right", "RIGHT",     0.5,    0,  0));
+		navItems.add(new PZMenuItem("Pan left",  "LEFT",     -0.5,    0,  0));
+		navItems.add(new PZMenuItem("Pan up",    "UP",          0,  0.5,  0));
+		navItems.add(new PZMenuItem("Pan down",  "DOWN",        0, -0.5,  0));
+		navItems.add(new PZMenuItem("Zoom out",  "PAGE_UP",     0,    0, -1));
+		navItems.add(new PZMenuItem("Zoom in",   "PAGE_DOWN",   0,    0,  1));
+	}
+	
 	/**
 	 ** Returns the "navigation" menu: basically an excuse for a bunch
 	 ** of keyboard shortcuts to pan/zoom around.
@@ -189,174 +153,121 @@ public class LViewManager
 	public JMenu getNavMenu()
 	 {
 		JMenu menu = new JMenu("Navigation");
-		menu.add(new PZMenuItem("Pan right", "RIGHT",     0.5,    0,  0));
-		menu.add(new PZMenuItem("Pan left",  "LEFT",     -0.5,    0,  0));
-		menu.add(new PZMenuItem("Pan up",    "UP",          0,  0.5,  0));
-		menu.add(new PZMenuItem("Pan down",  "DOWN",        0, -0.5,  0));
-		menu.add(new PZMenuItem("Zoom out",  "PAGE_UP",     0,    0, -1));
-		menu.add(new PZMenuItem("Zoom in",   "PAGE_DOWN",   0,    0,  1));
+		for (PZMenuItem item: navItems) {
+			menu.add(item);
+		}
 		return  menu;
 	 }
-	
-	
 
 	/**
 	 ** A menu item that performs a pan/zoom function.
 	 **/
-	private class PZMenuItem extends JMenuItem
-	 {
-		PZMenuItem(String lbl,
-					String key,
-					final double xFactor,
-					final double yFactor,
-					final int ppdFactor)
-		 {
-			// COMPILER BUG: If you change 'setAction(' to 'super(',
-			// WHICH IT SHOULD BE, the javac compiler totally barfs on
-			// the code. It complains about a bogus
-			// order-of-initialization error. If you eliminate it by
-			// making your implicit LViewManager.this references
-			// explicit, then the compiler throws an exception.
-			setAction(
-				new AbstractAction(lbl)
-				 {
-					public void actionPerformed(ActionEvent e)
-					 {
+	private class PZMenuItem extends JMenuItem {
+		private ActionListener listener;
+		public PZMenuItem(String lbl, String key, final double xFactor, final double yFactor, final int ppdFactor) {
+			listener = new ActionListener() {
+				public void actionPerformed(ActionEvent e) {
+					if (ToolManager.getToolMode() != ToolManager.INVESTIGATE){
+						Point2D anchorPoint = locMgr.getLoc();
 						Rectangle2D win = getProj().getWorldWindow();
 						Point2D newPt = new Point2D.Double(
-							anchorPoint.getX() + win.getWidth()  * xFactor,
-							anchorPoint.getY() + win.getHeight() * yFactor);
-						int newZoom =
-							ppdFactor < 0
-							? magnify >> -ppdFactor
-							: magnify << ppdFactor;
-						if(!locMgr.isValidZoomFactor(newZoom))
+								anchorPoint.getX() + win.getWidth()  * xFactor,
+								anchorPoint.getY() + win.getHeight() * yFactor);
+						int magnify = zoomMgr.getZoomPPD();
+						int newZoom = ppdFactor < 0 ? magnify >> -ppdFactor : magnify << ppdFactor;
+						if(!zoomMgr.getZoomFactors().contains(newZoom)) {
 							newZoom = magnify;
+						}
 
-						locMgr.setLocationAndZoom(newPt, newZoom);
-					 }
-				 }
-				);
+						locMgr.setLocation(newPt, true);
+						zoomMgr.setZoomPPD(newZoom, true);
+					}
+				}	
+			};
+			setAction(new AbstractAction(lbl) {
+				public void actionPerformed(ActionEvent e) {
+					listener.actionPerformed(e);
+				}
+			});
 			setAccelerator(KeyStroke.getKeyStroke(key));
-		 }
-	 }
-
-	/**
-	 * Member variable to hold a reference to the initial input panel
-	 */
-	protected BaseGlass glassPanel = null;
-
+		}
+		public ActionListener getListener() {
+			return listener;
+		}
+	}
+	
 	public BaseGlass getGlassPanel() {
 	   return  glassPanel;
 	}
 
+	   
+    private final LocationListener locListener = new LocationListener() {
+        public void locationChanged(Point2D loc) {
+            viewChanged();
+        }
+    };
+    
+    private final ZoomListener zoomListener = new ZoomListener() {
+        public void zoomChanged(int newPPD) {
+            viewChanged();
+        }
+    };
+
  	/**
-	 ** Constructor for a "normal" LViewManager with specified zoom
-	 **/
-	public LViewManager(LocationManager kludge, int initialMag)
-	 {
+	 * Creates a new LViewManager.
+	 * @param locMgr Provides the location of the view center of this LViewManager.
+	 * @param zoomMgr Provides the zoom level of this LViewManager.
+	 * @param parentVMan Provides a parent view manager. If null, this view manager
+	 * will be created as a main view manager, otherwise as a panner view manager.
+	 */
+	public LViewManager(LocationManager locMgr, ZoomManager zoomMgr, LViewManager parentVMan)
+	{
 		myId = nextId();
 		myName = "Main" + myId;
-		locMgr = kludge;
-
-                if ( initialMag > -1 )
-                  setMagnify(initialMag);
-
+		
+		this.locMgr = locMgr;
+		this.zoomMgr = zoomMgr;
+		locMgr.addLocationListener(locListener);
+		zoomMgr.addListener(zoomListener);
+		
 		setLayout(new OverlapLayout());
-		addAncestorListener(
-			new AncestorAdapter()
-			 {
-				public void ancestorAdded(AncestorEvent e)
-				 {
-					log.println("shown");
-					locMgr.addLocationListener(LViewManager.this);
-				 }
-				public void ancestorRemoved(AncestorEvent e)
-				 {
-					log.println("hidden");
-					locMgr.removeLocationListener(LViewManager.this);
-				 }
-			 }
-			);
-                glassPanel = new MainGlass(this);
-		//add(glassPanel, new Integer(9999));
-                add(glassPanel);
-                this.setLayer(glassPanel, JLayeredPane.DRAG_LAYER.intValue(), 0);
-	 }
+		
+		for (PZMenuItem item: navItems) {
+			registerKeyboardAction(item.getListener(), item.getAccelerator(), WHEN_ANCESTOR_OF_FOCUSED_COMPONENT);
+		}
+		
+		if (parentVMan == null) {
+			glassPanel = new MainGlass(this);
+			add(glassPanel);
+			setLayer(glassPanel, JLayeredPane.DRAG_LAYER.intValue(), 0);
+		} else {
+			if(parentVMan.childVMan == null)
+				parentVMan.childVMan = this;
+			else
+				log.aprintln("PROGRAMMER: YOU HAVE AN ORPHANED PANNER OBJECT!");
+
+			setLayout(new OverlapLayout());
+			glassPanel = new PannerGlass(this, parentVMan);
+			add(glassPanel, new Integer(9999));
+		}
+	}
 
 	private final MultiProjection projection = new MyProjection();
+	
 	public MultiProjection getProj()
 	 {
 		return  projection;
 	 }
 
-	/**
-	 ** Constructor for a "child" LViewManager, linked to a
-	 ** parent. Child LViewManagers have a "glass" layer added that
-	 ** prevents mouse/keyboard events from making it to any other
-	 ** layers, and that also handles panning/zooming.
-	 **/
-	public LViewManager(LocationManager kludge,
-						LViewManager parentVMan,
-						int pannerMagnify)
-	 {
-		locMgr = kludge;
-		myId = parentVMan.myId;
-		myName = "Panner" + myId;
-		setLayout(new OverlapLayout());
-		setMagnify(pannerMagnify);
-		if(parentVMan.childVMan == null)
-			parentVMan.childVMan = this;
-		else
-			log.aprintln("PROGRAMMER: YOU HAVE AN ORPHANED PANNER OBJECT!");
-
-                glassPanel = new PannerGlass(this, parentVMan);
-		add(glassPanel, new Integer(9999));
-	 }
-
-	LManager lmanager;
 	public Layer.LView getActiveLView()
 	 {
-		return  Main.getLManager().getActiveLView();
+		return  LManager.getLManager().getActiveLView();
 	 }
 
 	public void repaintChildVMan()
 	 {
 		// THIS SEEMS LIKE A DEBUG THAT WAS NEVER REMOVED, IS IT NECESSARY!?!
 		childVMan.repaint();
-	 }
-
-         public int getMagnification() {
-            return magnify;
-         }
-
-	private ProjObj oldPO = null;
-
-	/**
-	 ** Does what it says.
-	 **/
-	public void setLocationAndZoom(Point2D loc, int zoom)
-	 {
-		double maxPan = Math.floor((1<<23) * 20.0 / magnify);
-		boolean locationChange = anchorPoint == null
-			||  !anchorPoint.equals(loc)
-			||  oldPO != Main.PO;
-		
-		oldPO = Main.PO;
-		anchorPoint = (Point2D) loc.clone();
-		if(childVMan != null)
-			setMagnify(zoom);
-		
-		viewChanged();
-		
-		// For the panner: if the location was changed, then we issue
-		// a full viewchanged, otherwise we just need to trigger a
-		// repaint (to update the little red viewing rectangle).
-		if(childVMan != null)
-			if(locationChange)
-				childVMan.setLocationAndZoom(loc, zoom);
-			else
-				childVMan.repaint();
 	 }
 
 	/**
@@ -375,9 +286,10 @@ public class LViewManager
 		if (childVMan == null)
 			RulerManager.Instance.notifyRulerOfViewChange();
 	}
-
+	
 	public final Graphics2D wrapScreenGraphics(Graphics2D g2)
 	 {
+		int magnify = zoomMgr.getZoomPPD();
 		return  new GraphicsWrapped(
 			g2,
 			360 * magnify,
@@ -392,7 +304,7 @@ public class LViewManager
 		return  new GraphicsWrapped(
 			g2,
 			360,
-			magnify,
+			zoomMgr.getZoomPPD(),
 			getProj().getWorldWindow(),
 			"wrapWorldGraphics"
 		);
@@ -430,111 +342,110 @@ public class LViewManager
 		 }
 	 }
 
-	public BufferedImage copyMainWindow()
-	{
-		Dimension pixSize    = projection.getScreenSize();
-		BufferedImage image = Util.newBufferedImageOpaque((int)pixSize.getWidth(), (int)pixSize.getHeight());
+	public BufferedImage copyMainWindow() {
+		Dimension pixSize = projection.getScreenSize();
+		BufferedImage image = Util.newBufferedImageOpaque((int) pixSize
+				.getWidth(), (int) pixSize.getHeight());
 		Graphics2D g2 = image.createGraphics();
 
-		Iterator iter = viewList.iterator();
 		int count = viewList.size();
 		int i = 0;
-		while(iter.hasNext())
-		 {
-			Layer.LView view = (Layer.LView) iter.next();
-
+		for (Layer.LView view : viewList) {
 			if (view.isVisible()) {
 				log.println("Building " + ++i + "/" + count + " views: " + view.getName());
-			if(view.isVisible())
-				view.realPaintComponent(g2);
-/**
- ** THIS USED TO BE USED TO ENSURE THAT WE DIDN'T RUN OUT OF
- ** MEMORY... but I think it's only necessary when we're faking the
- ** view bitmap size. And we never do that anymore.
- **/
-//				view.offscreenImage.flush();
+				if (view.isVisible())
+					view.realPaintComponent(g2);
 			}
-		 }
+		}
 
 		g2.dispose();
-		return(image);
-	 }
-
-
-
-         /**
-          * Methods to create jpegs
-          */
-
-	public void dumpJpg(String filename)
-	 {
-		BufferedImage image =
-			Util.newBufferedImageOpaque(getWidth(), getHeight());
+		return (image);
+	}
+	
+	public BufferedImage getSnapshot(boolean opaque) {
+		BufferedImage image;
+		if (opaque) {
+			image = Util.newBufferedImageOpaque(getWidth(), getHeight());
+		} else {
+			image = Util.newBufferedImage(getWidth(), getHeight());
+		}
 		Graphics2D g2 = image.createGraphics();
-
-		Iterator iter = viewList.iterator();
+		g2.setColor(getBackground());
+		g2.fill(new Rectangle2D.Float(0,0,getWidth(),getHeight()));
 		int count = viewList.size();
 		int i = 0;
-		while(iter.hasNext())
-		 {
-			Layer.LView view = (Layer.LView) iter.next();
-			log.aprintln("Merging " + ++i + "/" + count +
-						 " views: " + view.getName());
-			if(view.isVisible())
+		for (Layer.LView view : viewList) {
+			log.aprintln("Merging " + ++i + "/" + count + " views: " + view.getName());
+			if (view.isVisible())
 				view.realPaintComponent(g2);
 			view.flushImages();
-		 }
+		}
 		g2.dispose();
+		return image;
+	}
+	
+	public Point2D[] getWorldBoundingPoints() {
+		Rectangle screen = Main.testDriver.mainWindow.getProj().getScreenWindow();
+
+		// swap Y coords since screen coords have origin in upper left corner
+		
+		Point2D min = Main.testDriver.mainWindow.getProj().createScreen().toWorld(screen.getMinX(), screen.getMaxY());
+		Point2D max = Main.testDriver.mainWindow.getProj().createScreen().toWorld(screen.getMaxX(), screen.getMinY());
+		Point2D[] ret = new Point2D[2];
+		ret[0] = min;
+		ret[1] = max;
+		return ret;
+	}
+	
+	public Point2D getCenterPoint() {
+		Rectangle screen = Main.testDriver.mainWindow.getProj().getScreenWindow();
+		
+		Point2D spatial = Main.testDriver.mainWindow.getProj().screen.toSpatial(screen.getCenterX(), screen.getCenterY());
+		
+		return spatial;
+		
+	}
+	/**
+	 * Methods to create jpegs
+	 */
+	public void dumpJpg(String filename) {
 		log.aprintln("Outputting image...");
-		Util.saveAsJpeg(image, filename);
+		Util.saveAsJpeg(getSnapshot(true), filename);
 		log.aprintln("DONE! Image in " + filename);
-	 }
-    
+	}
+
 	/**
 	 * Method to create PNG image files
 	 */
-	public void dumpPNG(String filename)
-	{
-	    BufferedImage image =
-	        Util.newBufferedImageOpaque(getWidth(), getHeight());
-	    Graphics2D g2 = image.createGraphics();
-	    
-	    Iterator iter = viewList.iterator();
-	    int count = viewList.size();
-	    int i = 0;
-	    while(iter.hasNext())
-	    {
-	        Layer.LView view = (Layer.LView) iter.next();
-	        log.aprintln("Merging " + ++i + "/" + count +
-	                     " views: " + view.getName());
-	        if(view.isVisible())
-	            view.realPaintComponent(g2);
-	        view.flushImages();
-	    }
-	    g2.dispose();
-	    log.aprintln("Outputting image...");
-        try {
-    	    ImageIO.write(image, "png", new File(filename));
-    	    log.aprintln("DONE! Image in " + filename);
-        }
-        catch (IOException e) {
-            log.aprintln(e);
-        }
+	public void dumpPNG(String filename) {
+		log.aprintln("Outputting image...");
+		Util.saveAsPng(getSnapshot(false), filename);
+		log.aprintln("DONE! Image in " + filename);
 	}
-	        
+	
+	/**
+	 * Method to create TIF image files
+	 */
+	public void dumpTIF(String filename) {
+		log.aprintln("Outputting image...");
+		Util.saveAsTif(getSnapshot(false), filename);
+		log.aprintln("DONE! Image in " + filename);
+	}
+
+
 	/**
 	 ** Internal class that implements MovableList to proxy things to
 	 ** our JLayeredPane display.
 	 **/
-     private class InternalList extends AbstractList implements MovableList
+     private class InternalList extends AbstractList<Layer.LView> implements MovableList<Layer.LView>
 	 {
 		// Our InternalList implementation is really (among other
 		// things) just a proxy to some "real" list, which we allocate
 		// here.
-		private java.util.List realList = new ArrayList();
+		private java.util.List<Layer.LView> realList = new ArrayList<Layer.LView>();
 
 		// Required for useful AbstractList implementation
-		public Object get(int index)
+		public Layer.LView get(int index)
 		 {
 			return  realList.get(index);
 		 }
@@ -546,7 +457,7 @@ public class LViewManager
 		 }
 
 		// Required for useful AbstractList implementation
-		public Object set(int index, Object element)
+		public Layer.LView set(int index, Layer.LView element)
 		 {
 			// We really got an LView, so let's cast it so we can use it
 			Layer.LView lv = (Layer.LView) element;
@@ -569,7 +480,7 @@ public class LViewManager
 		 }
 
 		// Required for useful AbstractList implementation
-		public void add(int index, Object element)
+		public void add(int index, Layer.LView element)
 		 {
 			// We really got an LView, so let's cast it so we can use it
 			Layer.LView lv = (Layer.LView) element;
@@ -608,7 +519,7 @@ public class LViewManager
 		 }
 
 		// Required for useful AbstractList implementation
-		public Object remove(int index)
+		public Layer.LView remove(int index)
 		 {
 			// Do the same thing to our childVMan, if we have one
 			if(childVMan != null)
@@ -629,7 +540,7 @@ public class LViewManager
 
 			// Manipulate the "real" list properly
 			++modCount;
-			Object removedObj =  realList.remove(index);
+			Layer.LView removedObj =  realList.remove(index);
 			
 			for(int i=index; i<realList.size(); i++){
 				LViewManager.this.setLayer((Layer.LView)realList.get(i), i);
@@ -644,15 +555,6 @@ public class LViewManager
 			listener.update();
 
 			return removedObj;
-		 }
-
-		private void dump(java.util.List x)
-		 {
-			Iterator iter = x.iterator();
-			log.print("{ ");
-			while(iter.hasNext())
-				log.print(iter.next().getClass().getName() + " ");
-			log.println("}");
 		 }
 
 		// Implements MovableList interface
@@ -693,7 +595,7 @@ public class LViewManager
 		 **/
 		private double screenToScreenLocal(double x)
 		 {
-			final double ppd = magnify;
+			final double ppd = zoomMgr.getZoomPPD();
 			return  x - Math.floor(x / 360 / ppd) * 360 * ppd;
 		 }
 
@@ -720,19 +622,17 @@ public class LViewManager
 
 		public float getPixelHeight()
 		 {
-			return  (float) (unitHeight / magnify);
+			return  (float) (unitHeight / zoomMgr.getZoomPPD());
 		 }
 
 		public float getPixelWidth()
 		 {
-			return  (float) (unitWidth / magnify);
+			return  (float) (unitWidth / zoomMgr.getZoomPPD());
 		 }
 
 		public Rectangle getScreenWindow()
 		 {
-			Rectangle2D world = getWorldWindow();
 			Insets in = getInsets();
-
 			return  new Rectangle(
 				0, 0,
 				(int) Math.round(getWidth()  - in.left - in.right),
@@ -746,7 +646,7 @@ public class LViewManager
 
 			double w = window.width  * pixel.getWidth();
 			double h = window.height * pixel.getHeight();
-
+			Point2D anchorPoint = locMgr.getLoc();
 			double x = anchorPoint.getX() - w / 2;
 			double y = anchorPoint.getY() - h / 2;
 
@@ -834,12 +734,12 @@ public class LViewManager
 
 		public int getPPD()
 		 {
-			return  magnify;
+			return  zoomMgr.getZoomPPD();
 		 }
 
 		public int getPPDLog2()
 		 {
-			return  magnifyLog2;
+			return  zoomMgr.getZoomFactors().indexOf(zoomMgr.getZoomPPD());
 		 }
 
 		private class ScreenProjection extends SingleProjection
@@ -876,7 +776,7 @@ public class LViewManager
 			 }
 			public double distance(double ax, double ay, double bx, double by)
 			 {
-				int mod = 360 * magnify;
+				int mod = 360 * zoomMgr.getZoomPPD();
 				int xdiff = (int)Math.abs(ax - bx) % mod;
 				if(xdiff > mod / 2)
 					xdiff = mod - xdiff;
@@ -957,9 +857,6 @@ public class LViewManager
                 double prllX = aPx * aP_dot_p;
                 double prllY = aPy * aP_dot_p;
                 double magPrll = Math.sqrt(prllX*prllX + prllY*prllY);
-
-				double perpX = vPx - prllX;
-				double perpY = vPy - prllY;
 
 				// Check if we've met the maxDist constraint.
 				// if(perpX*perpX + perpY*perpY <= maxDist*maxDist)
@@ -1217,7 +1114,7 @@ public class LViewManager
      /**
       * A mechanism for letting views listen for changes in the view list.
       * Any view that wishes to do so should implement an Observer class and
-      * addObserver() to the public viewman2.observedObject
+      * addObserver() to the public viewman.observedObject
       */
      public class ObservedObject extends Observable {
 	 public void update(){

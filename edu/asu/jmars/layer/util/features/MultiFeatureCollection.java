@@ -1,23 +1,3 @@
-// Copyright 2008, Arizona Board of Regents
-// on behalf of Arizona State University
-// 
-// Prepared by the Mars Space Flight Facility, Arizona State University,
-// Tempe, AZ.
-// 
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-// 
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU General Public License for more details.
-// 
-// You should have received a copy of the GNU General Public License
-// along with this program.  If not, see <http://www.gnu.org/licenses/>.
-
-
 package edu.asu.jmars.layer.util.features;
 
 import java.util.ArrayList;
@@ -31,14 +11,11 @@ import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.LinkedList;
 import java.util.List;
-import java.util.ListIterator;
 import java.util.Map;
 import java.util.Set;
 
 import edu.asu.jmars.util.DebugLog;
 import edu.asu.jmars.util.Util;
-// import edu.asu.jmars.util.Versionable;
-// import edu.asu.jmars.util.Versionable;
 
 /**
  * An implementation of FeatureCollection which provides an aggregate
@@ -75,12 +52,12 @@ public class MultiFeatureCollection implements FeatureCollection, FeatureListene
 	/**
 	 * Backing list of FeatureCollections.
 	 */
-	private List support = new ArrayList();
+	private List<FeatureCollection> support = new ArrayList<FeatureCollection>();
 	/**
 	 * Backing list of Features from the entire support FeatureCollections.
 	 */
-	private List features = new ArrayList();
-	private List schema = new LinkedList();
+	private List<Feature> features = new ArrayList<Feature>();
+	private List<Field> schema = new ArrayList<Field>();
 	private LinkedList listeners = new LinkedList();
 	private FeatureCollection defaultFeatureCollection = null;
 	
@@ -208,7 +185,7 @@ public class MultiFeatureCollection implements FeatureCollection, FeatureListene
 	 * 
 	 * @return A List of FeatureCollections backing this MultiFeatureCollections.
 	 */
-	public List getSupportingFeatureCollections(){
+	public List<FeatureCollection> getSupportingFeatureCollections(){
 		return Collections.unmodifiableList(support);
 	}
 
@@ -233,7 +210,7 @@ public class MultiFeatureCollection implements FeatureCollection, FeatureListene
 	 * 
 	 * @return An unmodifiable List of Features making up this MultiFeatureCollection. 
 	 */
-	public List getFeatures(){
+	public List<Feature> getFeatures(){
 		return Collections.unmodifiableList(features);
 	}
 	
@@ -309,7 +286,7 @@ public class MultiFeatureCollection implements FeatureCollection, FeatureListene
 			f = (Feature)i.next();
 			fc = (Collection)fcToFeat.get(f.getOwner());
 			if (fc == null)
-				fcToFeat.put(f.getOwner(), fc = new LinkedList());
+				fcToFeat.put(f.getOwner(), fc = new ArrayList());
 			fc.add(f);
 		}
 		
@@ -346,24 +323,6 @@ public class MultiFeatureCollection implements FeatureCollection, FeatureListene
 		if (pos < 0 || pos >= features.size())
 			return null;
 		return (Feature)features.get(pos);
-	}
-	
-	/**
-	 * Replace the Feature at the given position with the new Feature
-	 * provided. This method will proxy the replace to the appropriate
-	 * FeatureCollection containing the Feature being replaced. No
-	 * change takes place, if the specified position is invalid.
-	 * 
-	 * @param pos Position in the MultiFeatureCollection for replacement.
-	 * @param f Replacement Feature object.
-	 */
-	public void setFeature(int pos, Feature f){
-		if (pos < 0 || pos >= features.size())
-			return;
-		
-		Feature old = (Feature)features.get(pos);
-		features.set(pos, f);
-		old.getOwner().setFeature(old.getOwner().featurePosition(old), f);
 	}
 	
 	/**
@@ -423,19 +382,32 @@ public class MultiFeatureCollection implements FeatureCollection, FeatureListene
 		return true;
 	}
 	
-	
 	/**
-	 * Return a ListIterator over an unmodifiable list of Feature objects
-	 * which are a part of the support of this MultiFeatureCollection.
+	 * Move the feature at index i in the order array to a new position given by the
+	 * value of the order array at index i.
 	 * 
-	 * TODO ConcurrentModificationException
-	 * 
-	 * @return A ListIterator over all the Feature objects in this
-	 *         MultiFeatureCollection.
-	 * 
+	 * This operation results in one event that claims all rows have been changed.
 	 */
-	public ListIterator featureIterator(){
-		return Collections.unmodifiableList(features).listIterator();
+	public void reorder(int[] order) {
+		int size = features.size();
+		if (order.length != size) {
+			throw new IllegalArgumentException("Wrong number of elements specified, was " +
+					order.length + ", should have been " + size);
+		}
+		for (int idx: order) {
+			if (idx < 0 || idx >= size) {
+				throw new IllegalArgumentException("Index out of range");
+			}
+		}
+		List<Feature> ordered = new ArrayList<Feature>(features.size());
+		for (int i = 0; i < order.length; i++) {
+			ordered.add(features.get(order[i]));
+		}
+		features.clear();
+		features.addAll(ordered);
+		notify(new FeatureEvent(
+			FeatureEvent.CHANGE_FEATURE, this, Collections.unmodifiableList(features),
+				null, Collections.unmodifiableList(schema)));
 	}
 	
 	/**
@@ -446,7 +418,7 @@ public class MultiFeatureCollection implements FeatureCollection, FeatureListene
 	 * @return The aggregate schema over the entire support of this MultiFeatureCollection
 	 *         as an unmodifiable List.
 	 */
-	public List getSchema(){
+	public List<Field> getSchema(){
 		return Collections.unmodifiableList(schema);
 	}
 	
@@ -507,14 +479,15 @@ public class MultiFeatureCollection implements FeatureCollection, FeatureListene
 	 * 
 	 * @param features A map of Feature to a map of Field to Value.
 	 */
-	public void setAttributes(Map features){
+	public void setAttributes(Map<Feature,Map<Field,Object>> features){
 		Map batches = new LinkedHashMap();
 		Map batch;
-		for(Iterator i=features.entrySet().iterator(); i.hasNext(); ){
+		for(Iterator i=features.entrySet().iterator(); i.hasNext(); ) {
 			Map.Entry ei = (Map.Entry)i.next();
 			Feature feat = (Feature)ei.getKey();
-			if ((batch = (Map)batches.get(feat.getOwner())) == null)
+			if ((batch = (Map)batches.get(feat.getOwner())) == null) {
 				batches.put(feat.getOwner(), batch = new LinkedHashMap());
+			}
 			batch.put(feat, ei.getValue());
 		}
 		
@@ -531,7 +504,7 @@ public class MultiFeatureCollection implements FeatureCollection, FeatureListene
 	 * @param fields Field -&gt Value map.
 	 * 
 	 */
-	public void setAttributes(Feature feature, Map fields){
+	public void setAttributes(Feature feature, Map<Field,Object> fields){
 		if (feature.getOwner() == null)
 			log.println("Ignoring orphan Feature.");
 		else
@@ -544,7 +517,7 @@ public class MultiFeatureCollection implements FeatureCollection, FeatureListene
 	 * @param field Field to modify within the given Features.
 	 * @param features Feature -&gt Value map.
 	 */
-	public void setAttributes(Field field, Map features){
+	public void setAttributes(Field field, Map<? extends Feature,Object> features) {
 		Map batches = new LinkedHashMap();
 		Map batch;
 		for(Iterator i=features.entrySet().iterator(); i.hasNext(); ){

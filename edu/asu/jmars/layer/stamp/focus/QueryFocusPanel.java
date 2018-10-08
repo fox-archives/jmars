@@ -1,23 +1,3 @@
-// Copyright 2008, Arizona Board of Regents
-// on behalf of Arizona State University
-// 
-// Prepared by the Mars Space Flight Facility, Arizona State University,
-// Tempe, AZ.
-// 
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-// 
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU General Public License for more details.
-// 
-// You should have received a copy of the GNU General Public License
-// along with this program.  If not, see <http://www.gnu.org/licenses/>.
-
-
 package edu.asu.jmars.layer.stamp.focus;
 
 import java.awt.BorderLayout;
@@ -36,8 +16,9 @@ public class QueryFocusPanel extends JPanel {
 
 	public QueryFocusPanel(final AddLayerWrapper wrapper, final StampLayer stampLayer)
 	{
-	    setLayout(new BorderLayout());
-	    add(wrapper.getContainer(), BorderLayout.CENTER);
+		JPanel queryPanel = new JPanel();
+		queryPanel.setLayout(new BorderLayout());
+		queryPanel.add(wrapper.getContainer(), BorderLayout.CENTER);
 	    
 	    // Construct the "buttons" section of the container.
 	    JPanel buttons = new JPanel();
@@ -59,13 +40,15 @@ public class QueryFocusPanel extends JPanel {
 	    JButton help = new JButton("Help");
 	    help.addActionListener(new ActionListener() {
 			public void actionPerformed(ActionEvent e) {
-				// TODO: make it a config variable!
-	    		Util.launchBrowser("http://jmars.asu.edu/wiki/index.php/Instrument_Glossaries");
+	    		Util.launchBrowser(stampLayer.getParam(stampLayer.HELP_URL));
 			}
 	    });
 	    
 	    buttons.add(help);
 	             
-	    add(buttons, BorderLayout.SOUTH);	    
+	    queryPanel.add(buttons, BorderLayout.SOUTH);
+	    
+	    setLayout(new BorderLayout());
+	    add(queryPanel, BorderLayout.CENTER);
 	}
 }

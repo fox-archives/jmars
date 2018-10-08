@@ -1,27 +1,8 @@
-// Copyright 2008, Arizona Board of Regents
-// on behalf of Arizona State University
-// 
-// Prepared by the Mars Space Flight Facility, Arizona State University,
-// Tempe, AZ.
-// 
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-// 
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU General Public License for more details.
-// 
-// You should have received a copy of the GNU General Public License
-// along with this program.  If not, see <http://www.gnu.org/licenses/>.
-
-
 package edu.asu.jmars.swing;
 
 import edu.asu.jmars.Main;
 import edu.asu.jmars.util.*;
+
 import java.awt.*;
 import java.awt.event.*;
 import java.text.*;
@@ -133,13 +114,13 @@ public class TimeField
 		txt = txt.trim().toUpperCase();
 		
 		String craft = null;
-		for(int i=0; i<CRAFTS.length; i++)
-			if(txt.startsWith(CRAFTS[i] + ":"))
-			 {
-				craft = CRAFTS[i];
+		for(String craftTag: TimeCacheFactory.instance().getCraftIdMap().keySet()){
+			if(txt.startsWith(craftTag + ":")){
+				craft = craftTag;
 				break;
-			 }
-		
+			}
+		}
+
 		return craft;
 	}
 
@@ -298,7 +279,7 @@ public class TimeField
 
 			double sclk = Double.parseDouble(txt);
 
-			return  TimeCache.getInstance(craft).sclkf2et(sclk);
+			return  TimeCacheFactory.instance().getTimeCacheInstance(craft).sclkf2et(sclk);
 		 }
 		catch(TimeException e)
 		 {
@@ -353,7 +334,7 @@ public class TimeField
 				 }
 			 }
 
-			return  TimeCache.getInstance(craft).orbit2et(orbit, offset);
+			return  TimeCacheFactory.instance().getTimeCacheInstance(craft).orbit2et(orbit, offset);
 		 }
 		catch(TimeException e)
 		 {
@@ -377,7 +358,7 @@ public class TimeField
 		// better things to do than this solution, but this will work
 		// more than well enough.
 		if(craft == null)
-			craft = "ODY";
+			craft = timeCraft;
 		log.println(craft + " ----> " + rawTxt);
 		try
 		 {
@@ -408,7 +389,7 @@ public class TimeField
 				ParsePosition pp = new ParsePosition(0);
 				Date utc = utcFormats[i].parse(txt, pp);
 				if(utc != null  &&  pp.getIndex() == txt.length())
-					return  TimeCache.getInstance(craft)
+					return  TimeCacheFactory.instance().getTimeCacheInstance(craft)
 						.millis2et( utc.getTime() );
 			 }
 
@@ -533,9 +514,8 @@ public class TimeField
 	public static void setDefaultCraft(String newCraft)
 	 {
 		newCraft = newCraft.toUpperCase().intern();
-		if(!Arrays.asList(CRAFTS).contains(newCraft))
-			throw  new IllegalArgumentException("Invalid craft specified ('"
-												+ newCraft + "')");
+		if(!TimeCacheFactory.instance().getCraftIdMap().keySet().contains(newCraft))
+			throw  new IllegalArgumentException("Invalid craft specified ('"+ newCraft + "')");
 		timeCraft = newCraft;
 	 }
 	
@@ -546,23 +526,26 @@ public class TimeField
 	 ** Current legal values are 'E', 'S', 'O', 'U', the starting
 	 ** letters of each TimeField-supported time type.
 	 **/
-	private static char timeFormat = 'E';
+	private static char timeFormat = Config.get("default.time.format", TimeCacheFactory.FMT_TAG_ET).charAt(0);
 
 	/**
 	 ** The default spacecraft. Currently only changeable using the
-	 ** {@link #setDefaultCraft} call. Defaults to "ODY" at startup.
+	 ** {@link #setDefaultCraft} call. Defaults to the value of "time.db.default_key"
+	 ** if defined in the jmars.config or the first craft in the key list "time.db.craft_name.*"
 	 **/
-	private static String timeCraft = "ODY";
-
-	/**
-	 ** List of legal spacecraft.
-	 **/
-	private static final String[] CRAFTS = { "MGS", "ODY", "MEX" };
-
-	public static String[] getCrafts()
-	 {
-		return  (String[]) CRAFTS.clone();
-	 }
+	private static String timeCraft = null;
+	static {
+		final String TIME_CRAFT_KEY = "time.db.default_craft";
+		try {
+			Set<String> availableCrafts = TimeCacheFactory.instance().getCraftIdMap().keySet();
+			if (availableCrafts.isEmpty())
+				log.aprintln("No crafts available.");
+			else
+				timeCraft = Config.get(TIME_CRAFT_KEY, availableCrafts.iterator().next());
+		} catch (Exception e) {
+			throw new Error("Unable to retrieve a default value for "+TIME_CRAFT_KEY+" from the config file.", e);
+		}
+	}
 
 	private static DecimalFormat sclkDecFormat = new DecimalFormat("0.000");
 	/**
@@ -628,29 +611,32 @@ public class TimeField
 		if(timeFormat == 'E')
 			return  "et:" + (long) et;
 
-		try {
-			TimeCache tc = TimeCache.getInstance(timeCraft);
+		try
+		 {
+			TimeCache tc = TimeCacheFactory.instance().getTimeCacheInstance(timeCraft);
 
-			switch (timeFormat) {
-			case 'S':
-				return timeCraft + ":sclk:"
-						+ sclkDecFormat.format(tc.et2sclkf(et));
+			switch(timeFormat)
+			 {
+			 case 'S':
+				return  timeCraft + ":sclk:"+ sclkDecFormat.format(tc.et2sclkf(et));
 
-			case 'O':
-				return timeCraft + ":orbit:" + tc.et2orbit(et);
+			 case 'O':
+				return  timeCraft + ":orbit:" + tc.et2orbit(et);
 
-			case 'U':
-				return "utc:" + tc.et2utc(et);
+			 case 'U':
+				return  "utc:" + tc.et2utc(et);
 
-			default:
-				throw new TimeException("IMPOSSIBLE: bad format (" + timeFormat
-						+ ")");
-			}
-		} catch(TimeException e) {
+			 default:
+				throw  new TimeException("IMPOSSIBLE: bad format (" +
+										 timeFormat + ")");
+			 }
+		 }
+		catch(TimeException e)
+		 {
 			log.println(e);
 			return  "-ERROR-" + e;
-		}
-	}
+		 }
+	 }
 
 	public void convertTo(String format)
 	 throws TimeException
@@ -665,8 +651,8 @@ public class TimeField
 	 throws TimeException
 	 {
 		DebugLog.readFile(".debugrc");
-		TimeCache.getInstance("ODY");
-		final TimeField tf = new TimeField("ODY:orbit:1000");
+		TimeCacheFactory.instance().getTimeCacheInstance(timeCraft);
+		final TimeField tf = new TimeField(timeCraft+":orbit:1000");
 		tf.addActionListener(
 			new ActionListener()
 			 {
@@ -704,18 +690,11 @@ public class TimeField
 		 {
 			add(new TimeConv("et:"));
 			add(new TimeConv("utc:"));
-			add(new JPopupMenu.Separator());
-			add(new TimeConv("ODY:orbit:"));
-			add(new TimeConv("ODY:sclk:" ));
-			add(new JPopupMenu.Separator());
-			add(new TimeConv("MGS:orbit:"));
-			add(new TimeConv("MGS:sclk:" ));
-			add(new JPopupMenu.Separator());
-			add(new TimeConv("MEX:orbit:"));
-			add(new TimeConv("MEX:sclk:" ));
-			add(new JPopupMenu.Separator());
-			add(new TimeConv("MRO:orbit:"));
-			add(new TimeConv("MRO:sclk:" ));
+			for(String sc: TimeCacheFactory.instance().getCraftIdMap().keySet()){
+				add(new JPopupMenu.Separator());
+				add(new TimeConv(sc+":orbit:"));
+				add(new TimeConv(sc+":sclk:" ));
+			}
 		 }
 
 		class TimeConv extends JRadioButtonMenuItem implements ActionListener
@@ -724,8 +703,6 @@ public class TimeField
 			TimeConv(String format)
 			 {
 				super(format);
-				if(format.startsWith("MRO:"))
-					setEnabled(Main.IS_MRO_ACTIVATED());
 				this.format = format;
 				group.add(this);
 				if(format.equals(currFormat))

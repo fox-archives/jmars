@@ -1,23 +1,3 @@
-// Copyright 2008, Arizona Board of Regents
-// on behalf of Arizona State University
-// 
-// Prepared by the Mars Space Flight Facility, Arizona State University,
-// Tempe, AZ.
-// 
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-// 
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU General Public License for more details.
-// 
-// You should have received a copy of the GNU General Public License
-// along with this program.  If not, see <http://www.gnu.org/licenses/>.
-
-
 package edu.asu.jmars.util;
 
 import java.util.*;
@@ -26,7 +6,7 @@ public class History {
 	public static final int DEFAULT_HISTORY_SIZE = -1;
 	
 	// List of List of Object
-	private LinkedList versions = new LinkedList ();
+	private LinkedList<LinkedList<Change>> versions = new LinkedList<LinkedList<Change>>();
 	private int version;
 	private boolean busy = false;
 	private int maxFrames;
@@ -73,8 +53,8 @@ public class History {
 			versions.removeLast ();
 
 		// create new bin if no current bin, or bin has at least one change
-		if (version == -1 || ((LinkedList)versions.getLast ()).size() > 0) {
-			versions.add (new LinkedList ());
+		if (version == -1 || versions.getLast().size() > 0) {
+			versions.add(new LinkedList<Change>());
 			if ((maxFrames >= 0) && (versions.size() > maxFrames))
 				versions.removeFirst();
 			else
@@ -101,23 +81,16 @@ public class History {
 
 		// add changes at front so forward iterators undo in the right order
 		if (version > -1){
-			LinkedList current = (LinkedList) versions.get(version);
-			current.addFirst (new Change (versioned, data));
+			LinkedList<Change> current = versions.get(version);
+			current.addFirst(new Change(versioned, data));
 		}
 	}
-
-	/**
-	 * <bold>CAUTION:</bold>This method should not be used publically. It has
-	 * been exposed for testing only.
-	 * @return Current list of changes accumulated so far as an unmodifiable List.
-	 */
-	public List getCurrentChanges(){
-		if (version == -1)
-			return null;
-		else
-			return Collections.unmodifiableList((LinkedList)versions.get(version));
+	
+	/** @return true if there are changes to be processed in a call to undo() */
+	public boolean canUndo() {
+		return version >= 0;
 	}
-
+	
 	/**
 	 * Undo all changes back to the previous mark
 	 */
@@ -126,22 +99,23 @@ public class History {
 		if (version < 0)
 			return;
 
+		// undo all changes in order
 		try {
 			busy = true;
-
-			LinkedList current = (LinkedList) versions.get(version);
-			// undo all changes in order
-			for (Iterator it = current.iterator (); it.hasNext(); ) {
-				Change change = (Change)it.next ();
+			for (Change change: versions.get(version)) {
 				change.versionable.undo (change.data);
 			}
 			version --;
-		}
-		finally {
+		} finally {
 			busy = false;
 		}
 	}
-
+	
+	/** @return true if there are changes to be processed in a call to redo */
+	public boolean canRedo() {
+		return version < versions.size()-1;
+	}
+	
 	/**
 	 * Redo all changes up to the next mark
 	 */
@@ -152,13 +126,12 @@ public class History {
 		
 		try {
 			busy = true;
-			
 			version ++;
-			LinkedList current = (LinkedList) versions.get(version);
+			LinkedList<Change> current = versions.get(version);
 			// redo all changes in reverse order
-			ListIterator it = current.listIterator (current.size());
+			ListIterator<Change> it = current.listIterator (current.size());
 			while (it.hasPrevious()) {
-				Change change = (Change)it.previous ();
+				Change change = it.previous ();
 				change.versionable.redo (change.data);
 			}
 		}
@@ -166,8 +139,16 @@ public class History {
 			busy = false;
 		}
 	}
+	
+	/**
+	 * Programmatically frees object resources to make it ready for garbage 
+	 * collection. Object should not be used after calling this method.
+	 */
+	public void dispose(){
+		versions.clear();
+	}
 
-	class Change {
+	private static class Change {
 		public final Versionable versionable;
 		public final Object data;
 		public Change (Versionable versionable, Object data) {

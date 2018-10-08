@@ -1,23 +1,3 @@
-// Copyright 2008, Arizona Board of Regents
-// on behalf of Arizona State University
-// 
-// Prepared by the Mars Space Flight Facility, Arizona State University,
-// Tempe, AZ.
-// 
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-// 
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU General Public License for more details.
-// 
-// You should have received a copy of the GNU General Public License
-// along with this program.  If not, see <http://www.gnu.org/licenses/>.
-
-
 package edu.asu.jmars.layer.groundtrack;
 
 import java.awt.BasicStroke;
@@ -27,7 +7,6 @@ import java.awt.Component;
 import java.awt.Graphics2D;
 import java.awt.GridBagConstraints;
 import java.awt.GridBagLayout;
-import java.awt.Shape;
 import java.awt.event.ActionEvent;
 import java.awt.event.ActionListener;
 import java.awt.event.MouseAdapter;
@@ -50,12 +29,12 @@ import javax.swing.JLabel;
 import javax.swing.JMenuItem;
 import javax.swing.JOptionPane;
 import javax.swing.JPanel;
+import javax.swing.UIManager;
 
 import edu.asu.jmars.Main;
 import edu.asu.jmars.ProjObj;
-import edu.asu.jmars.graphics.Graphics2DAdapter;
-import edu.asu.jmars.graphics.SpatialGraphicsSpOb;
 import edu.asu.jmars.layer.FocusPanel;
+import edu.asu.jmars.layer.LManager;
 import edu.asu.jmars.layer.Layer;
 import edu.asu.jmars.layer.SerializedParameters;
 import edu.asu.jmars.layer.WatchedThread;
@@ -364,7 +343,9 @@ public class GroundTrackLView
 
     public String getName()
      {
-	return	currLayerPars.craft + " Groundtrack";
+    	if (currLayerPars == null)
+			return getClass().getSimpleName();
+		return	currLayerPars.craft + " Groundtrack";
      }
 
     public String getToolTipText(MouseEvent e)
@@ -413,22 +394,6 @@ public class GroundTrackLView
 	    log.aprintStack(-1);
 	    return;
 	 }
-     }
-
-    /**
-     ** Modifies and returns the given line, so as to ensure that its
-     ** points are all within 180 degrees of anchor's X ordinate.
-     **/
-    private static Line2D.Double normalize(Point2D anchor,
-					   Line2D.Double line)
-     {
-	double x = anchor.getX();
-	log.println("Anchoring to " + x);
-	log.println("\t" + line.x1 + "\t" + line.x2);
-	line.x1 += Math.round((x - line.x1) / 360) * 360;
-	line.x2 += Math.round((x - line.x2) / 360) * 360;
-	log.println("\t" + line.x1 + "\t" + line.x2);
-	return	line;
      }
 
     private void receiveGroundTrack(Line2D[] layerData)
@@ -530,9 +495,6 @@ public class GroundTrackLView
 	if(segs == null)
 	    return  Double.NaN;
 
-	if(Main.PO instanceof ProjObj.Projection_SOM)
-	    return  findTimeByWorldPt_time(worldPt);
-	else
 	    return  findTimeByWorldPt_cyl(worldPt);
      }
 
@@ -619,63 +581,6 @@ public class GroundTrackLView
 	return	estimateTime(minIndex, worldPt);
      }
 
-    /**
-     ** Performs the real work of {@link #findTimeByWorldPt}. This
-     ** routine is near-copied in ROILView, so make updates in
-     ** parallel.
-     **/
-    private double findTimeByWorldPt_time(final Point2D worldPt)
-     {
-	Dimension2D pixelSize = viewman.getProj().getPixelSize();
-	double w = proximityPixels * pixelSize.getWidth();
-	double h = proximityPixels * pixelSize.getHeight();
-
-	// All these final variables are used inside the
-	// Graphics2DAdapter below.
-	final Rectangle2D proximity =
-	    new Rectangle2D.Double(worldPt.getX() - w/2,
-				   worldPt.getY() - h/2,
-				   w, h);
-	// These basically function as pointers... long story, but
-	// they must be arrays, and they must be final.
-	final double[] minDistanceSq = { Double.MAX_VALUE };
-	final int[] minIndex = { -1 };
-	final int[] ii = { -1 };
-
-	// This looks really silly, I know, but it's the most
-	// efficient and convenient way to re-use the necessary logic
-	// from the SpatialGraphicsSpOb class without a LOT of work.
-	Graphics2D fakeG2 = new SpatialGraphicsSpOb(
-	    new Graphics2DAdapter()
-	     {
-		public void draw(Shape sh) // sh is ALWAYS a Line2D object
-		 {
-		    if(sh.intersects(proximity))
-		     {
-			double distanceSq =
-			    ((Line2D) sh).ptLineDistSq(worldPt);
-			if(distanceSq < minDistanceSq[0])
-			 {
-			    minDistanceSq[0] = distanceSq;
-			    minIndex[0] = ii[0];
-			 }
-		     }
-		 }
-	     },
-	    getProj(),
-	    proximity
-	    );
-
-	// "Draw" each segment... really we're finding the closest segment
-	for(ii[0]=0; ii[0]<segs.length; ii[0]++)
-	    fakeG2.draw( segs[ ii[0] ] );
-
-	// Did we come up with nothing?
-	if(minIndex[0] == -1)
-	    return  Double.NaN;
-
-	return	estimateTime(minIndex[0], worldPt);
-     }
 
     /**
      ** Uses the groundtrack data to estimate a (normalized) velocity
@@ -684,19 +589,6 @@ public class GroundTrackLView
     private HVector estimateVel(double et)
      {
 	return	estimatePos(et+5).sub(estimatePos(et-5)).unit();
-     }
-
-    /**
-     ** Uses the groundtrack data to estimate a (normalized) direction
-     ** "vector" (in world coordinates) at a given time.
-     **/
-    private Point2D estimateDir(double et)
-     {
-	Point2D a = getProj().world.fromHVector(estimatePos(et-5));
-	Point2D b = getProj().world.fromHVector(estimatePos(et+5));
-	Point2D pt = new Point2D.Double(b.getX() - a.getX(),
-					b.getY() - a.getY());
-	return	pt;
      }
 
     /**
@@ -740,8 +632,7 @@ public class GroundTrackLView
 	// Interpolate along the segment to offset from its starting time
 	HVector a = HVector.fromSpatial( segs[ segIdx ].getP1() );
 	HVector b = HVector.fromSpatial( segs[ segIdx ].getP2() );
-	HVector p = HVector.fromSpatial(
-	    Main.PO.convWorldToSpatialFromProj(getProj(), worldPt) );
+	HVector p = HVector.fromSpatial( getProj().world.toSpatial(worldPt) );
 	double offset = HVector.uninterpolate(a, b, p) * pars.request.delta;
 
 	return	segTime + offset;
@@ -749,8 +640,10 @@ public class GroundTrackLView
 
     public FocusPanel getFocusPanel()
      {
-	if(focusPanel == null)
-	    focusPanel = myFocus = new MyFocus();
+	if(focusPanel == null){
+	    focusPanel = new FocusPanel(this,false);
+		focusPanel.add("Adjustments", new MyFocus());
+     }
 	return	focusPanel;
      }
 
@@ -787,9 +680,8 @@ public class GroundTrackLView
 	    field.setText(currLayerPars.craft + ":orbit:");
      }
 
-    private MyFocus myFocus;
     private class MyFocus
-     extends FocusPanel
+     extends JPanel
      implements ActionListener
      {
 	JComboBox comboSpacecraft;
@@ -802,8 +694,10 @@ public class GroundTrackLView
 
 	MyFocus()
 	 {
-	    super(GroundTrackLView.this);
+	   // super(GroundTrackLView.this);
 
+		setBackground(UIManager.getColor("TabbedPane.selected"));
+		
 	    comboSpacecraft = new JComboBox(GroundTrackFactory.SPACECRAFT);
 	    comboSpacecraft.addActionListener(
 		new ActionListener()
@@ -819,7 +713,7 @@ public class GroundTrackLView
 			((GroundTrackLView)getChild())
 			    .setLayer(currLayerPars.getLayer());
 			clearOffScreen();
-			Main.getLManager().updateLabels();
+			LManager.getLManager().updateLabels();
 			repaint();
 		     }
 		 }
@@ -861,6 +755,7 @@ public class GroundTrackLView
 
 	    setLayout(new BorderLayout());
 	    JPanel jp = new JPanel();
+	    jp.setBackground(UIManager.getColor("TabbedPane.selected"));
 	    add(jp, BorderLayout.NORTH);
 
 	    jp.setBorder(BorderFactory.createEmptyBorder(10, 10, 10, 10));
@@ -961,42 +856,13 @@ public class GroundTrackLView
 		).start();
 	 }
      }
- }
-// 	    jp.setLayout(new GridBagLayout());
-// 	    GridBagConstraints c = new GridBagConstraints();
-// 	    c.fill = GridBagConstraints.BOTH;
-
-// 	    c.gridy = 0;
-
-// 	    c.weightx = 0; jp.add(new JLabel("Spacecraft:"), c);
-// 	    c.gridwidth = 2;
-// 	    c.weightx = 1; jp.add(comboSpacecraft, c);
-// 	    c.gridwidth = 1;
-
-// 	    c.gridy++;
-// 	    c.weightx = 1; c.gridx = 1; jp.add(new JLabel(" "), c);
-// 	    c.gridx = GridBagConstraints.RELATIVE;
-
-// 	    c.gridy++;
-
-// 	    c.weightx = 0; jp.add(new JLabel("Start time:"), c);
-// 	    c.weightx = 1; jp.add(txtBeg, c);
-// 	    c.weightx = 0; jp.add(comboBegColor, c);
-
-// 	    c.gridy++;
-
-// 	    c.weightx = 0; jp.add(new JLabel("End time:"), c);
-// 	    c.weightx = 1; jp.add(txtEnd, c);
-// 	    c.weightx = 0; jp.add(comboEndColor, c);
-
-// 	    c.gridy++;
-
-// 	    c.weightx = 0; jp.add(new JLabel("Delta secs:  "), c);
-// 	    c.weightx = 1; jp.add(txtDelta, c);
-// 	    c.weightx = 0; jp.add(noColorCombo, c);
-
-// 	    c.gridy++;
-// 	    c.weightx = 1; c.gridx = 1; jp.add(new JLabel(" "), c);
-
-// 	    c.gridy++;
-// 	    c.weightx = 1; c.gridx = 1; jp.add(btnUpdate, c);
+    
+//The following two methods are used to query for the
+// info panel fields (description, citation, etc)	
+   	public String getLayerKey(){
+   		return "Groundtracks";
+   	}
+   	public String getLayerType(){
+   		return "groundtrack";
+   	}
+}

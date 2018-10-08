@@ -1,26 +1,6 @@
-// Copyright 2008, Arizona Board of Regents
-// on behalf of Arizona State University
-// 
-// Prepared by the Mars Space Flight Facility, Arizona State University,
-// Tempe, AZ.
-// 
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-// 
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU General Public License for more details.
-// 
-// You should have received a copy of the GNU General Public License
-// along with this program.  If not, see <http://www.gnu.org/licenses/>.
-
-
 package edu.asu.jmars.layer.map2;
 
-import java.awt.Rectangle;
+import java.awt.Dimension;
 import java.awt.geom.Rectangle2D;
 import java.text.MessageFormat;
 
@@ -69,6 +49,9 @@ public class MapRequest {
 		return source;
 	}
 	
+	public String toString() {
+		return "MapRequest [" + source + ", " + worldExtent + ", PPD [" + ppd + "], " + (cancelled?", cancelled":"");
+	}
 	private static final class RORectangle extends Rectangle2D.Double {
 		public void setRect(Rectangle2D r) {
 			throw new IllegalStateException("Read only");
@@ -99,6 +82,13 @@ public class MapRequest {
 	
 	public ProjObj getProjection() {
 		return projection;
+	}
+	
+	/** Calculates and returns a new Dimension object with the size of an image necessary to hold the data this request represents */
+	public Dimension getImageSize() {
+		int w = (int)Math.ceil(worldExtent.getWidth()*ppd);
+		int h = (int)Math.ceil(worldExtent.getHeight()*ppd);
+		return new Dimension(w,h);
 	}
 	
 	// This is called by MapProcessor when the view or other part of the channel changes, making this 

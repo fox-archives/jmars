@@ -1,23 +1,3 @@
-// Copyright 2008, Arizona Board of Regents
-// on behalf of Arizona State University
-// 
-// Prepared by the Mars Space Flight Facility, Arizona State University,
-// Tempe, AZ.
-// 
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-// 
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU General Public License for more details.
-// 
-// You should have received a copy of the GNU General Public License
-// along with this program.  If not, see <http://www.gnu.org/licenses/>.
-
-
 package edu.asu.jmars.places;
 
 import java.awt.geom.Point2D;
@@ -53,12 +33,12 @@ public class Place {
 	 * Restores the view to a given place; always sets the location, will only
 	 * restore the projection, ppd, and maps if instructed to
 	 */
-	public static void gotoPlace(Place place, boolean restoreProj, boolean restorePPD, boolean restoreMaps) {
+	public void gotoPlace(boolean restoreProj, boolean restorePPD, boolean restoreMaps) {
 		if (restoreProj) {
-			ProjObj po = new ProjObj.Projection_OC(-place.projCenterLonLat.getX(), place.projCenterLonLat.getY());
+			ProjObj po = new ProjObj.Projection_OC(-projCenterLonLat.getX(), projCenterLonLat.getY());
 			Main.setProjection(po);
 			if (restoreMaps) {
-				for (MapOffset offset: place.offsets) {
+				for (MapOffset offset: offsets) {
 					MapServer server = MapServerFactory.getServerByName(offset.serverName);
 					if (server != null) {
 						MapSource source = server.getSourceByName(offset.mapName);
@@ -67,16 +47,15 @@ public class Place {
 						}
 					}
 				}
-				if (place.offsets.size() > 0) {
+				if (offsets.size() > 0) {
 					Main.testDriver.repaint();
 				}
 			}
 		}
-		Point2D worldPoint = Main.PO.convSpatialToWorld(flipLon(place.lonLat));
+		Point2D worldPoint = Main.PO.convSpatialToWorld(flipLon(lonLat));
+		Main.testDriver.locMgr.setLocation(worldPoint, true);
 		if (restorePPD) {
-			Main.testDriver.locMgr.setLocationAndZoom(worldPoint, place.ppd);
-		} else {
-			Main.testDriver.locMgr.setLocation(worldPoint, true);
+			Main.testDriver.mainWindow.getZoomManager().setZoomPPD(ppd, true);
 		}
 	}
 	
@@ -87,7 +66,7 @@ public class Place {
 	public Place() {
 		lonLat = flipLon(Main.PO.convWorldToSpatial(Main.testDriver.locMgr.getLoc()));
 		projCenterLonLat = Main.PO.getProjectionCenter();
-		ppd = Main.testDriver.mainWindow.getMagnify();
+		ppd = Main.testDriver.mainWindow.getZoomManager().getZoomPPD();
 		name = MessageFormat.format(
 			"{0,number,#.###}E, {1,number,#.###}N",
 			lonLat.getX(), lonLat.getY());

@@ -1,157 +1,123 @@
-// Copyright 2008, Arizona Board of Regents
-// on behalf of Arizona State University
-// 
-// Prepared by the Mars Space Flight Facility, Arizona State University,
-// Tempe, AZ.
-// 
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-// 
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU General Public License for more details.
-// 
-// You should have received a copy of the GNU General Public License
-// along with this program.  If not, see <http://www.gnu.org/licenses/>.
-
-
 /**
  * 
  */
 package edu.asu.jmars.layer.stamp.focus;
 
-import java.awt.BorderLayout;
-import java.awt.Color;
-import java.awt.Dimension;
-import java.awt.FlowLayout;
-import java.awt.GridBagConstraints;
-import java.awt.GridBagLayout;
-import java.awt.GridLayout;
-import java.awt.Insets;
-import java.awt.Point;
-import java.awt.Rectangle;
-import java.awt.datatransfer.Clipboard;
-import java.awt.datatransfer.StringSelection;
-import java.awt.event.ActionEvent;
-import java.awt.event.ActionListener;
-import java.awt.event.KeyAdapter;
-import java.awt.event.KeyEvent;
-import java.awt.event.MouseAdapter;
-import java.awt.event.MouseEvent;
-import java.io.File;
-import java.io.FileNotFoundException;
-import java.io.FileOutputStream;
-import java.io.ObjectInputStream;
-import java.io.OutputStreamWriter;
-import java.io.PrintStream;
-import java.net.URL;
-import java.net.URLConnection;
-import java.text.DecimalFormat;
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.Enumeration;
-import java.util.HashSet;
-import java.util.List;
-import java.util.Set;
-import java.util.StringTokenizer;
-import java.util.Vector;
+import javax.swing.JSplitPane;
+import javax.swing.JTable;
 
-import javax.swing.AbstractAction;
-import javax.swing.BorderFactory;
-import javax.swing.BoxLayout;
-import javax.swing.JButton;
-import javax.swing.JDialog;
-import javax.swing.JFileChooser;
-import javax.swing.JLabel;
-import javax.swing.JMenu;
-import javax.swing.JMenuItem;
-import javax.swing.JOptionPane;
-import javax.swing.JPanel;
-import javax.swing.JPopupMenu;
-import javax.swing.JScrollPane;
-import javax.swing.JSlider;
-import javax.swing.JTabbedPane;
-import javax.swing.JTextField;
-import javax.swing.SwingUtilities;
-import javax.swing.ToolTipManager;
-import javax.swing.border.EmptyBorder;
-import javax.swing.event.ChangeEvent;
-import javax.swing.event.ChangeListener;
-import javax.swing.table.DefaultTableCellRenderer;
-import javax.swing.table.DefaultTableModel;
-import javax.swing.table.TableColumn;
-
-import edu.asu.jmars.Main;
 import edu.asu.jmars.layer.FocusPanel;
 import edu.asu.jmars.layer.stamp.AddLayerWrapper;
-import edu.asu.jmars.layer.stamp.FilledStamp;
 import edu.asu.jmars.layer.stamp.StampLView;
 import edu.asu.jmars.layer.stamp.StampLayer;
-import edu.asu.jmars.layer.stamp.StampLayerSettings;
-import edu.asu.jmars.layer.stamp.StampShape;
-import edu.asu.jmars.layer.stamp.FilledStamp.State;
-import edu.asu.jmars.layer.stamp.StampLayer.StampSelectionListener;
 import edu.asu.jmars.layer.stamp.chart.ChartView;
-import edu.asu.jmars.layer.stamp.functions.RenderFunction;
-import edu.asu.jmars.swing.ColorCombo;
-import edu.asu.jmars.swing.MultiLabel;
-import edu.asu.jmars.swing.PasteField;
-import edu.asu.jmars.swing.STable;
-import edu.asu.jmars.swing.ValidClipboard;
-import edu.asu.jmars.util.Config;
-import edu.asu.jmars.util.Util;
-import edu.asu.jmars.util.stable.FilteringColumnModel;
+import edu.asu.jmars.layer.stamp.radar.FilledStampRadarTypeFocus;
+import edu.asu.jmars.layer.stamp.radar.RadarFocusPanel;
 
 public class StampFocusPanel extends FocusPanel	{
 	public StampTable     table;
 	
 	// Chart view attached to the main view.
 	public ChartView chartView;	
-	OutlineFocusPanel outlinePanel;
+	public OutlineFocusPanel outlinePanel;
+	public SpectraView spectraView;
+	private RadarFocusPanel radarPanel;
+	private FilledStampFocus filledPanel;
 	
-	public StampFocusPanel(StampLView stampLView, AddLayerWrapper wrapper) {
+	DavinciFocusPanel davinci = null;
+	
+	public StampFocusPanel(final StampLView stampLView, AddLayerWrapper wrapper) {
 		super(stampLView);
 
 		StampLayer stampLayer = stampLView.stampLayer; 
 		
 		table = new StampTable(stampLView);
 		
-		setLayout(new GridLayout(1,1));
-		JTabbedPane tabs = new JTabbedPane(JTabbedPane.BOTTOM);
-        
-		outlinePanel = new OutlineFocusPanel(stampLayer, table);
-		tabs.add("Outlines", outlinePanel);
+		table.setAutoResizeMode(JTable.AUTO_RESIZE_OFF);
 		
-		tabs.add("Filters", new FilterFocusPanel(stampLayer, wrapper));
-								
-		JScrollPane renderSP = new JScrollPane(stampLView.focusFilled);
-		renderSP.setHorizontalScrollBarPolicy(JScrollPane.HORIZONTAL_SCROLLBAR_AS_NEEDED);
-		renderSP.setVerticalScrollBarPolicy(JScrollPane.VERTICAL_SCROLLBAR_AS_NEEDED);
-		tabs.add("Rendered", renderSP);
+		outlinePanel = new OutlineFocusPanel(stampLayer, table);
+		
+		if (stampLayer.spectraData()) {
+			spectraView = new SpectraView(stampLView);
+			
+			JSplitPane splitPane = new JSplitPane(HORIZONTAL, true);
+			splitPane.add(outlinePanel);
+			splitPane.add(spectraView);
+			splitPane.setResizeWeight(0.6);
+			
+			add("Outlines", splitPane);
+		} else {
+			add("Outlines", outlinePanel);
+		}
+		
+		if (wrapper!=null) {
+			add("Filters", new FilterFocusPanel(stampLView, wrapper));
+		}
+		
+        if(stampLayer.lineShapes()){
+        	radarPanel = new RadarFocusPanel(stampLView);
+        	add("Radargram", radarPanel);
+        }
+		
+        //Rendered Tab
+        // This can either be for a traditional stamp layer (2d stamps
+        // on the surface of the body), or for a line stamp layer (some
+        // kind of ground penetrating radar).
+        if (stampLayer.enableRender()){
+       		filledPanel = new FilledStampImageTypeFocus(stampLView);
+        	add("Rendered", filledPanel);
+        }
+        else if(stampLayer.lineShapes()){
+    		filledPanel = new FilledStampRadarTypeFocus(stampLView);
+    		add("Rendered", filledPanel);
+    	}else{
+    		//this doesn't seem like it should be necessary, but if
+    		// an instance of this panel is not made (even when there
+    		// are no renderable objects) then the stamps do not load
+    		filledPanel = new FilledStampFocus(stampLView);
+    	}
         
-		tabs.add("Settings", new SettingsFocusPanel(stampLayer.getSettings(), stampLView));
-        tabs.add("Query", new QueryFocusPanel(wrapper, stampLayer));
         
-        if (stampLayer.getInstrument().equalsIgnoreCase("THEMIS")) {
+		if (stampLView.stampLayer.getInstrument().equalsIgnoreCase("davinci")) {
+			davinci = new DavinciFocusPanel(stampLayer);
+			add("Davinci Connection", davinci);
+		}
+		
+		if (!stampLayer.pointShapes()) {  // Currently no settings for PointShapes (MOLA).  All settings are on the outline tab
+			add("Settings", new SettingsFocusPanel(stampLView));
+		}
+		
+		if (wrapper!=null) {
+			add("Query", new QueryFocusPanel(wrapper, stampLayer));
+		}
+        
+        if (stampLayer.getParam(stampLayer.PLOT_UNITS).length()>0) {
         	chartView = new ChartView(stampLView);  		
-        	tabs.add("Chart", chartView);
+        	add("Chart", chartView);
         }
         
-		add(tabs, BorderLayout.CENTER);
-
+        
 		// add initial rows to the table
 		table.dataRefreshed();
 	}
 
 	public void dispose() {
 		table.getTableModel().removeAll();		
+		if (davinci!=null) {
+			davinci.dispose();
+		}
 	}
 	
 	public ChartView getChartView() {
 		return chartView;
+	}
+	
+	public RadarFocusPanel getRadarView(){
+		return radarPanel;
+	}
+	
+	public FilledStampFocus getRenderedView(){
+		return filledPanel;
 	}
 	
 	public int[] getSelectedRows() {
@@ -163,7 +129,9 @@ public class StampFocusPanel extends FocusPanel	{
 		outlinePanel.dataRefreshed();
 	}
 		      
-    public void updateData(Class[] newTypes, String[] newNames, String[] initialCols) {
+    @SuppressWarnings("unchecked")
+	public void updateData(Class[] newTypes, String[] newNames, String[] initialCols) {
     	table.updateData(newTypes, newNames, initialCols);
+    	outlinePanel.setColumnColorOptions(newNames);
     }
 }

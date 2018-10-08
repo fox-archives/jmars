@@ -1,31 +1,21 @@
-// Copyright 2008, Arizona Board of Regents
-// on behalf of Arizona State University
-// 
-// Prepared by the Mars Space Flight Facility, Arizona State University,
-// Tempe, AZ.
-// 
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-// 
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU General Public License for more details.
-// 
-// You should have received a copy of the GNU General Public License
-// along with this program.  If not, see <http://www.gnu.org/licenses/>.
-
-
 package edu.asu.jmars.layer.util.features;
 
+import java.awt.Component;
+import java.util.Set;
+
 import javax.swing.JPanel;
+
+import edu.asu.jmars.layer.shape2.ColumnEditor;
 
 public abstract class FieldFactory<E extends Field> {
 	private String name;
 	private Class<?> fieldType;
 	private Class<?> dataType;
+	/**
+	 * @param name The name of this field.
+	 * @param fieldType The type of Field object this factory produces.
+	 * @param dataType The type of data the fields of this factory work with, or null if unconstrained.
+	 */
 	public FieldFactory(String name, Class<?> fieldType, Class<?> dataType) {
 		this.name = name;
 		this.fieldType = fieldType;
@@ -43,11 +33,14 @@ public abstract class FieldFactory<E extends Field> {
 	public String toString() {
 		return name;
 	}
-	/** Creates a new default field */
-	public abstract E createField(FeatureCollection fc, Field f);
+	/** Creates a new default field, potentially based on these other fields in the feature collection. */
+	public abstract E createField(Set<Field> fields);
+	public E createField(Set<Field> fields, Component c){
+		return createField(fields);
+	}
 	/**
 	 * Creates a new editor for editing the given field, which should be
 	 * returned by {@link #createField(FeatureCollection, Field)}.
 	 */
-	public abstract JPanel createEditor(Field source);
+	public abstract JPanel createEditor(ColumnEditor editor, Field source);
 }

@@ -1,23 +1,3 @@
-// Copyright 2008, Arizona Board of Regents
-// on behalf of Arizona State University
-// 
-// Prepared by the Mars Space Flight Facility, Arizona State University,
-// Tempe, AZ.
-// 
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-// 
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU General Public License for more details.
-// 
-// You should have received a copy of the GNU General Public License
-// along with this program.  If not, see <http://www.gnu.org/licenses/>.
-
-
 package edu.asu.jmars;
 
 import java.awt.BorderLayout;
@@ -28,10 +8,17 @@ import java.awt.Insets;
 import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
 import java.awt.geom.Point2D;
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.IOException;
+import java.io.InputStream;
 import java.text.MessageFormat;
+import java.util.ArrayList;
 import java.util.Date;
+import java.util.HashMap;
 import java.util.Hashtable;
 import java.util.Iterator;
+import java.util.Map;
 import java.util.Timer;
 import java.util.TimerTask;
 
@@ -44,10 +31,12 @@ import javax.swing.SwingUtilities;
 import javax.swing.border.BevelBorder;
 import javax.swing.border.CompoundBorder;
 
-import edu.asu.jmars.layer.LManager2;
+import edu.asu.jmars.layer.LManager;
 import edu.asu.jmars.layer.LViewFactory;
 import edu.asu.jmars.layer.LViewManager;
 import edu.asu.jmars.layer.Layer;
+import edu.asu.jmars.layer.Layer.LView;
+import edu.asu.jmars.layer.SavedLayer;
 import edu.asu.jmars.layer.SerializedParameters;
 import edu.asu.jmars.layer.stamp.StampFactory;
 import edu.asu.jmars.ruler.BaseRuler;
@@ -55,37 +44,45 @@ import edu.asu.jmars.ruler.RulerManager;
 import edu.asu.jmars.swing.TabLabel;
 import edu.asu.jmars.util.Config;
 import edu.asu.jmars.util.DebugLog;
+import edu.asu.jmars.util.Util;
+import edu.emory.mathcs.backport.java.util.Collections;
 
 public class TestDriverLayered extends JPanel
 {
     private static DebugLog log = DebugLog.instance();
     
+	public ToolManager toolMgr;
     public  LocationManager locMgr;
     public  LViewManager    mainWindow;
     private LViewManager    panner;
-    public  LManager2	lmanager;
-    
+
+    // used to contain the panner on top of the main view
     protected TabLabel statusBar;
+    // used to contain the panner below the main view
     protected JSplitPane splitPane;
+	protected JSplitPane totalPane;
     
-    public static final int    INITIAL_MAIN_ZOOM;
-    public static final int    INITIAL_PANNER_ZOOM;
-    static {
-	    INITIAL_MAIN_ZOOM = 32;
-	    INITIAL_PANNER_ZOOM = 8;
-	}
+    public static final int INITIAL_MAIN_ZOOM = 32;
+	public static final int INITIAL_PANNER_ZOOM = 8;
+	// TODO: Seems like this should be overridden by a property....
+    public static final int INITIAL_MAX_ZOOM_LOG2 = 20;
     
-    boolean ignorePreviousState = false;    
+    boolean ignorePreviousState = false;
     
+	/**
+	 * If the user assigns a custom name to a layer then it is stored in the customLayerNames Map.
+	 */
+	private Map<LView,String> customLayerNames = new HashMap<LView, String>();
+	
     public TestDriverLayered()
     {
 	// location manager - look for a save initial value
 	String initialX = Main.userProps.getProperty("Initialx", "");
 	String initialY = Main.userProps.getProperty("Initialy", "");
 	String serverOffset = Main.userProps.getProperty("ServerOffset", "");
-
+	
 	locMgr = new LocationManager(Main.initialWorldLocation);
-
+	
 	if (initialX != "" && initialY != "" ) {
 	    Point2D.Double pt = null;
 
@@ -101,42 +98,66 @@ public class TestDriverLayered extends JPanel
 	    if ( pt != null )
 		locMgr.setLocation(pt, false);
 	}
-
+	
 	// LViewManager - first get saved values
-	int mainZoom = Main.userProps.getPropertyInt("MainZoom", INITIAL_MAIN_ZOOM);
-	int pannerZoom = Main.userProps.getPropertyInt("PannerZoom", INITIAL_PANNER_ZOOM);
-
-	locMgr.setZoom(mainZoom);
-	mainWindow = new LViewManager(locMgr, mainZoom);
-	panner	   = new LViewManager(locMgr, mainWindow, pannerZoom);
+	int mainZoomLog2 = Util.log2(Main.userProps.getPropertyInt("MainZoom", INITIAL_MAIN_ZOOM));
+	int pannerZoomLog2 = Util.log2(Main.userProps.getPropertyInt("PannerZoom", INITIAL_PANNER_ZOOM));
+	int maxZoomLog2 = Config.get("maxzoomlog2", INITIAL_MAX_ZOOM_LOG2);
+	
+	mainWindow = new LViewManager(locMgr, new ZoomManager(mainZoomLog2, maxZoomLog2), null);
+	panner	   = new LViewManager(locMgr, new ZoomManager(pannerZoomLog2, maxZoomLog2), mainWindow);
 	
 	// Create the status bar
 	statusBar = new TabLabel(" ");
-	
 	statusBar.setFont(new JTextField().getFont());
 	statusBar.setBorder(BorderFactory.createBevelBorder(BevelBorder.LOWERED));
-
+	
 	// lay them out
 	setLayout(new BorderLayout());
 	setBorder(BorderFactory.createEmptyBorder(10,10,10,10));
+	
 	mainWindow.setMinimumSize(new Dimension( 20,  20));
 	panner	  .setMinimumSize(new Dimension( 20,  20));
 	panner	.setPreferredSize(new Dimension(100, 100));
-	splitPane = new JSplitPane(JSplitPane.VERTICAL_SPLIT,mainWindow, panner);
+	
+	splitPane = new JSplitPane(JSplitPane.VERTICAL_SPLIT);
+	splitPane.setLeftComponent(mainWindow);
 	splitPane.setResizeWeight(1.0);
 	splitPane.setBorder(new CompoundBorder(
 			BorderFactory.createEmptyBorder(10,0,10,0),
 			BorderFactory.createBevelBorder(BevelBorder.LOWERED))
 	    );
 	
-	int height = Main.userProps.getPropertyInt("SplitPaneHeight", 400);
-	int width =  Main.userProps.getPropertyInt("SplitPaneWidth",  500);
+	// use the session value if defined, else use the config setting if defined, else use the old horizontal mode
+	int index = Main.userProps.getPropertyInt("PannerMode", Config.get("panner.mode", PannerMode.Horiz.ordinal()));
+	if (index < 0 || index >= PannerMode.values().length) {
+		index = PannerMode.Horiz.ordinal();
+	}
+	setPannerMode(PannerMode.values()[index]);
+	
+	int height = Main.userProps.getPropertyInt("SplitPaneHeight", 500);
+	int width =  Main.userProps.getPropertyInt("SplitPaneWidth",  600);
 	int div = Main.userProps.getPropertyInt("MainDividerLoc", splitPane.getDividerLocation());
 	splitPane.setPreferredSize( new Dimension( width, height));
 	splitPane.setDividerLocation(div);
 	
-	add(locMgr,    BorderLayout.NORTH);
-	add(splitPane, BorderLayout.CENTER);
+	//places the lviews inside a larger split pane that will also
+	// contain the lmanager
+	totalPane = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT);
+	totalPane.setRightComponent(splitPane);
+	totalPane.setBorder(BorderFactory.createEmptyBorder());
+	//creates a toolbar
+	toolMgr = new ToolManager();
+	
+	//creates the top panel of the main view
+	JPanel top = new JPanel(new BorderLayout());
+	top.add(locMgr, BorderLayout.WEST);
+	top.add(toolMgr, BorderLayout.CENTER);
+	top.add(mainWindow.getZoomManager(), BorderLayout.EAST);
+	
+	//adds all the pieces to the window
+	add(top,       BorderLayout.NORTH);
+	add(totalPane, BorderLayout.CENTER);
 	add(bottomRow, BorderLayout.SOUTH);
 	setMetersVisible(Config.get("main.meters.enable", false));
     }
@@ -216,45 +237,16 @@ public class TestDriverLayered extends JPanel
     public void dumpMainLViewManagerPNG(String filename) {
         mainWindow.dumpPNG(filename);
     }
-    
-    public LManager2 getLManager() {
-	return lmanager;
+
+    public void dumpMainLViewManagerTif(String filename) {
+        mainWindow.dumpTIF(filename);
     }
-    
-    
-
-   public void loadLManagerState() 
-    {
-       //make big if not preset
-       if(!Main.userProps.setWindowPosition(lmanager))
-	{
-	   Dimension currSize = lmanager.getSize();
-	   lmanager.setSize(currSize.width, 500);
-	}
-	
-       lmanager.validate();
-
-       try
-	{
-	   lmanager.setDockingStates(
-	       Main.userProps.getProperty("LManager.tabDocking"));
-	}
-       catch(Exception e)
-	{
-	   log.aprintln(e);
-	   log.aprintln("Failed to set layer manager tab positions");
-	}
-	
-       if(!Main.userProps.wasWindowShowing(lmanager))
-	   lmanager.setVisible(false);
-    }
-
 
 	// Get the properties of any defined rulers and general ruler properties.
 	public void loadRulersState()
 	{
 		
-		Hashtable allRulerSettings = (Hashtable)edu.asu.jmars.Main.userProps.loadUserObject( "AllRulerSettings");
+		Hashtable<String,Object> allRulerSettings = (Hashtable<String,Object>)Main.userProps.loadUserObject( "AllRulerSettings");
 		if (allRulerSettings != null){
 			RulerManager.Instance.loadSettings( allRulerSettings);
 		}
@@ -262,13 +254,13 @@ public class TestDriverLayered extends JPanel
 		int rulerCount = Main.userProps.getPropertyInt("RulerCount", 0);
 		for (int j=0; j < rulerCount; j++) {
 			String rulerLabel = "Ruler" + String.valueOf(j);
-			String rulerName = edu.asu.jmars.Main.userProps.getProperty( rulerLabel, "");
+			String rulerName = Main.userProps.getProperty( rulerLabel, "");
 			BaseRuler ruler = (BaseRuler)RulerManager.Instance.getRuler( rulerName);
 			if (ruler!=null){
-				Hashtable rulerSettings = (Hashtable)edu.asu.jmars.Main.userProps.loadUserObject( rulerLabel + "Settings");
+				Hashtable<String,Object> rulerSettings = (Hashtable<String,Object>)Main.userProps.loadUserObject( rulerLabel + "Settings");
 				ruler.loadSettings( rulerSettings);
 				if (j==0){
-					Hashtable settings = (Hashtable)edu.asu.jmars.Main.userProps.loadUserObject( "BaseRulerSettings");
+					Hashtable<String,Object> settings = (Hashtable<String,Object>)Main.userProps.loadUserObject( "BaseRulerSettings");
 					ruler.loadBaseRulerSettings( settings);
 				}
 			} 
@@ -278,7 +270,7 @@ public class TestDriverLayered extends JPanel
 	// Save the properties of any defined rulers and general ruler properties.
 	public void saveRulersState()
 	{
-		Hashtable allRulerSettings = RulerManager.Instance.saveSettings();
+		Hashtable<String,Object> allRulerSettings = RulerManager.Instance.saveSettings();
 		if (allRulerSettings != null){
 			Main.userProps.saveUserObject( "AllRulerSettings", allRulerSettings);
 		}
@@ -288,146 +280,253 @@ public class TestDriverLayered extends JPanel
 		for (int j=0; j < rulerCount; j++) {
 			BaseRuler ruler = (BaseRuler)RulerManager.Instance.rulerList.get(j);
 			Main.userProps.setProperty( "Ruler" + String.valueOf(j), ruler.getClass().getName());
-			Hashtable rulerSettings = ruler.saveSettings();
+			Hashtable<String,Object> rulerSettings = ruler.saveSettings();
 			Main.userProps.saveUserObject( "Ruler" + String.valueOf(j) + "Settings", rulerSettings);
 			if (j==0){
-				Hashtable settings = ruler.saveBaseRulerSettings();
+				Hashtable<String,Object> settings = ruler.saveBaseRulerSettings();
 				Main.userProps.saveUserObject( "BaseRulerSettings", settings);
 			}
 		}
 	}
 
+	public void saveState() {
+		Main.userProps.saveWindowPosition(Main.mainFrame);
+		// save the general JMARS stuff.
+		if (!LManager.getLManager().isDocked()) {
+			Main.userProps.saveWindowPosition(LManager.getDisplayFrame());
+		}
+		try
+		{
+			Main.userProps.setProperty("LManager.tabDocking",
+					LManager.getLManager().getDockingStates());
+		}
+		catch(Exception e)
+		{
+			log.aprintln(e);
+			log.aprintln("Failed to save layer manager tab locations");
+		}
+		Main.userProps.setProperty("selectedBody", Main.getCurrentBody());
+		Main.userProps.setProperty("versionNumber", Util.getVersionNumber());
+		Main.userProps.setProperty(Main.SESSION_KEY_STR, Main.getSessionKey());
+		Main.userProps.setProperty("SplitPaneHeight", String.valueOf(splitPane.getSize().height));
+		Main.userProps.setProperty("SplitPaneWidth", String.valueOf(splitPane.getSize().width));
+		Main.userProps.setProperty("jmars.user", Main.USER);
+		Main.userProps.setPropertyInt("MainDividerLoc",	     splitPane.getDividerLocation());
+		Main.userProps.setPropertyInt("MainZoom",	 mainWindow.getZoomManager().getZoomPPD());
+		Main.userProps.setPropertyInt("PannerZoom",	 panner.getZoomManager().getZoomPPD());
+		int pannerModeOrd = Config.get("panner.mode", -1);
+		if (pannerModeOrd >= 0 && pannerModeOrd < PannerMode.values().length) {
+			Main.userProps.setPropertyInt("PannerMode", pannerModeOrd);
+		}
+		Main.userProps.setProperty("Initialx",		 String.valueOf( locMgr.getLoc().getX() ));
+		Main.userProps.setProperty("Initialy",		 String.valueOf( locMgr.getLoc().getY() ));
+		// note: JMARS west lon => USER east lon
+		Main.userProps.setProperty("Projection_lon",	     String.valueOf((360-Main.PO.getCenterLon())%360));
+		Main.userProps.setProperty("Projection_lat",	     String.valueOf(Main.PO.getCenterLat()));
+		Main.userProps.setProperty("ServerOffset",	 String.valueOf(Main.PO.getServerOffsetX()));
+		LManager.getLManager().saveState();
+		
+		// Set the general ruler properties.
+		RulerManager.Instance.saveSettings();
 
-    public void saveState()
-    {
-	// save the general JMARS stuff.
-	Main.userProps.saveWindowPosition(lmanager);
-	try
-	 {
-		Main.userProps.setProperty("LManager.tabDocking",
-								   lmanager.getDockingStates());
-	 }
-	catch(Exception e)
-	 {
-		log.aprintln(e);
-		log.aprintln("Failed to save layer manager tab locations");
-	 }
-	Main.userProps.setProperty("SplitPaneHeight", String.valueOf(splitPane.getSize().height));
-	Main.userProps.setProperty("SplitPaneWidth", String.valueOf(splitPane.getSize().width));
-	Main.userProps.setProperty("jmars.user", Main.USER);
-	Main.userProps.setPropertyInt("MainDividerLoc",	     splitPane.getDividerLocation());
-	Main.userProps.setPropertyInt("MainZoom",	 mainWindow.getMagnification());
-	Main.userProps.setPropertyInt("PannerZoom",	 panner.getMagnification());
-	Main.userProps.setProperty("Initialx",		 String.valueOf( locMgr.getLoc().getX() ));
-	Main.userProps.setProperty("Initialy",		 String.valueOf( locMgr.getLoc().getY() ));
-	// note: JMARS west lon => USER east lon
-	Main.userProps.setProperty("Projection_lon",	     String.valueOf((360-Main.PO.getCenterLon())%360));
-	Main.userProps.setProperty("Projection_lat",	     String.valueOf(Main.PO.getCenterLat()));
-	Main.userProps.setProperty("ServerOffset",	 String.valueOf(Main.PO.getServerOffsetX()));
-	
-	// Set the general ruler properties.
-	RulerManager.Instance.saveSettings();
-	Main.userProps.saveUserObject("RulerSettings",	     RulerManager.Instance.rulerSettings);
+		// Set the properties of any defined rulers.
+		saveRulersState();
 
-	// Set the properties of any defined rulers.
-	saveRulersState();
+		// Set the properties of any defined views. 
+		Main.userProps.setPropertyInt("ViewCount", mainWindow.viewList.size());
+		Iterator iterViews = mainWindow.viewList.iterator();
+		int i=1;
+		while(iterViews.hasNext()) {
+			Layer.LView lview = (Layer.LView) iterViews.next();
+			String basename = "View" + String.valueOf(i);
+			if(lview.originatingFactory == null)
+				continue;
+			
+			Main.userProps.setProperty(basename, lview.originatingFactory.getClass().getName());
 
-	// Set the properties of any defined views. 
-	Main.userProps.setPropertyInt("ViewCount", mainWindow.viewList.size());
-	Iterator iterViews = mainWindow.viewList.iterator();
-	int i=1;
-	while(iterViews.hasNext()) {
-	    Layer.LView lview = (Layer.LView) iterViews.next();
-	    
-	    if(lview.originatingFactory == null)
-		continue;
-	    Main.userProps.setProperty("View" + String.valueOf(i), lview.originatingFactory.getClass().getName());
-	    
-	    //Store the views starting parms in a file if available
-	    SerializedParameters parms = lview.getInitialLayerData();
-	    if ( parms != null ) {
-		Main.userProps.saveUserObject("View" + String.valueOf(i) + "Parms", parms);
-	    }
-	    
-	    //Store the views current settings in a file if available
-	    Hashtable sparms = lview.getViewSettings();
-	    if ( sparms != null ) {
-		Main.userProps.saveUserObject("View" + String.valueOf(i) + "Settings", sparms);
-	    }
-	    i++;
+			//Store the views starting parms in a file if available
+			SerializedParameters parms = lview.getInitialLayerData();
+			if ( parms != null ) {
+				Main.userProps.saveUserObject(basename + "Parms", parms);
+			}
+
+			//Store the views current settings in a file if available
+			Hashtable sparms = lview.getViewSettings();
+			if ( sparms != null ) {
+				Main.userProps.saveUserObject(basename + "Settings", sparms);
+			}
+			
+			String customName = customLayerNames.get(lview);
+			if (customName != null && customName.length() > 0) {
+				Main.userProps.setProperty(basename + "Name", customName);
+			}
+			i++;
+		}
+		saveBodyLayerFiles();
 	}
-    }
-    
-
+	private void saveBodyLayerFiles() {
+		String path = Main.getBodyBaseDir();
+		File directory = new File(Main.getJMarsPath()+path);
+		if (directory.exists()) {
+			File[] fileList = directory.listFiles();
+			HashMap<String, ArrayList<SavedLayer>> bodyMap = new HashMap<String, ArrayList<SavedLayer>>();
+			InputStream is = null;
+			for(File oneFile : fileList) {
+				try {
+					 is = new FileInputStream(oneFile);
+					ArrayList<SavedLayer> list = (ArrayList<SavedLayer>) SavedLayer.load(is);
+					bodyMap.put(oneFile.getName(), list);
+				} catch (Exception e) {
+					log.aprintln(e);
+					log.aprintln("Failed to save layer for "+oneFile.getName());
+				} finally {
+					try {
+						is.close();
+					} catch (IOException e) {
+						log.println(e);
+						e.printStackTrace();
+					}
+				}
+			}
+			Main.userProps.saveUserObject(Main.BODY_FILE_MAP_STR, bodyMap);
+		}
+	}
 	// builds the views if there were any defined in the application properties, 
 	public void buildViews()
 	{
 		//Determine if there were saved views
 		int viewCnt = Main.userProps.getPropertyInt("ViewCount", 0);
 
-		// If we aren't getting things from an init file, build default
-		// views.
-		if ( viewCnt == 0 || ignorePreviousState ) {
-			// Simulate some simple factory function results for now
-			Iterator iter = LViewFactory.factoryList.iterator();
-
+		if (Main.savedLayers != null) {
+			SwingUtilities.invokeLater(new Runnable() {
+				public void run() {
+					Collections.reverse(Main.savedLayers);
+					for (SavedLayer layer: Main.savedLayers) {
+						layer.materialize();
+					}
+					// saved layers could be large, so let the GC reap away
+					Main.savedLayers = null;
+				}
+			});
+		} else if ( viewCnt == 0 || ignorePreviousState ) {
+			// If we aren't getting things from an init file, build default views.
 			// For right now: just create one default version of every
 			// possible view
+			Iterator iter = LViewFactory.factoryList.iterator();
 			while(iter.hasNext()){
 				Layer.LView view;
 				LViewFactory factory = (LViewFactory) iter.next();
 				view=factory.createLView();
 				if(view != null) {
-					mainWindow.viewList.add(view);
+					LManager.receiveNewLView(view);
 				}
 			}
-
-		}
-
-		// If we ARE getting views from an init file, build them now.
-		else {
+		} else {
+			// If we ARE getting views from an init file, build them now.
 			Layer.LView view = null;
 			for ( int i=1; i <=viewCnt; i++ ) {
-
-				//Look for a serialized initial parameter block and start the view with the
-				//data if present.
-				String factoryName = Main.userProps.getProperty("View" + String.valueOf(i), "");
-				LViewFactory factory = LViewFactory.getFactoryObject(factoryName);
-				// TODO: serialization formats change, and code to adapt from an
-				// old form to a new form WILL ABSOLUTELY BE REQUIRED. We just
-				// need a mechanism to make bolting in such code less of a hack.
-				if (factory == null && factoryName.endsWith("StampFactory")) {
-					try {
+				String basename = "View" + String.valueOf(i);
+				String factoryName = Main.userProps.getProperty(basename, "");
+				try {
+					// Look for a serialized initial parameter block and start the view with the
+					// data if present.
+					LViewFactory factory = LViewFactory.getFactoryObject(factoryName);
+					// TODO: serialization formats change, and code to adapt from an
+					// old form to a new form WILL ABSOLUTELY BE REQUIRED. We just
+					// need a mechanism to make bolting in such code less of a hack.
+					if (factory == null && factoryName.endsWith("StampFactory")) {
 						factory = StampFactory.createAdapterFactory(factoryName);
-					} catch (Exception e) {
-						log.println("Failure recreating instance of " + factoryName);
-						log.println(e);
 					}
-				}
-				
-				if ( factory != null ) {
-					SerializedParameters obj = 
-						(SerializedParameters) Main.userProps.loadUserObject("View" + String.valueOf(i) + "Parms");
-					view = factory.recreateLView(obj);
-					if (view != null) {
-						mainWindow.viewList.add(view);
-						Hashtable sobj = 
-							(Hashtable) Main.userProps.loadUserObject("View" + String.valueOf(i) + "Settings");
-						if ( sobj != null ){
-							view.setViewSettings(sobj);
+					
+					if ( factory != null ) {
+						SerializedParameters obj = (SerializedParameters) Main.userProps.loadUserObject(basename + "Parms");
+						view = factory.recreateLView(obj);
+						if (view != null) {
+							LManager.receiveNewLView(view);
+							Hashtable sobj =  (Hashtable) Main.userProps.loadUserObject(basename + "Settings");
+							if ( sobj != null ){
+								view.setViewSettings(sobj);
+								LManager.getLManager().updateVis();
+							}
+							String customName = (String)Main.userProps.getProperty(basename + "Name");
+							if (customName != null && customName.length() > 0) {
+								customLayerNames.put(view, customName);
+								LManager.getLManager().updateLabels();
+							}
 						}
 					}
+				} catch (Exception e) {
+					log.aprintln("Failure recreating instance of " + factoryName + ", caused by:");
+					log.aprintln(e);
 				}
 			}
+			LManager.getLManager().loadState();
 		}
 	} // end: buildViews()
-    
+
 	/** Recenters all LViewManagers to a new location given by p */
 	public void offsetToWorld(Point2D p) {
 		mainWindow.getGlassPanel().offsetToWorld(p);
 		panner.getGlassPanel().offsetToWorld(p);
-		
-		locMgr.setLocation(p, false);
-		mainWindow.setLocationAndZoom(p, mainWindow.getMagnification());
+		locMgr.setLocation(p, true);
 	}
+	
+	public Map<LView,String> getCustomLayerNames() {
+		return customLayerNames;
+	}
+	
+	public void setPannerMode(PannerMode mode) {
+		if (panner == null || mode == null) {
+			log.aprintln("Null panner or mode, panner controls programmed incorrectly");
+		} else {
+			switch (mode) {
+			case Horiz:
+				splitPane.setRightComponent(panner);
+				splitPane.setDividerSize(new JSplitPane().getDividerSize());
+				panner.setSize(mainWindow.getWidth(), 150);
+				break;
+			case Off:
+				splitPane.setRightComponent(null);
+				splitPane.setDividerSize(0);
+				break;
+			}
+			Config.set("panner.mode", ""+mode.ordinal());
+		}
+	}
+	
+	public static enum PannerMode {
+		// Must append new options to end of this enum, to avoid
+		// changing the ordinates of existing values.
+		Horiz("Horizontal"), Off("Off");
+		PannerMode(String title) {
+			this.title = title;
+		}
+		public final String title;
+	}
+	
+	public void setLManagerMode(LManagerMode mode) {
+		if (LManager.getLManager() == null || mode == null) {
+		} else {
+			switch (mode) {
+			case Verti:
+				totalPane.setLeftComponent(LManager.getLManager());
+				totalPane.setDividerSize(new JSplitPane().getDividerSize());
+				break;
+			case Off:
+				totalPane.setLeftComponent(null);
+				totalPane.setDividerSize(0);
+				break;
+			}
+		}
+	}
+
+	public static enum LManagerMode {
+		Verti("Vertical"), Off("Off");
+		LManagerMode(String title) {
+			this.title = title;
+		}
+
+		public final String title;
+	}
+
 } // end: class TestDriverLayered

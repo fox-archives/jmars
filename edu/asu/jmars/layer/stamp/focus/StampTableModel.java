@@ -1,23 +1,3 @@
-// Copyright 2008, Arizona Board of Regents
-// on behalf of Arizona State University
-// 
-// Prepared by the Mars Space Flight Facility, Arizona State University,
-// Tempe, AZ.
-// 
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-// 
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU General Public License for more details.
-// 
-// You should have received a copy of the GNU General Public License
-// along with this program.  If not, see <http://www.gnu.org/licenses/>.
-
-
 package edu.asu.jmars.layer.stamp.focus;
 
 import java.util.Enumeration;
@@ -25,11 +5,12 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Vector;
 
+import javax.swing.JButton;
 import javax.swing.table.DefaultTableModel;
 
 import edu.asu.jmars.layer.stamp.StampShape;
 
-class StampTableModel extends DefaultTableModel {
+public class StampTableModel extends DefaultTableModel {
     private Class[] columnClasses=new Class[0];
     private String[] columnNames=new String[0];
     
@@ -39,10 +20,16 @@ class StampTableModel extends DefaultTableModel {
 		if (columnIndex==columnNames.length) {
 			return StampShape.class;
 		}
-		return columnClasses[columnIndex];
+		
+		Class columnClass = columnClasses[columnIndex];
+		
+		return columnClass;
 	}
 
 	public int getColumnCount() {
+		if(columnNames == null){
+			return 0;
+		}
 		return columnNames.length;
 	}
 
@@ -108,13 +95,13 @@ class StampTableModel extends DefaultTableModel {
 	}
 	
 	public Object getValueAt(int rowIndex, int columnIndex) {
-		if (columnIndex==columnNames.length) {
-			Vector v = (Vector)dataVector.elementAt(rowIndex);
-			StampShape s = (StampShape)v.elementAt(v.size()-1);
-			return s;
-		} else {
-			return super.getValueAt(rowIndex, columnIndex);
+		if (columnClasses[columnIndex]==null) {
+			return "";
 		}
+				
+		Vector v = (Vector)dataVector.elementAt(rowIndex);
+		StampShape s = (StampShape)v.elementAt(v.size()-1);
+		return s.getData(columnIndex);
 	}
 
 	public Object getValueAt(int rowIndex) {

@@ -1,34 +1,17 @@
-// Copyright 2008, Arizona Board of Regents
-// on behalf of Arizona State University
-// 
-// Prepared by the Mars Space Flight Facility, Arizona State University,
-// Tempe, AZ.
-// 
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-// 
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU General Public License for more details.
-// 
-// You should have received a copy of the GNU General Public License
-// along with this program.  If not, see <http://www.gnu.org/licenses/>.
-
-
 package edu.asu.jmars.layer.map2;
 
 import java.awt.geom.Rectangle2D;
+import java.io.BufferedOutputStream;
 import java.io.File;
-import java.io.FileWriter;
+import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.OutputStreamWriter;
 import java.io.Reader;
 import java.net.URI;
 import java.net.URISyntaxException;
 import java.net.URL;
+import java.nio.charset.Charset;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -45,9 +28,10 @@ import org.dom4j.io.XMLWriter;
 import org.xml.sax.EntityResolver;
 import org.xml.sax.InputSource;
 
-import edu.asu.jmars.LocationManager;
 import edu.asu.jmars.Main;
 import edu.asu.jmars.util.DebugLog;
+import edu.asu.jmars.util.HttpRequestType;
+import edu.asu.jmars.util.JmarsHttpRequest;
 
 // TODO: at some point, this and the WMSLayer class need to handle more of the WMS standard.
 // Rules for e.g. property inheritance will go here.
@@ -152,6 +136,9 @@ public class WMSCapabilities {
 	 */
 	private static void parseLayers(List<WMSLayer> layers, List<String> category, boolean usingJmarsCategories, List<?> nodes) {
 		for (Iterator<?> layerIt = nodes.iterator(); layerIt.hasNext(); ) {
+			/* TODO
+			 * all the keywords referenced in this class need to be generalized
+			 */
 			Node node = (Node)layerIt.next();
 			Node title = node.selectSingleNode("Title");
 			Node name = node.selectSingleNode("Name");
@@ -183,7 +170,21 @@ public class WMSCapabilities {
 				Node numericKeyword = node.selectSingleNode("KeywordList/Keyword[text()=\"numeric\"]");
 				boolean hasNumericKeyword = numericKeyword != null;
 				
+				// the elevation keyword is another magic keyword to tell us whether the map in question
+				// contains elevation data, if present its supposed to be elevation data
+				Node elevationKeyword = node.selectSingleNode("KeywordList/Keyword[contains(text(),\"elevation\")]");
+				boolean hasElevationKeyword = elevationKeyword != null;
+				
 				String abstractText = abstractNode == null? null: abstractNode.getText();
+				
+				// add human readable units to map sources for access in numeric sources
+				Node unitsNode = node.selectSingleNode("KeywordList/Keyword[contains(text(), \"units:\")]");
+				//unitsNode.getText() returns "units:xxx", so parse out the first six characters
+				// to get rid of them...
+				//Sometimes there's a space after the :, so trim to get rid of that as well
+				String units = unitsNode == null? null : unitsNode.getText().substring(6).trim();
+				//can have value of 'null' from xml...change this to null instead of the string "null"
+				if(units!=null && units.equals("null"))	units = null;
 				
 				Rectangle2D latLonRect = null;
 				if (latLonBox != null){
@@ -207,16 +208,20 @@ public class WMSCapabilities {
 					}
 				}
 				
-				double maxPPD = Collections.max(Arrays.asList(LocationManager.zoomFactors));
+				double maxPPD = MapSource.MAXPPD_MAX;
 				Node maxPPDNode = node.selectSingleNode("KeywordList/Keyword[contains(text(),\"maxPPD:\")]");
 				if (maxPPDNode != null) {
 					String maxText = maxPPDNode.getText();
 					maxPPD = Double.parseDouble(maxText.substring(maxText.indexOf(":") + 1));
 				}
 				
+				Node ownerNode = node.selectSingleNode("KeywordList/Keyword[contains(text(),\"owner:\")]");
+				String owner = ownerNode == null? null: ownerNode.getText().substring(ownerNode.getText().indexOf(":") + 1);
+				
 				// add a new MapSource
-				layers.add(new WMSLayer(name.getText(), title.getText(), abstractText,
-						nodeCategory, hasNumericKeyword, latLonRect, ignoreValue, maxPPD));
+				layers.add(new WMSLayer(name.getText(), title.getText(), abstractText, units,
+						nodeCategory, hasNumericKeyword, hasElevationKeyword, latLonRect, ignoreValue, maxPPD,
+						owner));
 			} else if (title != null) {
 				// this XML element is a category node
 				
@@ -244,7 +249,10 @@ public class WMSCapabilities {
 				if (in == null) {
 					log.aprintln("Unable to load WMS 1.1.1 DTD, trying remote source");
 					try {
-						in = new URL(publicId).openStream();
+					    URL testUrl = new URL(publicId);
+			            JmarsHttpRequest request = new JmarsHttpRequest(testUrl.toString(), HttpRequestType.GET);
+			            request.send();
+						in = request.getResponseAsStream();
 					} catch (Exception e1) {
 						log.aprintln("Total failure");
 						return null;
@@ -260,7 +268,9 @@ public class WMSCapabilities {
 	};
 	
 	public void save(File filename, long modTime) throws IOException {
-		FileWriter out = new FileWriter(filename);
+		OutputStreamWriter out = new OutputStreamWriter(
+			new BufferedOutputStream(new FileOutputStream(filename)),
+			Charset.forName("ISO-8859-1"));
 		OutputFormat format = OutputFormat.createPrettyPrint();
 		XMLWriter writer = new XMLWriter(out, format);
 		writer.write(doc);
@@ -276,28 +286,38 @@ class WMSLayer {
 	private String name;
 	private String title;
 	private String abstractText;
+	private String units;
 	private String[][] categories;
+	private String owner;
 	private boolean isNumeric; // optional
+	private boolean hasElevation; //optional
 	private Rectangle2D latLonBBox; // optional
 	private double[] ignoreValue; // optional
 	private double maxPPD;
-	public WMSLayer(String name, String title, String abstractText, String[][] categories,
-			boolean isNumeric, Rectangle2D latLonBBox, double[] ignoreValue, double maxPPD) {
+	public WMSLayer(String name, String title, String abstractText, String units, String[][] categories,
+			boolean isNumeric, boolean hasElevation, Rectangle2D latLonBBox, double[] ignoreValue, double maxPPD,
+			String owner) {
 		super();
 		this.name = name;
 		this.title = title;
 		this.abstractText = abstractText;
+		this.units = units;
 		this.categories = categories;
 		this.isNumeric = isNumeric;
+		this.hasElevation = hasElevation;
 		this.latLonBBox = latLonBBox;
 		this.ignoreValue = ignoreValue;
 		this.maxPPD = maxPPD;
+		this.owner = owner;
 	}
 	public String[][] getCategories() {
 		return categories;
 	}
 	public boolean isNumeric() {
 		return isNumeric;
+	}
+	public boolean hasElevation() {
+		return hasElevation;
 	}
 	public String getName() {
 		return name;
@@ -308,6 +328,9 @@ class WMSLayer {
 	public String getAbstract(){
 		return abstractText;
 	}
+	public String getUnits(){
+		return units;
+	}
 	public Rectangle2D getLatLonBoundingBox(){
 		return latLonBBox;
 	}
@@ -316,6 +339,9 @@ class WMSLayer {
 	}
 	public double getMaxPPD() {
 		return maxPPD;
+	}
+	public String getOwner() {
+		return owner;
 	}
 	/** The layer identity, using the layer 'name' element */
 	public boolean equals(Object o) {

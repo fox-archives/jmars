@@ -1,28 +1,11 @@
-// Copyright 2008, Arizona Board of Regents
-// on behalf of Arizona State University
-// 
-// Prepared by the Mars Space Flight Facility, Arizona State University,
-// Tempe, AZ.
-// 
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-// 
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU General Public License for more details.
-// 
-// You should have received a copy of the GNU General Public License
-// along with this program.  If not, see <http://www.gnu.org/licenses/>.
-
-
 package edu.asu.jmars.layer.util.features;
 
 import java.awt.Color;
+import java.awt.Font;
 import java.util.LinkedHashSet;
 import java.util.Set;
+
+import javax.swing.UIManager;
 
 import edu.asu.jmars.util.LineType;
 
@@ -39,40 +22,38 @@ import edu.asu.jmars.util.LineType;
  * used; the compiler will be able to optimize final fields better.
  */
 public class Styles {
-	public Style<Boolean> antialias = new Style<Boolean>("Antialias", false);
-	public Style<FPath> geometry = new Style<FPath>("Geometry", Field.FIELD_PATH, null);
-	public Style<Number> pointSize = new Style<Number>("Point Size", Field.FIELD_POINT_SIZE, 3);
-	public Style<Boolean> showVertices = new Style<Boolean>("Show Vertices", true);
-	public Style<Number> vertexSize = new Style<Number>("Vertex Size", 3);
+    /** The default font for the platform. */
+    private static final Font DEFAULT_FONT = UIManager.getDefaults().getFont("MenuBar.font");
+	public final Style<Boolean> antialias = new Style<Boolean>("Antialias", false);
+	public final Style<FPath> geometry = new Style<FPath>("Geometry", Field.FIELD_PATH, null);
+	public final Style<Boolean> showVertices = new Style<Boolean>("Show Vertices", true);
 	
-	public Style<Boolean> showLabels = new Style<Boolean>("Show Labels", true);
-	public Style<String> labelText = new Style<String>("Label Text", Field.FIELD_LABEL, "");
-	public Style<Color> labelColor = new Style<Color>("Label Color", Field.FIELD_LABEL_COLOR, Color.WHITE);
+	public final Style<Number> pointSize = new Style<Number>("Point Size", Field.FIELD_POINT_SIZE, 3);
 	
-	public Style<Number> lineWidth = new Style<Number>("Line Width", Field.FIELD_LINE_WIDTH, 1);
-	public Style<Color> lineColor = new Style<Color>("Line Color", Field.FIELD_DRAW_COLOR, Color.WHITE);
-	public Style<LineType> lineDash = new Style<LineType>("Line Style", Field.FIELD_LINE_DASH, new LineType()); // solid
-	public Style<Boolean> showLineDir = new Style<Boolean>("Show Line Direction", false);
+	public final Style<Boolean> drawOutlines = new Style<Boolean>("Show Outlines",Field.FIELD_DRAW_OUTLINE,true);
+	public final Style<Number> lineWidth = new Style<Number>("Line Width", Field.FIELD_LINE_WIDTH, 1);
+	public final Style<Color> lineColor = new Style<Color>("Line Color", Field.FIELD_DRAW_COLOR, Color.WHITE);
+	public final Style<LineType> lineDash = new Style<LineType>("Line Style", Field.FIELD_LINE_DASH, new LineType()); // solid
+	public final Style<Boolean> showLineDir = new Style<Boolean>("Show Line Direction", false);
 	
-	public Style<Boolean> fillPolygons = new Style<Boolean>("Fill Polygons", true);
-	public Style<Color> fillColor = new Style<Color>("Fill Color", Field.FIELD_FILL_COLOR, Color.RED);
+	public final Style<Boolean> fillPolygons = new Style<Boolean>("Fill Polygons", true);
+	public final Style<Color> fillColor = new Style<Color>("Fill Color", Field.FIELD_FILL_COLOR, Color.RED);
+	public final Style<Number> vertexSize = new Style<Number>("Vertex Size", 3);
+	
+	public final Style<Boolean> showLabels = new Style<Boolean>("Show Labels", true);
+	public final Style<String> labelText = new Style<String>("Label Text", Field.FIELD_LABEL, "");
+	public final Style<Color> labelColor = new Style<Color>("Label Color", Field.FIELD_LABEL_COLOR, Color.WHITE);
+	public final Style<Color> labelBorderColor = new Style<Color>("Label Border Color",Field.FIELD_LABEL_BORDER_COLOR,Color.BLACK);
+	public final Style<String> labelFont = new Style<String>("Label Font", Field.FIELD_LABEL_FONT, DEFAULT_FONT.getFamily());
+	public final Style<Number> labelSize = new Style<Number>("Label Size",Field.FIELD_LABEL_SIZE,DEFAULT_FONT.getSize() + 2);
+	public final Style<String> labelStyle= new Style<String>("Label Style",Field.FIELD_LABEL_STYLE,"Bold");
 	
 	public Styles() {}
 	
 	/** copy constructor, makes a shallow copy except for public Style fields which are cloned */
 	public Styles(Styles styles) {
-		try {
-			for (java.lang.reflect.Field f: getClass().getFields()) {
-				Object o = f.get(styles);
-				if (o instanceof Style<?>) {
-					f.set(this, new Style<Object>((Style)o));
-				} else {
-					f.set(this, o);
-				}
-			}
-		} catch (Exception e) {
-			throw new IllegalStateException("Unable to create copy of styles object", e);
-		}
+		this();
+		setFrom(styles);
 	}
 	
 	/** Returns the public styles of this and all child classes as a set */
@@ -95,11 +76,23 @@ public class Styles {
 	public final Set<Field> getFields() {
 		Set<Field> out = new LinkedHashSet<Field>();
 		for (Style<?> s: getStyles()) {
-			if (s.getSource() instanceof StyleFieldSource) {
-				out.add(((StyleFieldSource<?>)s.getSource()).getField());
-			}
+			out.addAll(s.getSource().getFields());
 		}
 		return out;
+	}
+	
+	public void setFrom(Styles styles) {
+		try {
+			for (java.lang.reflect.Field f: getClass().getFields()) {
+				if (Style.class.isAssignableFrom(f.getType())) {
+					Style<Object> from = (Style<Object>)f.get(styles);
+					Style<Object> to = (Style<Object>)f.get(this);
+					to.setSource(from.getSource());
+				}
+			}
+		} catch (Exception e) {
+			throw new IllegalStateException("Unable to set style values", e);
+		}
 	}
 }
 

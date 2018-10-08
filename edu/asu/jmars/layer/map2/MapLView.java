@@ -1,23 +1,3 @@
-// Copyright 2008, Arizona Board of Regents
-// on behalf of Arizona State University
-// 
-// Prepared by the Mars Space Flight Facility, Arizona State University,
-// Tempe, AZ.
-// 
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-// 
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU General Public License for more details.
-// 
-// You should have received a copy of the GNU General Public License
-// along with this program.  If not, see <http://www.gnu.org/licenses/>.
-
-
 package edu.asu.jmars.layer.map2;
 
 import java.awt.AlphaComposite;
@@ -41,19 +21,27 @@ import java.awt.geom.PathIterator;
 import java.awt.geom.Point2D;
 import java.awt.geom.Rectangle2D;
 import java.awt.image.BufferedImage;
+import java.awt.image.BufferedImageOp;
 import java.text.DecimalFormat;
 import java.text.MessageFormat;
 import java.text.NumberFormat;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collection;
+import java.util.IdentityHashMap;
 import java.util.List;
+import java.util.Map;
 
 import javax.swing.SwingUtilities;
 import javax.swing.event.MouseInputListener;
 
 import edu.asu.jmars.Main;
 import edu.asu.jmars.ProjObj;
+import edu.asu.jmars.ToolManager;
 import edu.asu.jmars.layer.FocusPanel;
+import edu.asu.jmars.layer.InvestigateData;
+import edu.asu.jmars.layer.LManager;
+import edu.asu.jmars.layer.LayerParameters;
 import edu.asu.jmars.layer.PannerGlass;
 import edu.asu.jmars.layer.ProjectionEvent;
 import edu.asu.jmars.layer.ProjectionListener;
@@ -61,7 +49,10 @@ import edu.asu.jmars.layer.SerializedParameters;
 import edu.asu.jmars.layer.WrappedMouseEvent;
 import edu.asu.jmars.layer.Layer.LView;
 import edu.asu.jmars.layer.map2.msd.PipelineModel;
+import edu.asu.jmars.layer.shape2.ShapePath;
+import edu.asu.jmars.layer.util.features.FPath;
 import edu.asu.jmars.util.DebugLog;
+import edu.asu.jmars.util.DeltaExecutor;
 import edu.asu.jmars.util.HVector;
 import edu.asu.jmars.util.Util;
 
@@ -90,7 +81,7 @@ public class MapLView extends LView {
 	/** Parent MapLayer of this LView */
 	private MapLayer mapLayer;
 	/** The graphic map channel */
-	private MapChannelSlower graphicRequest;
+	private MapChannelTiled graphicRequest;
 	/** The numeric map channel, used by the main view to get tooltip data */
 	private MapChannelTiled numericRequest;
 	/** Line for which the profile is to be plotted */
@@ -105,11 +96,25 @@ public class MapLView extends LView {
 	private final Rectangle2D worldClip = new Rectangle2D.Double();
 	/** The list of numeric tiles; only used by the main view with at least one plot selection */
 	private final List<MapData> numericTiles = new ArrayList<MapData>();
-	
-	/** Constructs the main and panner views */
+	/** Ensures that certain painting operations are spaced out enough for something useful to have changed */
+	private final DeltaExecutor repainter = new DeltaExecutor(3000, new Runnable() {
+		public void run() {
+			MapLView.super.repaint();
+		}
+	});
+
 	public MapLView(MapLayer layer, final boolean mainView) {
-		super(layer);
+		this(layer, mainView, null);
+	}
 		
+	/** Constructs the main and panner views */
+		public MapLView(MapLayer layer, final boolean mainView, Object layerIdentifier) {
+		super(layer);
+		if(layerIdentifier instanceof LayerParameters){
+			this.layerParams = (LayerParameters)layerIdentifier;
+		}else if(layerIdentifier instanceof String){
+			this.layerKey = (String)layerIdentifier;
+		}
 		mapLayer = layer;
 		
 		Main.addProjectionListener(new ProjectionListener() {
@@ -146,13 +151,13 @@ public class MapLView extends LView {
 	}
 	
 	/** Creates a new channel for the graphic part of the view */
-	private MapChannelSlower createGraphicChannel() {
+	private MapChannelTiled createGraphicChannel() {
 		MapChannelReceiver r = new MapChannelReceiver() {
 			public void mapChanged(MapData mapData) {
 				updateGraphicData(mapData);
 			}
 		};
-		return new MapChannelSlower(new MapChannelTiled(r), 3000);
+		return new MapChannelTiled(r);
 	}
 	
 	/** Creates a new channel for the numeric part of the view */
@@ -178,8 +183,8 @@ public class MapLView extends LView {
 	 * within this LView
 	 */
 	public String getToolTipText(MouseEvent event) {
-		// Only show tooltips for a visible Main view of a selected layer
-		if (viewman2.getActiveLView()!=this || event.getSource() instanceof PannerGlass || !isVisible()) {
+		// Only show tooltips for a visible Main view of a selected layer (unless in investigate mode)
+		if ((viewman.getActiveLView()!=this || event.getSource() instanceof PannerGlass || !isVisible()) && ToolManager.getToolMode()!=ToolManager.INVESTIGATE) {
 			return null;
 		}
 		
@@ -195,7 +200,7 @@ public class MapLView extends LView {
 		
 		for (MapData tile: numericTiles) {
 			Rectangle2D extent = tile.getRequest().getExtent();
-			if (extent.contains(worldPoint)) {
+			if (extent.contains(worldPoint)) {				
 				int ppd = tile.getRequest().getPPD();
 				Rectangle2D sampleExtent = new Rectangle2D.Double(worldPoint.getX(), worldPoint.getY(), 1d/ppd, 1d/ppd);
 				double[] samples = tile.getRasterForWorld(sampleExtent).getPixels(0, 0, 1, 1, (double[])null);
@@ -204,8 +209,10 @@ public class MapLView extends LView {
 				nf.setMaximumFractionDigits(5);
 				StringBuffer readouts = new StringBuffer(100);
 				
-				readouts.append("<html>");
-				readouts.append("<table cellspacing=0 cellpadding=1>");
+				if (ToolManager.getToolMode()!=ToolManager.INVESTIGATE){
+					readouts.append("<html>");
+					readouts.append("<table cellspacing=0 cellpadding=1>");
+				}
 				
 				Pipeline numPipes[] = numericRequest.getPipelines();
 				
@@ -220,28 +227,110 @@ public class MapLView extends LView {
 				 * thoroughly when we have time.
 				 */
 				
-				for (int i=0; i<samples.length; i++) {
-					String title=numPipes[i].getSource().getTitle();
-					readouts.append("<tr><td align=right nowrap><b>");
-					readouts.append(title +":");
-					readouts.append("</b></td>");
-					readouts.append("<td>");
-					if (Double.isNaN(samples[i])) {
-						readouts.append("Value Unavailable");
-					} else {
-						readouts.append(nf.format(samples[i]));
+readoutloop:				for (int i=0; i<samples.length; i++) {
+					MapSource source = numPipes[i].getSource();
+					String title = source.getTitle();
+					String units = source.getUnits();
+					if(units==null){
+						units = "";
+					}else{
+						units=" "+units;
 					}
-					readouts.append("</td></tr>");
+					
+					
+					StringBuffer row = new StringBuffer(200);
+					row.append("<tr><td align=right nowrap><b>");
+					row.append(title +":");
+					row.append("</b></td>");
+					row.append("<td>");
+					
+					double ignoreValues[] = numPipes[i].getSource().getIgnoreValue();
+					
+					if (ignoreValues!=null) {
+						for (int v=0; v<ignoreValues.length; v++) {
+							if (samples[i]==ignoreValues[v]) {
+								continue readoutloop;
+							}
+						}
+					}
+					
+					if (Double.isNaN(samples[i])) {
+						row.append("Value Unavailable");
+					} else {
+						row.append(nf.format(samples[i])+units);
+					}
+					row.append("</td></tr>");
+					readouts.append(row);
 				}
 				
-				readouts.append("</table>");
-				readouts.append("</html>");
-				
+				if(ToolManager.getToolMode()!=ToolManager.INVESTIGATE){
+					readouts.append("</table>");
+					readouts.append("</html>");
+				}
+
 				return readouts.toString();
 			}
 		}
 		
 		return null;
+	}
+	
+	public InvestigateData getInvestigateData(MouseEvent event){
+	//Only do this for main view	
+		if ((viewman.getActiveLView()!=this || event.getSource() instanceof PannerGlass || !isVisible()) && ToolManager.getToolMode()!=ToolManager.INVESTIGATE) {
+			return null;
+		}
+	//Gets the layer name to display as the first part of investigateData	
+		String layerName = LManager.getLManager().getUniqueName(this);
+		
+	//Instantiates investigate data type object with the layerName	
+		InvestigateData invData = new InvestigateData(layerName);
+		
+	//Fills the hashmap with key and value entries to display under layer name	
+		// convert screen mouse point to unwrapped world and then normalize it to wrapped world coordinates
+		Point2D worldPoint = getProj().screen.toWorld(event.getPoint());
+		Rectangle2D worldExtent = Util.toWrappedWorld(new Rectangle2D.Double(worldPoint.getX(), worldPoint.getY(), 0, 0))[0];
+		worldPoint.setLocation(worldExtent.getMinX(), worldExtent.getMinY());
+		for (MapData tile: numericTiles) {
+			Rectangle2D extent = tile.getRequest().getExtent();
+			if (extent.contains(worldPoint)) {			
+				int ppd = tile.getRequest().getPPD();
+				Rectangle2D sampleExtent = new Rectangle2D.Double(worldPoint.getX(), worldPoint.getY(), 1d/ppd, 1d/ppd);
+				double[] samples = tile.getRasterForWorld(sampleExtent).getPixels(0, 0, 1, 1, (double[])null);
+				
+				Pipeline numPipes[] = numericRequest.getPipelines();
+			
+				loop: for (int i=0; i<samples.length; i++) {
+					MapSource source = numPipes[i].getSource();
+					String mapName = source.getTitle();
+					String units = source.getUnits();
+					String mapData;
+					boolean isNumeric = false;
+					
+					double ignoreValues[]=numPipes[i].getSource().getIgnoreValue();
+
+					if (ignoreValues!=null) {
+						for (int v = 0; v<ignoreValues.length; v++) {
+							if (samples[i]==ignoreValues[v]) {
+								continue loop; 
+							}
+						}
+					}
+					
+					if (Double.isNaN(samples[i])) {
+						mapData = "Value Unavailable";
+					} else {
+						mapData = samples[i]+"";
+						isNumeric = true;
+					}
+					if (mapData == null) continue loop;
+					invData.add(mapName, mapData, units, isNumeric);
+				}
+			}
+		}
+		
+		return invData;
+		
 	}
 	
 	public FocusPanel getFocusPanel() {
@@ -295,15 +384,16 @@ public class MapLView extends LView {
 	 */
 	public synchronized void paintComponent(Graphics g) {
 		// Don't try to draw unless the view is visible
-		if (!isVisible() || viewman2 == null)
+		if (!isVisible() || viewman == null) { //@since remove viewman2
 			return;
+		}
 		
 		// super.paintComponent draws the back buffers onto the layer panel
 		super.paintComponent(g);
 		
 		// then we draw the profile line on top of the layer panel
 		Graphics2D g2 = (Graphics2D) g.create();
-		g2 = viewman2.wrapWorldGraphics(g2);
+		g2 = viewman.wrapWorldGraphics(g2);
 		g2.transform(getProj().getWorldToScreen());
 		g2.setStroke(new BasicStroke(0));
 		
@@ -346,6 +436,14 @@ public class MapLView extends LView {
 	public void viewCleanup() {
 		// make sure requests are deactivated
 		setVisible(false);
+		
+		// make sure all sources are ignored
+		for (MapSource s: getSources(graphicRequest)) {
+			s.removeListener(graphicSourceListener);
+		}
+		for (MapSource s: getSources(numericRequest)) {
+			s.removeListener(numericSourceListener);
+		}
 	}
 	
 	/**
@@ -353,7 +451,7 @@ public class MapLView extends LView {
 	 * Layer Manager window.
 	 */
 	public String getName() {
-		if (mapLayer.getName() != null) {
+		if (mapLayer != null && mapLayer.getName() != null) {
 			return mapLayer.getName();
 		} else if (name != null) {
 			return name;
@@ -363,7 +461,7 @@ public class MapLView extends LView {
 	}
 	
 	private void updateName() {
-		Pipeline[] lviewPipeline = graphicRequest == null ? new Pipeline[0] : graphicRequest.getPipeline();
+		Pipeline[] lviewPipeline = graphicRequest == null ? new Pipeline[0] : graphicRequest.getPipelines();
 		Pipeline[] chartPipeline = numericRequest == null ? new Pipeline[0] : numericRequest.getPipelines();
 		
 		if (lviewPipeline.length == 0 && chartPipeline.length == 0) {
@@ -388,8 +486,8 @@ public class MapLView extends LView {
 		}
 		
 		// update labels
-		if (Main.getLManager() != null) {
-			Main.getLManager().updateLabels();
+		if (LManager.getLManager() != null) {
+			LManager.getLManager().updateLabels();
 		}
 	}
 	
@@ -407,9 +505,9 @@ public class MapLView extends LView {
 	
 	/** Receives a tile of map data and paints the visible portion of it to the back buffer */
 	private synchronized void updateGraphicData(MapData newData) {
-		if (!isVisible()) {
+		if (!isAlive()) {
 			// we have nothing to do when the LView is not selected for viewing
-			alog("Received mapData, but layer invisible.");
+			log("Received mapData, but layer invisible.");
 			updateStatus();
 			return;
 		}
@@ -423,21 +521,27 @@ public class MapLView extends LView {
 		
 		BufferedImage img = newData.getImage();
 		
+		Graphics2D g2 = null;
 		try {
-			// At this point, we have good data to draw, so let's do it
-			Graphics2D g2 = getOffScreenG2();
-			g2.setComposite(AlphaComposite.getInstance(AlphaComposite.SRC));
-			
+			// At this point, we have something to draw
+			g2 = getOffScreenG2();
 			if (newData.isFinished() && newData.getFinishedArea().isEmpty()) {
+				// paint an indication of error, the 'death tile'
 				double length = 50d / newData.getRequest().getPPD();
 				Paint p = new TexturePaint(errorTile, new Rectangle2D.Double(0,0,length,length));
 				g2.setPaint(p);
 				g2.fill(newData.getRequest().getExtent());
 			} else if (!newData.getValidArea().isEmpty() && img != null) {
+				// paint a good MapData object by passing through ignore filter if defined, and clipping to extent
+				BufferedImageOp op = newData.getOperator();
+				if (op != null) {
+					img = op.filter(img, Util.newBufferedImage(img.getWidth(), img.getHeight()));
+				}
 				Rectangle2D dataBounds = newData.getRequest().getExtent();
 				worldClip.setFrame(-180,-90,720,180);
 				Rectangle bounds = MapData.getRasterBoundsForWorld(img.getRaster(), dataBounds, worldClip);
 				if (!bounds.isEmpty()) {
+					g2.setComposite(AlphaComposite.Src);
 					Rectangle2D.intersect(worldClip, dataBounds, worldClip);
 					img = img.getSubimage(bounds.x, bounds.y, bounds.width, bounds.height);
 					g2.drawImage(img, Util.image2world(img.getWidth(), img.getHeight(), worldClip), null);
@@ -448,10 +552,14 @@ public class MapLView extends LView {
 		} catch (Exception ex) {
 			alog("Error drawing image");
 			log.aprintln(ex);
+		} finally {
+			if (g2 != null) {
+				g2.dispose();
+			}
 		}
 		
 		updateStatus();
-		repaint();
+		repaintDeferred(graphicRequest == null || graphicRequest.isFinished());
 	}
 	
 	/**
@@ -472,7 +580,7 @@ public class MapLView extends LView {
 	 * can see, or null if there is no associated view manager as of yet.
 	 */
 	private Rectangle2D getClippedExtent() {
-		if (viewman2 == null) {
+		if (!isVisible()) {//@since remove viewman2
 			return null;
 		} else {
 			// get portion of view over the OC-projected world
@@ -483,6 +591,8 @@ public class MapLView extends LView {
 			return viewExtent;
 		}
 	}
+	
+	private static final Point2D zero = new Point2D.Double(0,0);
 	
 	private synchronized void updateProjection() {
 		log("Proj changed event");
@@ -495,7 +605,9 @@ public class MapLView extends LView {
 		if (MapServerFactory.getMapServers() != null) {
 			for(MapServer mapServer: MapServerFactory.getMapServers()) {
 				for(MapSource mapSource: mapServer.getMapSources()){
-					mapSource.setOffset(new Point2D.Double(0,0));
+					if (!zero.equals(mapSource.getOffset())) {
+						mapSource.setOffset(new Point2D.Double(0,0));
+					}
 				}
 			}
 		}
@@ -514,7 +626,7 @@ public class MapLView extends LView {
 		// get projection, extent, and magnification level
 		ProjObj proj = getPO();
 		Rectangle2D viewExtent = getClippedExtent();
-		int ppd = viewman2.getMagnification();
+		int ppd = viewman.getZoomManager().getZoomPPD();
 		
 		clearOffScreen();
 		
@@ -536,8 +648,8 @@ public class MapLView extends LView {
 				getName(), getChild() == null ? "panner" : "main"));
 			
 			if (graphicRequest != null) {
-				graphicRequest.setView(proj, viewExtent, ppd, true);
-				printPipeline(graphicRequest.getPipeline(), "Using old pipeline");
+				graphicRequest.setRequest(proj, viewExtent, ppd, graphicRequest.getPipelines());
+				printPipeline(graphicRequest.getPipelines(), "Using old pipeline");
 			}
 			
 			if (numericRequest != null) {
@@ -553,7 +665,7 @@ public class MapLView extends LView {
 	 * @param newProfileLine Set the new line to be profiled to this line.
 	 *        A null value may be passed as this argument to clear the profile line.
 	 */
-	private void setProfileLine(Shape newProfileLine){
+	public void setProfileLine(Shape newProfileLine){
 		log("update profile line: "+newProfileLine);
 		if (numericRequest == null
 				|| numericRequest.getPipelines() == null
@@ -581,6 +693,18 @@ public class MapLView extends LView {
 		log(msg + " " + (pipes==null ? "[]" : Arrays.asList(pipes)));
 	}
 	
+	private MapSourceListener graphicSourceListener = new MapSourceListener() {
+		public void changed(MapSource source) {
+			updateGraphicPipeline(new PipelineEvent(mapLayer.focusPanel, false, true));
+		}
+	};
+	
+	private MapSourceListener numericSourceListener = new MapSourceListener() {
+		public void changed(MapSource source) {
+			updateNumericPipeline(new PipelineEvent(mapLayer.mapSettingsDialog, false, true));
+		}
+	};
+	
 	/** Called to update the graphic pipeline, not called when the composite stage is set to None */
 	private synchronized void updateGraphicPipeline(PipelineEvent e) {
 		log("Graphic pipeline event");
@@ -590,13 +714,16 @@ public class MapLView extends LView {
 			updateName();
 		}
 		
+		Collection<MapSource> oldSources = getSources(graphicRequest);
+		
 		Pipeline[] graphicPipeline = e.source.buildLViewPipeline();
 		if (graphicPipeline.length > 0) {
 			// new pipeline requires a graphic request so create one if needed
 			if (graphicRequest == null) {
 				graphicRequest = createGraphicChannel();
 			}
-			if (isVisible() && viewman2 != null) {
+			
+			if (isVisible() && viewman != null) {//@since remove viewman2
 				// view is visible so clear the buffer and set the request
 				clearOffScreen();
 				if (e.settingsChange) {
@@ -606,9 +733,9 @@ public class MapLView extends LView {
 				}
 				ProjObj proj = getPO();
 				Rectangle2D viewExtent = getClippedExtent();
-				int ppd = viewman2.getMagnification();
-				graphicRequest.setRequest(proj, viewExtent, ppd, graphicPipeline, e.userInitiated);
-				repaint();
+				int ppd = viewman.getZoomManager().getZoomPPD();
+				graphicRequest.setRequest(proj, viewExtent, ppd, graphicPipeline);
+				repaintDeferred(false);
 			} else {
 				// view is not visible so disable the request and update the pipeline
 				graphicRequest.setRequest(null, null, 0, graphicPipeline);
@@ -621,11 +748,22 @@ public class MapLView extends LView {
 			}
 			if (isVisible()) {
 				clearOffScreen();
-				repaint();
+				repaintDeferred(false);
 			}
 		}
-
+		
+		Collection<MapSource> newSources = getSources(graphicRequest);
+		updateListeners(oldSources, newSources, graphicSourceListener);
+		
 		updateStatus();
+	}
+	
+	public void repaintDeferred(boolean done) {
+		if (done) {
+			repainter.runImmediately();
+		} else {
+			repainter.runDeferrable();
+		}
 	}
 	
 	/** Called to update the numeric pipeline, not called for the panner view */
@@ -634,15 +772,17 @@ public class MapLView extends LView {
 		
 		numericTiles.clear();
 		
+		Collection<MapSource> oldSources = getSources(numericRequest);
+		
 		Pipeline[] numericPipeline = e.source.buildChartPipeline();
 		if (numericPipeline.length > 0) {
 			if (numericRequest == null) {
 				numericRequest = createNumericChannel();
 			}
-			if (viewman2 != null) {
+			if (isVisible() && viewman != null) {//@since remove viewman2
 				ProjObj proj = getPO();
 				Rectangle2D viewExtent = getClippedExtent();
-				int ppd = viewman2.getMagnification();
+				int ppd = viewman.getZoomManager().getZoomPPD();
 				numericRequest.setRequest(proj, viewExtent, ppd, numericPipeline);
 			} else {
 				numericRequest.setRequest(null, null, 0, numericPipeline);
@@ -655,8 +795,39 @@ public class MapLView extends LView {
 			setProfileLine(null); // clear the active profile line, if any
 		}
 		
+		Collection<MapSource> newSources = getSources(numericRequest);
+		updateListeners(oldSources, newSources, numericSourceListener);
+		
 		updateName();
 		updateStatus();
+	}
+	
+	/** helper method that gets the set of unique MapSource objects, comparing by reference */
+	private static Collection<MapSource> getSources(MapChannelTiled ch) {
+		if (ch == null) {
+			return new ArrayList<MapSource>();
+		} else {
+			Pipeline[] pipes = ch.getPipelines();
+			Map<MapSource,Object> sources = new IdentityHashMap<MapSource,Object>();
+			for (Pipeline p: pipes) {
+				sources.put(p.getSource(), null);
+			}
+			return sources.keySet();
+		}
+	}
+	
+	/** helper method that registers and unregisters listeners such that only the new sources will fire events to this MapLView */
+	private static void updateListeners(Collection<MapSource> oldSources, Collection<MapSource> newSources, MapSourceListener l) {
+		for (MapSource s: oldSources) {
+			if (!newSources.contains(s)) {
+				s.removeListener(l);
+			}
+		}
+		for (MapSource s: newSources) {
+			if (!oldSources.contains(s)) {
+				s.addListener(l);
+			}
+		}
 	}
 	
 	/**
@@ -677,7 +848,10 @@ public class MapLView extends LView {
 	}
 	
 	public SerializedParameters getInitialLayerData(){
-		return new InitialParams(mapLayer.focusPanel.getLViewPipelineModel(), mapLayer.mapSettingsDialog.getChartPipelineModel());
+		if(layerParams == null)
+			return new InitialParams(mapLayer.focusPanel.getLViewPipelineModel(), mapLayer.mapSettingsDialog.getChartPipelineModel(), layerKey, profileLine);
+		else
+			return new InitialParams(mapLayer.focusPanel.getLViewPipelineModel(), mapLayer.mapSettingsDialog.getChartPipelineModel(), layerParams, profileLine);
 	}
 	
 	static class InitialParams implements SerializedParameters {
@@ -685,10 +859,27 @@ public class MapLView extends LView {
 		
 		PipelineModel lviewPPM;
 		PipelineModel chartPPM;
+
+		// Added to make sure map layers restore with the proper citation information
+		LayerParameters layerParams;
+		// Added to make sure profile lines are restored.  Note GeneralPath is NOT serializable
+		ShapePath profilePath;
+
+		String layerKey;
 		
-		public InitialParams(PipelineModel lviewPPM, PipelineModel chartPPM){
+		
+		public InitialParams(PipelineModel lviewPPM, PipelineModel chartPPM, Object layerIdentifier, Shape profileLine){
 			this.lviewPPM = lviewPPM;
 			this.chartPPM = chartPPM;
+			if(layerIdentifier instanceof LayerParameters){
+				this.layerParams = (LayerParameters)layerIdentifier;
+			}else if(layerIdentifier instanceof String){
+				this.layerKey = (String)layerIdentifier;
+			}
+			if (profileLine!=null) {
+				FPath fp = new FPath(profileLine, FPath.SPATIAL_EAST);
+				this.profilePath = new ShapePath(fp);
+			}
 		}
 	}
 	
@@ -1227,45 +1418,61 @@ public class MapLView extends LView {
 		boolean closed = false;
 		
 		public void mouseClicked(MouseEvent e) {
-			if (numericRequest == null) {
-				if (profileLine != null) {
-					clearPath();
-				}
-			} else if (SwingUtilities.isLeftMouseButton(e)) {
-				if (e.getClickCount() == 1){
-					if (closed){
-						profileLinePts.clear();
-						setProfileLine(null);
-						cueChanged(null);
-						closed = false;
+			if(ToolManager.getToolMode()==ToolManager.SEL_HAND){
+				if (numericRequest == null) {
+					if (profileLine != null) {
+						clearPath();
 					}
-					
-					Point2D p1;
-					if (profileLinePts.isEmpty())
-						p1 = getProj().screen.toWorld(e.getPoint());
-					else
-						p1 = clampedWorldPoint(profileLinePts.get(0), e);
-					profileLinePts.add(p1);
-					p2 = p1;
-					repaint();
-				}
-				else if (e.getClickCount() == 2){
-					if (!closed){
+				} else if (SwingUtilities.isLeftMouseButton(e)) {
+					if (e.getClickCount() == 1){
+						if (closed){
+							profileLinePts.clear();
+							setProfileLine(null);
+							cueChanged(null);
+							closed = false;
+						}
+						
 						Point2D p1;
 						if (profileLinePts.isEmpty())
 							p1 = getProj().screen.toWorld(e.getPoint());
 						else
 							p1 = clampedWorldPoint(profileLinePts.get(0), e);
 						profileLinePts.add(p1);
-						
-						p2 = null;
-						setProfileLine(convert(profileLinePts, null));
-						profileLinePts.clear();
+						p2 = p1;
 						repaint();
-						closed = true;
+					}
+					else if (e.getClickCount() == 2){
+						if (!closed){
+							Point2D p1;
+							if (profileLinePts.isEmpty())
+								p1 = getProj().screen.toWorld(e.getPoint());
+							else
+								p1 = clampedWorldPoint(profileLinePts.get(0), e);
+							profileLinePts.add(p1);
+							
+							p2 = null;
+							setProfileLine(convert(profileLinePts, null));
+							profileLinePts.clear();
+							repaint();
+							closed = true;
+						}
 					}
 				}
 			}
+		}
+		
+		private void removeLastPoint(){
+			if (profileLinePts.size() > 1){
+				p2 = profileLinePts.remove(profileLinePts.size()-1);
+			}
+			else {
+				profileLinePts.clear();
+				p2 = null;
+			}
+			setProfileLine(null); //profileLinePts.isEmpty()? null: convert(profileLinePts, null));
+			cueChanged(null);
+			closed = false;
+			repaint();
 		}
 		
 		private void clearPath() {
@@ -1277,7 +1484,7 @@ public class MapLView extends LView {
 			repaint();
 		}
 		
-		private GeneralPath convert(List<Point2D> pts, Point2D lastPt){
+		private Shape convert(List<Point2D> pts, Point2D lastPt){
 			GeneralPath gp = new GeneralPath();
 			List<Point2D> tmp = new ArrayList<Point2D>(pts.size()+1);
 			tmp.addAll(pts);
@@ -1291,40 +1498,30 @@ public class MapLView extends LView {
 					gp.lineTo((float)pt.getX(), (float)pt.getY());
 			}
 			
-			return gp;
+//			return gp;
+			FPath fp = new FPath(gp, FPath.SPATIAL_WEST);
+			return fp.getShape();
 		}
 		
-		public void mouseEntered(MouseEvent e) {
-			requestFocusInWindow(true);
-		}
-		
-		public void mouseExited(MouseEvent e) {}
 		public void mouseMoved(MouseEvent e) {
-			if (!closed && !profileLinePts.isEmpty()){
-				p2 = clampedWorldPoint(profileLinePts.get(0), e);
-
-				// Update status bar angular and linear distance values
-				// TODO This approach is a kludge, which needs fixing.
-				double[] totalDistances = perimeterLength(convert(profileLinePts, p2));
-				double[] distances = Util.angularAndLinearDistanceW(profileLinePts.get(profileLinePts.size()-1), p2, getProj());
-				DecimalFormat f = new DecimalFormat("0.00");
-				Main.setStatus(Util.formatSpatial(getProj().world.toSpatial(p2)) +
-						"  deg = " + f.format(distances[0]) + "/" + f.format(totalDistances[0]) + 
-						"  dist = " + f.format(distances[1]) + "/" + f.format(totalDistances[1]) + " km");
-
-				// Update the view so that it can display the in-progress profile line
-				repaint();
+			if(ToolManager.getToolMode() == ToolManager.SEL_HAND){
+				if (!closed && !profileLinePts.isEmpty()){
+					p2 = clampedWorldPoint(profileLinePts.get(0), e);
+					List<Point2D> points = new ArrayList<Point2D>(profileLinePts);
+					points.add(p2);
+					Main.setStatusFromWorld(points.toArray(new Point2D[points.size()]));
+					
+					// Update the view so that it can display the in-progress profile line
+					repaint();
+				}
 			}
 		}
 		
-		public void mousePressed(MouseEvent e) {
-		}
-		
-		public void mouseReleased(MouseEvent e) {
-		}
-		
-		public void mouseDragged(MouseEvent e) {
-		}
+		public void mouseEntered(MouseEvent e) {}
+		public void mouseExited(MouseEvent e) {}
+		public void mousePressed(MouseEvent e) {}
+		public void mouseReleased(MouseEvent e) {}
+		public void mouseDragged(MouseEvent e) {}
 		
 		public void paintProfileLine(Graphics2D g2){
 			if (profileLinePts.isEmpty())
@@ -1335,15 +1532,40 @@ public class MapLView extends LView {
 		}
 
 		public void keyPressed(KeyEvent e) {
+			if(ToolManager.getToolMode() == ToolManager.SEL_HAND){
+				if (e.getKeyChar() == KeyEvent.VK_ESCAPE){
+					removeLastPoint();
+				}
+			}
 		}
 
 		public void keyReleased(KeyEvent e) {
 		}
 
 		public void keyTyped(KeyEvent e) {
-			if (e.getKeyChar() == KeyEvent.VK_ESCAPE){
-				clearPath();
-			}
 		}
 	}
+	
+//The following two methods are used to query for the maps
+// info panel fields (description, citation, etc)	
+	public String layerKey;
+ 	public String getLayerKey(){
+ 		if (layerKey == null){
+ 			if(layerParams == null){
+ 				return getName();
+ 			}else{
+ 				return layerParams.name;
+ 			}
+ 		}else{
+ 			return layerKey;
+ 		}
+ 	}
+ 	public String getLayerType(){
+ 		if (layerParams == null)
+ 			return "map";
+ 		return layerParams.type;
+ 	}
+ 	public LayerParameters getLayerParameters(){
+ 		return layerParams;
+ 	}
 }

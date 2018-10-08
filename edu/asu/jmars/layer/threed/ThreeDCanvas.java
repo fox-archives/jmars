@@ -1,23 +1,3 @@
-// Copyright 2008, Arizona Board of Regents
-// on behalf of Arizona State University
-// 
-// Prepared by the Mars Space Flight Facility, Arizona State University,
-// Tempe, AZ.
-// 
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-// 
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU General Public License for more details.
-// 
-// You should have received a copy of the GNU General Public License
-// along with this program.  If not, see <http://www.gnu.org/licenses/>.
-
-
 /**
  * builds the 3D scene and allows for parameters of that scene to be modified either directly
  * (via attribute writing methods) or indirectly (via rebuilding the scene).
@@ -26,66 +6,84 @@
  */
 package edu.asu.jmars.layer.threed;
 
-import edu.asu.jmars.*;
-import edu.asu.jmars.layer.*;
-import edu.asu.jmars.util.*;
-
-import java.awt.*;
-import java.awt.event.*;
-import java.awt.image.*;
+import java.awt.BorderLayout;
+import java.awt.Color;
+import java.awt.Dimension;
+import java.awt.event.ComponentAdapter;
+import java.awt.event.ComponentEvent;
+import java.awt.image.BufferedImage;
 import java.awt.image.Raster;
-import java.util.*;
-import javax.swing.*;
-import javax.media.j3d.*;
-import javax.vecmath.*;
-import com.sun.j3d.utils.universe.*;
+import java.io.IOException;
+import java.nio.IntBuffer;
+import java.util.HashMap;
+
+import com.jogamp.opengl.GL;
+import com.jogamp.opengl.GL2;
+import com.jogamp.opengl.util.awt.AWTGLReadBufferUtil;
+
+import javax.swing.JPanel;
+
+import edu.asu.jmars.layer.Layer.LView;
+import edu.asu.jmars.util.Config;
+import edu.asu.jmars.util.DebugLog;
+import edu.asu.jmars.util.Util;
 
 public class ThreeDCanvas extends JPanel {
 	private static DebugLog log = DebugLog.instance();
 	
 	// final attributes.
-	private final int FIELD_OF_VIEW = 45;
-	private final BoundingSphere infiniteBounds = new BoundingSphere(new Point3d(), Double.MAX_VALUE);
-	private final float scaleOffset = -0.002f;
 	private final Dimension initialSize = new Dimension(400, 400);
 	
+	//one instance of the scale mode enumerations that is used across classes
+	public static final String SCALE_MODE_AUTO_SCALE = "Auto-Scale";
+	public static final String SCALE_MODE_ST_DEV = "Standard Deviation";
+	public static final String SCALE_MODE_RANGE = "Range of Values";
+	public static final String SCALE_MODE_ABSOLUTE = "Absolute Scaling";
+	//this map is to preserve the restoring of old sessions
+	public static HashMap<Integer, String> scaleIntToString = new HashMap<Integer, String>();
+	static{
+		scaleIntToString.put(0, SCALE_MODE_AUTO_SCALE);
+		scaleIntToString.put(1, SCALE_MODE_ST_DEV);
+		scaleIntToString.put(2, SCALE_MODE_RANGE);
+		scaleIntToString.put(3, SCALE_MODE_ABSOLUTE);
+	}
+	
+	private String currentScaleMode;
+	
 	// instance attributes
-	private ThreeDLayer myLayer = null;
-	private Layer.LView parent = null;
-	private Canvas3D canvas = null;
-	private ElevationModel model = null;
-	private PlatformBehavior platform = null;
-	private JPanel holdingPanel = null;
-	private Color3f backgroundColor = new Color3f(0.0f, 1.0f, 0.0f);
-	private Background bg = new Background(backgroundColor);
-	private boolean directionalLightEnabled = false;
-	private Color3f directionalLightColor = new Color3f(1.0f, 1.0f, 1.0f);
-	private Vector3f directionalLightDirection = new Vector3f(0.0f, 0.0f, 1.0f);
-	private DirectionalLight directionalLight = new DirectionalLight();
-	private String altitudeSource = "";
-	private boolean backPlaneEnabled = false;
-	private Elevation elevation = null;
-	private float scale = scaleOffset;
+	private ThreeDLayer myLayer;
+	private LView parent;
+	private ThreeDPanel canvas;
+	
+	private JPanel holdingPanel;
+	private Object altitudeSource = null;
+	private Elevation elevation;
+	private StartupParameters settings = null;
 
 	// Orientation properties of the platform: this is held separately because 
 	// some of the scene modification methods require that the entire scene be
-	// rebuilt and we want the orientation to remain consistant from one rebuild
+	// rebuilt and we want the orientation to remain consistent from one rebuild
 	// to the next.  This also makes sure that the viewers of duplicate 3D layers 
 	// aren't linked.
-	private PlatformProperties props;
 
-	public ThreeDCanvas(ThreeDLayer layer, Layer.LView parent) {
-		myLayer = layer;
+	public ThreeDCanvas(LView parent, StartupParameters settings) {
+		myLayer = (ThreeDLayer)parent.getLayer();
 		this.parent = parent;
 		
-		holdingPanel = null;
+		if(Float.compare(settings.scaleOffset, 0f) == 0) {
+			settings.scaleOffset = (float) Config.get(Util.getProductBodyPrefix()+Config.CONFIG_THREED_SCALE_OFFSET, -0.002f);
+		}
+		
+		initSettings(settings);
+		
 		holdingPanel = new JPanel();
 		holdingPanel.setLayout(new BorderLayout());
 		holdingPanel.setBackground(Color.black);
 		holdingPanel.setPreferredSize(initialSize);
 		setLayout(new BorderLayout());
 		add(holdingPanel, BorderLayout.CENTER);
-
+		currentScaleMode = settings.scaleMode; 
+		
 		// Because we repack the frame when we refresh, we need to set the 
 		// the preferred size so that refreshing does not set the frame to its
 		// initial size as well.
@@ -96,36 +94,70 @@ public class ThreeDCanvas extends JPanel {
 			}
 		});
 
-		props = new PlatformProperties();
+	}
+	
+	public void initSettings(StartupParameters settings) {	
+		this.settings = settings;
 	}
 
 	/**
 	 * return to the orientation of the scene when it was first created.
 	 */
-	public void goHome() {
-		platform.goHome();
+	public void goHome(StartupParameters settings) {
+		initSettings(settings);
+		setScale(Float.parseFloat(settings.zScaleString)); // JNN: WARNING: zScaleString changes based off elevation data
+		// Luckily, settings.zScaleString was reset to originalExaggeration ("1.0") in ThreeDFocus before goHome() is called
+		if (canvas != null) {
+			canvas.setSettings(this.settings);
+			canvas.refresh();
+		}		
+		this.refresh();
+	}
+	
+	public StartupParameters getSettings() {
+		if (canvas != null) {
+			return canvas.getSettings();
+		} else if(settings != null) {
+			return settings;
+		} else {
+			return null;
+		}
+	}
+	
+	public void setRestoreSettings(StartupParameters settings) {
+		this.initSettings(settings);
 	}
 
 	/**
 	 * This is called by the focus panel whenever new elevation data becomes available.
+	 * This method was renamed from updateElevationMOLA to better reflect allowing
+	 * other sources of elevation data in addition to MOLA
 	 */
-	public void updateElevationMOLA() {
+	public void updateElevationSource() {
 		Raster data = myLayer.getElevationData();
 		elevation = null;
-		elevation = new Elevation(data);
+		elevation = new Elevation(data, myLayer.getElevationSource().getIgnoreValue());
+	}
+	
+	public Elevation getElevation(){
+		return elevation;
 	}
 
-	/**
-	 * This is called by the focus panel when non-mola elevation is fetched.
-	 */
-	public void updateElevationLayer() {
-		BufferedImage image = copyLayerWindow(altitudeSource);
-		elevation = null;
-		if (image != null) {
-			elevation = new Elevation(image);
+	public void createCanvas () {
+		if (elevation == null) {
+			log.aprintln("elevation is null.  huh?");
+			return;
 		}
-	}
+				
+		canvas = buildCanvas(elevation, parent.viewman.copyMainWindow(), Float.parseFloat(settings.zScaleString), this);
 
+		holdingPanel.removeAll();
+		
+		holdingPanel.add(canvas, BorderLayout.CENTER);
+
+        canvas.requestFocus();
+	}
+	
 	/**
 	 * Some attributes of the scene cannot be maintained dynamically.  Changing any of these
 	 * attributes require the scene to be completely rebuilt.
@@ -135,32 +167,111 @@ public class ThreeDCanvas extends JPanel {
 			log.aprintln("elevation is null.  huh?");
 			return;
 		}
-
-		// we have to set canvas to null to release resources that may 
-		// have been allocated to it before. 
-		canvas = null;
-		canvas = buildCanvas(elevation, parent.viewman2.copyMainWindow(), scale);
-
-		holdingPanel.removeAll();
-		holdingPanel.add(canvas, BorderLayout.CENTER);
+		// build the new canvas
+		myLayer.setStatus(Color.yellow);
+		
+		if (canvas != null) {
+			canvas.setElevation(elevation);
+			canvas.setDecalImage(parent.viewman.copyMainWindow());
+			canvas.setScaleString(settings.zScaleString);
+			canvas.setExaggeration(settings.scaleOffset);
+			canvas.setDirection(settings.directionalLightDirection);
+			canvas.setDirectionalLightColor(settings.directionalLightColor);
+			canvas.setDirectionalLightEnabled(settings.directionalLightBoolean);
+			canvas.setBackgroundColor(settings.backgroundColor);
+			canvas.refresh();
+		} else {
+			createCanvas();
+		}	
+		myLayer.setStatus(Util.darkGreen);		
 	}
 
 	/**
 	 * sets the source of altitude data.  The scene must be rebuilt.
 	 */
-	public void setAltitudeSource(String s) {
+	public void setAltitudeSource(Object s) {
 		altitudeSource = s;
 	}
 
-	public String getAltitudeSource() {
+	public Object getAltitudeSource() {
 		return altitudeSource;
 	}
 
 	/**
-	 * set the altitudinal "scale" of the scene.  Since scene must be rebuild, we must refresh.
+	 * set the scale mode of the scene: 
+	 * @param mode:
+	 * 			SCALE_MODE_ST_DEV = Standard Deviation
+	 * 			SCALE_MODE_RANGE = Range
+	 * 			SCALE_MODE_AUTO_SCALE = Mars's Radius
+	 * @param currentExaggeration: The current exaggeration string that was in the exaggeration text field
 	 */
-	public void setScale(float f) {
-		scale = f * scaleOffset;
+	public void setScaleMode(String mode, String currentExaggeration)
+	{
+		if((!mode.equals(SCALE_MODE_ST_DEV))
+				&& (!mode.equals(SCALE_MODE_RANGE))
+				&& (!mode.equals(SCALE_MODE_ABSOLUTE))
+				&& (!mode.equals(SCALE_MODE_AUTO_SCALE)))
+		{
+			// something weird happened, set to default
+			currentScaleMode = SCALE_MODE_AUTO_SCALE;
+		}
+		else
+		{
+			currentScaleMode = mode;			
+		}
+		// the scale mode had changed, reset the scale
+		setScale(Float.parseFloat(currentExaggeration));
+	}
+	
+	/**
+	 * set the altitudinal "scale" of the scene.  Since scene must be rebuilt, we must refresh.
+	 */
+	public void setScale(float f)
+	{
+		float toScale = settings.scaleOffsetThisBody;
+		float radius = 1000.0f * (float) Config.get(Util.getProductBodyPrefix()+Config.CONFIG_MEAN_RADIUS, 3386);
+		
+		if(currentScaleMode.equals(SCALE_MODE_AUTO_SCALE))
+		{
+			settings.scaleOffset = f * toScale;
+		}
+		else if(currentScaleMode.equals(SCALE_MODE_RANGE))
+		{
+			toScale = -1.0f;
+			// scale is negative because of direction camera is looking
+			// i.e. negative z is backwards towards user
+			// positive z is forward deeper inside computer
+			if(elevation != null)
+			{
+				double range = elevation.getMaxAltitude() - elevation.getMinAltitude();
+
+				// to avoid division by zero, multiply 100 to get 100 percent
+				toScale = (Double.compare(range, 0.0) == 0) ? 0.0f : (float)(toScale * 100f / range);
+			}
+			settings.scaleOffset = f * toScale;
+		}
+		else if(currentScaleMode.equals(SCALE_MODE_ST_DEV))
+		{
+			toScale = -1.0f;
+			if(elevation != null)
+			{
+				double stdDev = elevation.getStandardDeviation();
+				if (Double.isNaN(stdDev)) {
+					stdDev = 0.0;
+				}
+				// to off-chance of division by zero
+				toScale = (Double.compare(stdDev,0.0) == 0) ? -1.0f : (float)(toScale / stdDev);
+			}
+			settings.scaleOffset = f * toScale;			
+		}
+		else // if(currentScaleMode == ABSOLUTE) // default
+		{
+			float factor = -1;
+			if (settings.scaleUnitsInKm) {
+				factor = -0.001f;				
+			}
+			settings.scaleOffset = f * factor;
+		}
 	}
 
 	/**
@@ -168,182 +279,85 @@ public class ThreeDCanvas extends JPanel {
 	 * we cannot add or not add the light dynamically.  The scene has to be rebuild.
 	 */
 	public void enableDirectionalLight(boolean b) {
-		directionalLightEnabled = b;
+		settings.directionalLightBoolean = b;
 	}
 
 	/**
 	 * sets the direction of the DirectionalLight.  This can be done dynamically.
 	 */
 	public void setDirectionalLightDirection(float x, float y, float z) {
-		directionalLightDirection.set(x, y, z);
-		directionalLight.setDirection(directionalLightDirection);
+		settings.directionalLightDirection.set(x, y, z);
 	}
 
 	/**
 	 * sets the color of the DirectionalLight. This can be done dynamically.
 	 */
 	public void setDirectionalLightColor(Color c) {
-		directionalLightColor = null;
-		directionalLightColor = new Color3f(c);
-		directionalLight.setColor(directionalLightColor);
+		settings.directionalLightColor = c;
 	}
 
 	/**
 	 * sets the color of the background.  This can be done dynamically.
 	 */
 	public void setBackgroundColor(Color c) {
-		backgroundColor = null;
-		backgroundColor = new Color3f(c);
-		bg.setColor(backgroundColor);
+		settings.backgroundColor = c;
+		if (canvas != null) {
+			canvas.setBackgroundColor(settings.backgroundColor);
+		}
 	}
 
 	public void enableBackplane(boolean b) {
-		backPlaneEnabled = b;
+		settings.backplaneBoolean = b;
+		if (canvas != null) {
+			canvas.setBackplaneEnabled(b);
+		}
 	}
 
 	/**
-	 * dumps the contents of the image to an external and user specified JPEG file.
+	 * dumps the contents of the image to an external and user specified PNG file.
 	 */
-	String startingDir = null;
-
-	public void dumpJPG() {
-		String filename = null;
-		FileDialog fdlg = new FileDialog(Main.mainFrame,
-				"Capture to JPEG File", FileDialog.SAVE);
-		if (startingDir != null) {
-			fdlg.setDirectory(startingDir);
-		}
-		fdlg.setVisible(true);
-		if (fdlg.getFile() != null) {
-			startingDir = fdlg.getDirectory();
-			filename = fdlg.getDirectory() + fdlg.getFile();
-		}
-		if (filename == null) {
-			return;
-		}
-
-		int width = (int) canvas.getSize().getWidth();
-		int height = (int) canvas.getSize().getHeight();
-
-		GraphicsContext3D ctx = canvas.getGraphicsContext3D();
-		javax.media.j3d.Raster ras = new javax.media.j3d.Raster(new Point3f(
-				-1.0f, -1.0f, -1.0f), javax.media.j3d.Raster.RASTER_COLOR, 0,
-				0, width, height, new ImageComponent2D(
-						ImageComponent.FORMAT_RGB, new BufferedImage(width,
-								height, BufferedImage.TYPE_INT_RGB)), null);
-		ctx.readRaster(ras);
-
-		// Now strip out the image info
-		BufferedImage bi = ras.getImage().getImage();
-		Util.saveAsJpeg(bi, filename);
-
+	public void savePNG(final String filePath) {
+		// put the file name/path in the GL Queue to be executed
+		canvas.addToQueue(new ThreeDAction() {
+	         public void execute(GL target)
+	         {
+	     		IntBuffer view = IntBuffer.allocate(4);
+	    		target.glGetIntegerv(GL2.GL_VIEWPORT, view);
+	    		AWTGLReadBufferUtil readerUtil = new AWTGLReadBufferUtil(target.getGLProfile(),
+	                    true);
+	     		final BufferedImage img = readerUtil.readPixelsToBufferedImage(target, true) ;
+	     		// save the file off of the current GL Context
+	     		(new Runnable() {
+	     			public void run() {
+	    	    		Util.saveAsPng(img, filePath);
+	     			}
+	     		}).run();
+	         }
+	      }
+		);	
+		canvas.refresh();
 	}
-
+	
+	
+	public void saveBinarySTL(String path, String name) throws IllegalArgumentException, IOException{
+		canvas.saveBinarySTL(path, name);
+	}
+	
 	// build the scene and display it.
-	private Canvas3D buildCanvas(Elevation elevation, BufferedImage image,
-			float scale) {
-		Canvas3D can = new Canvas3D(SimpleUniverse.getPreferredConfiguration());
-		SimpleUniverse universe = new SimpleUniverse(can);
-		BranchGroup world = new BranchGroup();
-		Appearance appearance = new Appearance();
-
-		// lights!
-		// the Java 3D model requires that a material must be defined for a directional light,
-		// or it doesn't show up.  Unfortunately (and I think this is a bug), if there is NO 
-		// light defined and a material is defined, the scene is black. So, each time we 
-		// build a canvas, we have to create a new appearance with or without a material 
-		// based on whether there is or is not a light defined. 
-		// Note that we can still have light color and direction changed dynamically.
-		if (directionalLightEnabled == true) {
-			directionalLight = null;
-			directionalLight = new DirectionalLight();
-			directionalLight
-					.setCapability(DirectionalLight.ALLOW_DIRECTION_WRITE);
-			directionalLight.setCapability(DirectionalLight.ALLOW_COLOR_WRITE);
-			directionalLight.setDirection(directionalLightDirection);
-			directionalLight.setColor(directionalLightColor);
-			directionalLight.setInfluencingBounds(infiniteBounds);
-			world.addChild(directionalLight);
-
-			Material mat = new Material();
-			mat.setShininess(0.0f);
-			mat.setAmbientColor(0.0f, 0.0f, 0.0f);
-			mat.setSpecularColor(1.0f, 1.0f, 1.0f);
-			appearance.setMaterial(mat);
-		}
-
-		// Camera!  (well, ok, background.)
-		bg = null;
-		bg = new Background(backgroundColor);
-		bg.setCapability(Background.ALLOW_COLOR_WRITE);
-		bg.setApplicationBounds(infiniteBounds);
-		world.addChild(bg);
-
-		// set up the backside
-		if (backPlaneEnabled && elevation != null) {
-			world
-					.addChild(new BacksidePlane((float) elevation.getWidth(),
-							(float) elevation.getHeight(), elevation.getMean()
-									* scale));
-		} else {
-			PolygonAttributes pa = new PolygonAttributes();
-			pa.setCullFace(PolygonAttributes.CULL_NONE);
-			appearance.setPolygonAttributes(pa);
-		}
-
-		// Action!! (build model)
-		model = null;
-		model = new ElevationModel(elevation, image, scale, appearance);
-		world.addChild(model);
-		world.compile();
-
-		// Set the world into the universe.
-		universe.addBranchGraph(world);
-
-		// Step back a bit.
-		View view = universe.getViewer().getView();
-		view.setFrontClipDistance(1);
-		view.setBackClipDistance(model.getModelLength() * 2);
-		view.setFieldOfView(Math.toRadians(FIELD_OF_VIEW));
-
-		// Set the behavior of the universe
-		// Note that the Orientation Properties of the platform (as they currently
-		// stand) and stuffed into the "new" object.  This makes sure that the 
-		// orientation does not get reset every time we have to rebuild.
-		platform = null;
-		platform = new PlatformBehavior(can, props);
-		platform.setSchedulingBounds(infiniteBounds);
-		universe.getViewingPlatform().setViewPlatformBehavior(platform);
-
-		// display the newly built scene.
-		platform.integrateTransforms();
-
-		return can;
+	private ThreeDPanel buildCanvas(Elevation elevation, BufferedImage image, float scale, ThreeDCanvas panel) {
+		return new ThreeDPanel(elevation, image, settings, panel); 
 	}
-
+	
 	/**
-	 * dumps the contents of the viewer to the specified filename as a jpeg.
+	 * This should be called before the threeDCanvas is destroyed to make sure
+	 * the SimpleUniverse is cleaned up.
 	 */
-	public BufferedImage copyLayerWindow(String layerName) {
-		if (parent == null || parent.viewman2 == null) {
-			return null;
+	public void cleanup(){
+		if (canvas != null){
+			holdingPanel.removeAll();
+			canvas.setVisible(false);
+			canvas.destroy();
+			canvas = null;
 		}
-
-		Dimension pixSize = parent.viewman2.getProj().getScreenSize();
-		BufferedImage image = Util.newBufferedImageOpaque((int) pixSize
-				.getWidth(), (int) pixSize.getHeight());
-		Graphics2D g2 = image.createGraphics();
-
-		Iterator iter = parent.viewman2.viewList.iterator();
-		while (iter.hasNext()) {
-			Layer.LView view = (Layer.LView) iter.next();
-			if (view.isVisible() && view.getName().equals(layerName)) {
-				view.realPaintComponent(g2);
-			}
-		}
-
-		g2.dispose();
-		return image;
 	}
-
 }

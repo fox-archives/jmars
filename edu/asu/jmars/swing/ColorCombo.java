@@ -1,38 +1,21 @@
-// Copyright 2008, Arizona Board of Regents
-// on behalf of Arizona State University
-// 
-// Prepared by the Mars Space Flight Facility, Arizona State University,
-// Tempe, AZ.
-// 
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-// 
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU General Public License for more details.
-// 
-// You should have received a copy of the GNU General Public License
-// along with this program.  If not, see <http://www.gnu.org/licenses/>.
-
-
 package edu.asu.jmars.swing;
 
 import edu.asu.jmars.util.*;
+
 import java.awt.*;
 import java.awt.event.*;
 import java.util.*;
+
 import javax.swing.*;
 import javax.swing.border.*;
 
 public class ColorCombo
- extends JComboBox
+ extends JComboBox implements Comparable
  {
 	private static final Color clear = new Color(0,0,0,0);
 	private static final Color colorList[] =
 	{
+		Util.darkBlue,
 		Color.blue,
 		Color.cyan,
 		Util.darkGreen,
@@ -44,6 +27,7 @@ public class ColorCombo
 		Color.magenta,
 		Util.purple,
 		Color.pink,
+		Util.darkBrown,
 
 		Color.white,
 		Color.lightGray,
@@ -119,6 +103,12 @@ public class ColorCombo
 	 {
 		return  getSelectedItem() instanceof ColorCombo;
 	 }
+	
+	// JNN: added:
+	public static Color[] getColorList()
+	{
+		return colorList;
+	}
 
 	public Color getColor()
 	 {
@@ -204,6 +194,8 @@ public class ColorCombo
 			setBorder(isSelected
 					  ? getBorderForColor((Color)value)
 					  : clearBorder);
+			
+			setToolTipText("Click for color selection options");
 
 			// Need the 'super' reference, to invoke the non-disabled version.
 			super.setBackground( (Color) value );
@@ -211,6 +203,13 @@ public class ColorCombo
 
 			return this;
 		 }
+
+        @Override
+    	protected void paintComponent(Graphics g) {
+    		super.paintComponent(g);
+    		g.setColor(getBackground());
+    		g.fillRect(0, 0, getWidth(), getHeight());
+    	}
 
 		//////////////////////////////////////////////////////////////////////
 		// The following are overridden for performance reasons,
@@ -258,4 +257,12 @@ public class ColorCombo
 		f.pack();
 		f.setVisible(true);
 	 }
+
+	@Override
+	public int compareTo(Object o) {
+		if (o instanceof ColorCombo) {
+			return getSelectedIndex() - ((ColorCombo)o).getSelectedIndex();
+		}
+		return 0;
+	}
  }

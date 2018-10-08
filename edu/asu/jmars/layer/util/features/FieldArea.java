@@ -1,29 +1,13 @@
-// Copyright 2008, Arizona Board of Regents
-// on behalf of Arizona State University
-// 
-// Prepared by the Mars Space Flight Facility, Arizona State University,
-// Tempe, AZ.
-// 
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-// 
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU General Public License for more details.
-// 
-// You should have received a copy of the GNU General Public License
-// along with this program.  If not, see <http://www.gnu.org/licenses/>.
-
-
 package edu.asu.jmars.layer.util.features;
 
 import java.util.Collections;
 import java.util.Set;
 
+import javax.swing.JLabel;
 import javax.swing.JPanel;
+
+import edu.asu.jmars.layer.shape2.ColumnEditor;
+import edu.asu.jmars.layer.shape2.ShapeLayer;
 
 public class FieldArea extends CalculatedField {
 	private static final long serialVersionUID = 1L;
@@ -34,17 +18,19 @@ public class FieldArea extends CalculatedField {
 	public Set<Field> getFields() {
 		return fields;
 	}
-	public Object getValue(Feature f) {
-		return new Double (f.getPath().getSpatialWest().getArea());
+	public Object getValue(ShapeLayer layer, Feature f) {
+		return new Double (layer.getStylesLive().geometry.getValue(f).getSpatialWest().getArea());
 	}
 	public static class Factory extends FieldFactory<FieldArea> {
-		public Factory(String name) {
-			super(name, FieldArea.class, Double.class);
+		public Factory() {
+			super("Enclosed Area", FieldArea.class, Double.class);
 		}
-		public JPanel createEditor(Field f) {
-			return null;
+		public JPanel createEditor(ColumnEditor editor, Field f) {
+			JPanel out = new JPanel();
+			out.add(new JLabel("<html>Computes polygonal area<br>in square kilometers</html>"));
+			return out;
 		}
-		public FieldArea createField(FeatureCollection fc, Field f) {
+		public FieldArea createField(Set<Field> fields) {
 			return new FieldArea(getName());
 		}
 	}

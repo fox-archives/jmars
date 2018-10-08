@@ -1,31 +1,11 @@
-// Copyright 2008, Arizona Board of Regents
-// on behalf of Arizona State University
-// 
-// Prepared by the Mars Space Flight Facility, Arizona State University,
-// Tempe, AZ.
-// 
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-// 
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU General Public License for more details.
-// 
-// You should have received a copy of the GNU General Public License
-// along with this program.  If not, see <http://www.gnu.org/licenses/>.
-
-
 package edu.asu.jmars.swing;
 
+import edu.asu.jmars.layer.map2.stages.ColorStretcherStageSettings;
 import edu.asu.jmars.util.*;
 import java.awt.*;
 import java.awt.event.*;
 import java.awt.image.*;
 import javax.swing.*;
-import javax.swing.event.*;
 
 /**
  ** Same as {@link ColorMapper}, with the addition of buttons for
@@ -33,28 +13,45 @@ import javax.swing.event.*;
  **/
 public class FancyColorMapper extends ColorMapper
  {
+
+	private static final long serialVersionUID = 4549407385919851921L;
+
 	private static final DebugLog log = DebugLog.instance();
 
 	protected JPanel pnlButtons;
 	protected JButton btnCopy;
 	protected JButton btnPaste;
 	protected JButton btnSwap;
-	protected ColorMapper.State colClipboard;
+	
+	// define a ColorMapper State reference that will be used as a clipboard 
+	// between all ColorMapper's.  static allows us to copy one state to other instances.
+	protected static ColorMapper.State colClipboard;
+	// Holds the current state for swap 
+	private ColorMapper.State stateSwap;
 
 	public JButton btnAuto;
-
+	public FancyColorMapper(ColorStretcherStageSettings settings) {
+		this(new int[] { 0, 255 },
+				 new Color[] { Color.black, Color.white }, settings
+				);
+	}
+	public FancyColorMapper(int[] values, Color[] colors, ColorStretcherStageSettings settings) {
+		super(values, colors, settings);
+	}
 	public FancyColorMapper()
 	 {
-		this(new int[] { 0, 255 },
-			 new Color[] { Color.black, Color.white }
-			);
+		this(null);
 	 }
 
 	public FancyColorMapper(int[] values, Color[] colors)
 	 {
-		super(values, colors);
+		this(values, colors, null);
 	 }
 
+	public void togglePanel(boolean e){
+		pnlButtons.setVisible(e);
+	 }
+	
 	public final void setEnabled(boolean e)
 	 {
 		super.setEnabled(e);
@@ -64,6 +61,13 @@ public class FancyColorMapper extends ColorMapper
 		btnAuto.setEnabled(e);
 	 }
 
+	// Allow enabling just the paste button to allow for pasting one color
+	// map across multiple disparate items
+	public final void setPasteEnabled(boolean e)
+	 {
+		btnPaste.setEnabled(e);
+	 }
+	
 	protected BufferedImage getImageForAuto()
 	 {
 		return  null;
@@ -88,8 +92,14 @@ public class FancyColorMapper extends ColorMapper
 
 	protected final void extraInit()
 	 {
-		colClipboard = getState();
-
+		// if the clipboard is not set to a value then initialize it 
+		// to the begining state.
+		if (colClipboard==null) {
+			colClipboard = getState();
+		}
+		// set the initial swap value to the initial state
+		stateSwap = getState();
+		
 		btnCopy = new JButton(
 			new AbstractAction("Copy")
 			 {
@@ -120,13 +130,13 @@ public class FancyColorMapper extends ColorMapper
 				public void actionPerformed(ActionEvent e)
 				 {
 					ColorMapper.State temp = getState();
-					setState(colClipboard);
-					colClipboard = temp;
+					setState(stateSwap);
+					stateSwap = temp;
 				 }
 			 }
 			);
 		btnSwap.setToolTipText(
-			"Swaps the private clipboard and the current colors.");
+			"Swaps between two alternate color schemas.");
 
 		btnAuto = new JButton(
 			new AbstractAction("Auto")
@@ -196,4 +206,6 @@ public class FancyColorMapper extends ColorMapper
 
 		add(pnlButtons, BorderLayout.SOUTH);
 	 }
+	
+	
  }

@@ -1,26 +1,8 @@
-// Copyright 2008, Arizona Board of Regents
-// on behalf of Arizona State University
-// 
-// Prepared by the Mars Space Flight Facility, Arizona State University,
-// Tempe, AZ.
-// 
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-// 
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU General Public License for more details.
-// 
-// You should have received a copy of the GNU General Public License
-// along with this program.  If not, see <http://www.gnu.org/licenses/>.
-
-
 package edu.asu.jmars.layer.shape2;
 
+import java.awt.Component;
 import java.awt.Frame;
+import java.awt.Window;
 import java.io.*;
 
 import javax.swing.*;
@@ -29,6 +11,7 @@ import javax.swing.filechooser.FileFilter;
 import edu.asu.jmars.Main;
 
 import edu.asu.jmars.layer.util.features.FeatureProvider;
+import edu.asu.jmars.util.Util;
 
 // for maintaining the files used in both SAVING and LOADING.
 public class FileChooser extends JFileChooser {
@@ -37,13 +20,13 @@ public class FileChooser extends JFileChooser {
 	// that was current that last time the chooser was used is brought back up.
 	private File startingDir = null;
 
-	private Frame parent = null;
+	private Window parent = null;
 
 	// Gets file(s) to be used for saving or loading.  "action" should be either "Save" or "Load".
 	// If getting a file for loading, more than one file can be returned.  If saving, only one file
 	// will be returned.
-	public File[] chooseFile(String action) {
-		parent = Main.getLManager();
+	public File[] chooseFile(Component c, String action) {
+		parent = Util.getDisplayFrame(c);
 		return chooseFile(action, null);
 	}
 
@@ -143,7 +126,7 @@ public class FileChooser extends JFileChooser {
 
 		public boolean accept(File f) {
 			String fname = f.getName().toLowerCase();
-			return f.isDirectory() || fname.indexOf(fp.getExtension()) != -1;
+			return f.isDirectory() || fname.endsWith(fp.getExtension());
 		}
 
 		public String getDescription() {

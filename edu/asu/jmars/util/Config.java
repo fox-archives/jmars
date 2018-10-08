@@ -1,29 +1,11 @@
-// Copyright 2008, Arizona Board of Regents
-// on behalf of Arizona State University
-// 
-// Prepared by the Mars Space Flight Facility, Arizona State University,
-// Tempe, AZ.
-// 
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-// 
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU General Public License for more details.
-// 
-// You should have received a copy of the GNU General Public License
-// along with this program.  If not, see <http://www.gnu.org/licenses/>.
-
-
 package edu.asu.jmars.util;
 
 import edu.asu.jmars.*;
+
 import java.io.*;
 import java.net.*;
 import java.util.*;
+
 import javax.swing.*;
 
 /**
@@ -62,6 +44,33 @@ import javax.swing.*;
  **/
 public class Config
  {
+ 	// @since change bodies
+	//Config String keys
+	public static final String CONFIG_AUTH_DOMAIN = "auth_domain";
+	public static final String CONFIG_BODY_NAME = "bodyname";
+	public static final String CONFIG_POLAR_RADIUS = "polar_radius";
+	public static final String CONFIG_EQUAT_RADIUS = "equat_radius";
+	public static final String CONFIG_MEAN_RADIUS = "mean_radius";
+	public static final String CONFIG_MAP_MAP_SERVER_DEFAULT_URL = "map.map_server.default.url";
+	public static final String CONFIG_MAP_DEFAULT_SERVER = "map.default.server";
+	public static final String CONFIG_MAP_DEFAULT_SOURCE = "map.default.source";
+	public static final String CONFIG_EDITION = "edition";
+	public static final String CONFIG_EMAIL = "email";
+	public static final String CONFIG_LOGIN_LBL = "login.lbl";
+	public static final String CONFIG_PRODUCT = "product";
+	public static final String CONFIG_NOMENCLATURE_VERSION = "nomenclature_version";
+	public static final String CONTENT_SERVER = "content_server";
+	public static final String CONFIG_PUBLIC_RELEASE = "public_release";
+	public static final String CONFIG_SELECTED_BODY = "current_body";
+	public static final String CONFIG_DEFAULT_LANDMARK_TYPE = "default_landmark_type";
+	public static final String CONFIG_SHOW_NOMENCLATURE_DEFAULT = "show_nomenclature_default";
+	public static final String CONFIG_SHOW_BODY_MENU = "show_body_menu";
+	public static final String CONFIG_DEFAULT_GROUP = "default_group";
+	public static final String CONFIG_SESSION_EXT = "session_ext";
+	public static final String CONFIG_SHOW_BOUNDING_BOX = "show_bounding_box";
+	public static final String CONFIG_THREED_SCALE_OFFSET = "threed.scaleOffset";
+	public static final String CONFIG_OSM_URL = "osm_url";
+	// end change bodies
 	private static DebugLog log = DebugLog.instance();
 
 	private static Properties   jarProps = new Properties();
@@ -69,6 +78,11 @@ public class Config
 	private static Properties savedProps = new Properties();
 	private static Set keySet = Collections.synchronizedSet(new TreeSet());
 
+	// @since change bodies
+	private static boolean containsMultipleBodies = false;
+	private static String productPrefix = null;//used to distinguish between products so that more than one product can be in the config file
+	//end change bodies
+	
 	private static void rebuildKeySet()
 	 {
 		keySet.clear();
@@ -224,6 +238,33 @@ public class Config
 		return  (String[]) list.toArray(new String[0]);
 	 }
 	
+	/**
+	 * Given a prefix for dot-extended properties, returns a HashMap
+	 * of key value pairs
+	 * @param keyPrefix
+	 * @since change bodies
+	 * @return
+	 */
+	public static Map<String,String> getValuesByPrefix(String keyPrefix){
+		TreeMap<String,String> map = new TreeMap<String,String>();
+		keyPrefix += ".";
+		int keyPrefixLen = keyPrefix.length();
+
+		synchronized(keySet)
+		 {
+			for(Iterator i=keySet.iterator(); i.hasNext(); )
+			 {
+				String key = (String) i.next();
+				if(key.startsWith(keyPrefix))
+				 {
+					map.put(key.substring(keyPrefixLen), get(key));
+				 }
+			 }
+		 }
+
+		return map;
+	 }
+
 	/**
 	 * Returns all keys that are children of the given parent key.
 	 * 
@@ -531,64 +572,66 @@ public class Config
 	 ** a normal file. Returns null if the config file cannot be
 	 ** opened or executed for some reason.
 	 **/
-	private static InputStream openConfigFile(URL url)
-	 {
-		if(url.getProtocol().equals("file")) // don't want jar protocol
-		 {
-			InputStream fin = null;
-			try
-			 {
-				fin = url.openStream();
-				if(fin.read() == '#'  &&
-				   fin.read() == '!')
-				 {
-					String cmd = url.getFile();
-					String os = System.getProperty("os.name");
-					if (os.startsWith("Windows")) {
-						cmd = "bash '" + cmd.replaceAll("^\\/", "") + "'";
-					}
-					String params = System.getProperty("jmars-config");
-					if(params != null)
-						cmd += " " + params;
-					try
-					 {
-						log.println("ATTEMPTING TO EXECUTE " + cmd);
-						InputStream tmp = Runtime.getRuntime().exec(cmd).getInputStream();
-						if(tmp != null) {
-							log.println("EXECUTED SUCCESSFULLY!");
-						}
-						return  tmp;
-					 }
-					catch(IOException e)
-					 {
-						log.aprintln("YOUR CONFIG FILE " + url +
-									 " LOOKS EXECUTABLE, " +
-									 "BUT EXECUTION FAILED:");
-						log.aprintln(e);
-						return  null;
-					 }
-				 }
-			 }
-			catch(IOException e)
-			 {
-				log.println(e);
-				return  null;
-			 }
-			finally
-			 {
-				try { fin.close(); } catch(Exception e) { }
-			 }
-		 }
+    private static InputStream openConfigFile(URL url)
+    {
+       if(url.getProtocol().equals("file")) // don't want jar protocol
+        {
+           InputStream fin = null;
+           try
+            {
+               fin = url.openStream();
+               if(fin.read() == '#'  &&
+                  fin.read() == '!')
+                {
+                   String cmd = url.getFile();
+                   String os = System.getProperty("os.name");
+                   String params = System.getProperty("jmars-config");
+                   if(params != null)
+                       cmd += " " + params;
+                   if (os.startsWith("Windows")) {
+//                     cmd = "c:/cygwin/bin/bash --login -i '" + cmd.replaceAll("^\\/", "") + "'";
+//This way is used to work for windows 7, if you have cygwin, perl and cpp installed
+                       cmd = "c:/cygwin/bin/bash -l -c '" + cmd.replaceAll("^\\/", "") + "'";
+                   }           
+                   try
+                    {
+                       log.println("ATTEMPTING TO EXECUTE " + cmd);
+                       InputStream tmp = Runtime.getRuntime().exec(cmd).getInputStream();
+                       if(tmp != null) {
+                           log.println("EXECUTED SUCCESSFULLY!");
+                       }
+                       return  tmp;
+                    }
+                   catch(IOException e)
+                    {
+                       log.aprintln("YOUR CONFIG FILE " + url +
+                                    " LOOKS EXECUTABLE, " +
+                                    "BUT EXECUTION FAILED:");
+                       log.aprintln(e);
+                       return  null;
+                    }
+                }
+            }
+           catch(IOException e)
+            {
+               log.println(e);
+               return  null;
+            }
+           finally
+            {
+               try { fin.close(); } catch(Exception e) { }
+            }
+        }
 
-		try
-		 {
-			return  url.openStream();
-		 }
-		catch(IOException e)
-		 {
-			return  null;
-		 }
-	 }
+       try
+        {
+           return  url.openStream();
+        }
+       catch(IOException e)
+        {
+           return  null;
+        }
+    }
 
 	/**
 	 ** Loads the application's main jmars.config file, from the jar
@@ -728,7 +771,7 @@ public class Config
 	 {
 		boolean hadErrors = false;
 
-		String[] urls = getAll("config.url");
+		String[] urls = getAll("config_url");
 		log.println("Found " + urls.length);
 		for(int i=0; i<urls.length; i+=2)
 		 {
@@ -770,31 +813,32 @@ public class Config
 		log.println(getConfigDump());
 	 }
 
-	private static void loadRemoteProps(String url)
-	 throws Throwable
-	 {
-		InputStream fin = null;
-		try
-		 {
+	private static void loadRemoteProps(String url) throws Throwable {
+	    
+	    JmarsHttpRequest request = null;
+	    try {
 			// We don't use openConfigFile() because it swallows
 			// IOExceptions details, AND we have no need for its smart
 			// execution facility anyway.
 			log.println("Opening " + url);
-			fin = new URL(url).openStream();
-			if(fin != null)
-			 {
+			request = new JmarsHttpRequest(url, HttpRequestType.GET);
+			boolean successful = request.send();
+			if(successful) {
 				Properties tmp = new Properties();
-				tmp.load(fin);
+				tmp.load(request.getResponseAsStream());
 				log.println("SUCCESS!");
 				jarProps.putAll(tmp);
-			 }
-		 }
-		finally
-		 {
-			try { fin.close(); }
-			catch(Exception e) { }
-		 }
-	 }
+				request.close();
+			}
+		} finally {
+		    
+			try {
+			    request.close();
+			} catch(Exception e) {
+			    e.printStackTrace();
+			}
+		}
+	} // loadRemoteProps()
 
 	private static String getConfigDump()
 	 {
@@ -857,15 +901,17 @@ public class Config
 		
 		private DbURL(String url)
 		 {
-			String dbURL = Config.get("db");
-			int colon = dbURL.lastIndexOf(':');
-			int question = dbURL.lastIndexOf('?');
-			int slash = dbURL.lastIndexOf('/');
+			int colon = url.lastIndexOf(':');
+			int question = url.lastIndexOf('?');
+			if (question == -1) {
+				question = url.length();
+			}
+			int slash = url.lastIndexOf('/');
 
 			this.url    = url;
-			this.driver = substringSafe(dbURL, 0, colon);
-			this.host   = substringSafe(dbURL, colon + "://".length(), slash);
-			this.dbname = substringSafe(dbURL, slash+1, question);
+			this.driver = substringSafe(url, 0, colon);
+			this.host   = substringSafe(url, colon + "://".length(), slash);
+			this.dbname = substringSafe(url, slash+1, question);
 		 }
 
 		private static String substringSafe(String s, int a, int b)

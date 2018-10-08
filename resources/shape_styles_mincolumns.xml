@@ -15,12 +15,6 @@
       </f>
     </source>
   </geometry>
-  <pointSize>
-    <name>Point Size</name>
-    <source class="edu.asu.jmars.layer.util.features.StyleGlobalSource">
-      <value class="int">3</value>
-    </source>
-  </pointSize>
   <showVertices>
     <name>Show Vertices</name>
     <source class="edu.asu.jmars.layer.util.features.StyleGlobalSource">
@@ -33,34 +27,18 @@
       <value class="int">3</value>
     </source>
   </vertexSize>
-  <showLabels>
-    <name>Show Labels</name>
+  <drawOutlines>
+    <name>Show Outlines</name>
     <source class="edu.asu.jmars.layer.util.features.StyleGlobalSource">
       <value class="boolean">true</value>
     </source>
-  </showLabels>
-  <labelText>
-    <name>Label Text</name>
-    <source class="edu.asu.jmars.layer.util.features.StyleFieldSource">
-      <f>
-        <name>Label</name>
-        <type>java.lang.String</type>
-        <editable>true</editable>
-      </f>
-      <defaultValue class="string"></defaultValue>
-    </source>
-  </labelText>
-  <labelColor>
-    <name>Label Color</name>
+  </drawOutlines>
+  <pointSize>
+    <name>Point Size</name>
     <source class="edu.asu.jmars.layer.util.features.StyleGlobalSource">
-      <value class="awt-color">
-        <red>255</red>
-        <green>255</green>
-        <blue>255</blue>
-        <alpha>255</alpha>
-      </value>
+      <value class="int">3</value>
     </source>
-  </labelColor>
+  </pointSize>
   <lineWidth>
     <name>Line Width</name>
     <source class="edu.asu.jmars.layer.util.features.StyleGlobalSource">
@@ -70,7 +48,12 @@
   <lineColor>
     <name>Line Color</name>
     <source class="edu.asu.jmars.layer.util.features.StyleGlobalSource">
-      <value class="awt-color" reference="../../../labelColor/source/value"/>
+      <value class="awt-color">
+        <red>255</red>
+        <green>255</green>
+        <blue>255</blue>
+        <alpha>255</alpha>
+      </value>
     </source>
   </lineColor>
   <lineDash>
@@ -104,6 +87,58 @@
       </value>
     </source>
   </fillColor>
+  <showLabels>
+    <name>Show Labels</name>
+    <source class="edu.asu.jmars.layer.util.features.StyleGlobalSource">
+      <value class="boolean">true</value>
+    </source>
+  </showLabels>
+  <labelText>
+    <name>Label Text</name>
+    <source class="edu.asu.jmars.layer.util.features.StyleFieldSource">
+      <f>
+        <name>Label</name>
+        <type>java.lang.String</type>
+        <editable>true</editable>
+      </f>
+      <defaultValue class="string"></defaultValue>
+    </source>
+  </labelText>
+  <labelColor>
+    <name>Label Color</name>
+    <source class="edu.asu.jmars.layer.util.features.StyleGlobalSource">
+      <value class="awt-color" reference="../../../lineColor/source/value"/>
+    </source>
+  </labelColor>
+  <labelBorderColor>
+    <name>Label Border Color</name>
+    <source class="edu.asu.jmars.layer.util.features.StyleGlobalSource">
+      <value class="awt-color">
+        <red>0</red>
+        <green>0</green>
+        <blue>0</blue>
+        <alpha>255</alpha>
+      </value>
+    </source>
+  </labelBorderColor>
+  <labelFont>
+    <name>Label Font</name>
+    <source class="edu.asu.jmars.layer.util.features.StyleGlobalSource">
+      <value class="string">Dialog</value>
+    </source>
+  </labelFont>
+  <labelSize>
+    <name>Label Size</name>
+    <source class="edu.asu.jmars.layer.util.features.StyleGlobalSource">
+      <value class="int">14</value>
+    </source>
+  </labelSize>
+  <labelStyle>
+    <name>Label Style</name>
+    <source class="edu.asu.jmars.layer.util.features.StyleGlobalSource">
+      <value class="string">Plain</value>
+    </source>
+  </labelStyle>
   <selLineColor>
     <name>Selected Line Color</name>
     <source class="edu.asu.jmars.layer.util.features.StyleGlobalSource">

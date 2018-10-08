@@ -1,50 +1,48 @@
-// Copyright 2008, Arizona Board of Regents
-// on behalf of Arizona State University
-// 
-// Prepared by the Mars Space Flight Facility, Arizona State University,
-// Tempe, AZ.
-// 
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-// 
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU General Public License for more details.
-// 
-// You should have received a copy of the GNU General Public License
-// along with this program.  If not, see <http://www.gnu.org/licenses/>.
-
-
 package edu.asu.jmars.util.stable;
 
+import java.awt.Component;
+import java.awt.Dimension;
 import java.awt.event.MouseEvent;
+import java.text.NumberFormat;
 import java.util.EventObject;
 
 import javax.swing.DefaultCellEditor;
+import javax.swing.JLabel;
+import javax.swing.JTable;
 import javax.swing.JTextField;
+import javax.swing.text.NumberFormatter;
+
+import com.jgoodies.forms.builder.PanelBuilder;
+import com.jgoodies.forms.layout.CellConstraints;
+import com.jgoodies.forms.layout.FormLayout;
+
+import edu.asu.jmars.swing.ColorCombo;
 
 // Editor for Double-classed table columns.
-public class DoubleCellEditor
-	extends DefaultCellEditor
-{
+public class DoubleCellEditor extends DefaultCellEditor {
+	NumberFormat nf = null;
+	static JTextField numberTextField = new JTextField();
+	
 	public DoubleCellEditor(){
 		super(getTextField());
 	}
-
+	public DoubleCellEditor(NumberFormat nf){
+		this();
+		this.nf = nf;
+	}
+	
 	public boolean isCellEditable(EventObject e){
-		if (e==null){
+		if (e instanceof MouseEvent) {
+			int clickCount = ((MouseEvent)e).getClickCount();
+			return (clickCount>1);
+		} else {
 			return false;
-		} 
-		int clickCount = ((MouseEvent)e).getClickCount();
-		return (clickCount>1);
+		}
 	}
 
 	public Object getCellEditorValue(){
 		Double doubleValue;
-		String str = (String)super.getCellEditorValue();
+		String str = (String)numberTextField.getText();
 		try {
 			doubleValue = new Double( str);
 		} catch (Exception e) {
@@ -54,8 +52,24 @@ public class DoubleCellEditor
 	}
 
 	private static JTextField getTextField () {
-		JTextField numberTextField = new JTextField();
-		numberTextField.setHorizontalAlignment( JTextField.RIGHT);
+		numberTextField.setHorizontalAlignment( JTextField.CENTER);
+		return numberTextField;
+	}
+	
+	public Component getTableCellEditorComponent(JTable table, Object value,
+			boolean isSelected, int row, int column) {
+		
+		Double text = (Double)value;
+		if(text == null){
+			numberTextField.setText("null");
+			return numberTextField;
+		}
+		if(nf!=null){
+			numberTextField.setText(nf.format(text));
+		}else{
+			numberTextField.setText(text.toString());
+		}
+		
 		return numberTextField;
 	}
 }

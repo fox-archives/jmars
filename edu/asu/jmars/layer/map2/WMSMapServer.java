@@ -1,25 +1,10 @@
-// Copyright 2008, Arizona Board of Regents
-// on behalf of Arizona State University
-// 
-// Prepared by the Mars Space Flight Facility, Arizona State University,
-// Tempe, AZ.
-// 
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-// 
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU General Public License for more details.
-// 
-// You should have received a copy of the GNU General Public License
-// along with this program.  If not, see <http://www.gnu.org/licenses/>.
-
-
 package edu.asu.jmars.layer.map2;
 
+import java.awt.BorderLayout;
+import java.awt.event.FocusEvent;
+import java.awt.event.FocusListener;
+import java.awt.event.WindowAdapter;
+import java.awt.event.WindowEvent;
 import java.io.BufferedReader;
 import java.io.File;
 import java.io.FileReader;
@@ -28,10 +13,11 @@ import java.io.ObjectInputStream;
 import java.io.ObjectOutputStream;
 import java.io.Serializable;
 import java.io.StringReader;
-import java.net.HttpURLConnection;
+// import java.net.HttpURLConnection;   // TODO (PW) this can go.
 import java.net.URI;
 import java.net.URISyntaxException;
 import java.text.MessageFormat;
+import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Date;
@@ -40,18 +26,39 @@ import java.util.LinkedList;
 import java.util.List;
 import java.util.Set;
 
-import org.apache.commons.httpclient.Header;
+import javax.swing.Box;
+import javax.swing.BoxLayout;
+import javax.swing.JButton;
+import javax.swing.JComponent;
+import javax.swing.JDialog;
+import javax.swing.JLabel;
+import javax.swing.JOptionPane;
+import javax.swing.JPasswordField;
+import javax.swing.JTextField;
+
+// TODO These refer to obsolete http libraries AND the code that needs
+// them should be refactored to only perform the credentials operations
+// using JmarsHttpRequest. 
+import org.apache.commons.httpclient.Credentials;
 import org.apache.commons.httpclient.HttpClient;
-import org.apache.commons.httpclient.HttpMethod;
+import org.apache.commons.httpclient.HttpException;
+import org.apache.commons.httpclient.URIException;
+import org.apache.commons.httpclient.UsernamePasswordCredentials;
+import org.apache.commons.httpclient.auth.AuthScope;
 import org.apache.commons.httpclient.cookie.CookiePolicy;
-import org.apache.commons.httpclient.methods.GetMethod;
-import org.apache.commons.httpclient.methods.PostMethod;
 import org.apache.commons.httpclient.util.DateUtil;
 
+import org.apache.http.Header;
+import org.apache.http.HttpStatus;
+import org.dom4j.DocumentException;
+
 import edu.asu.jmars.Main;
+import edu.asu.jmars.swing.UrlLabel;
 import edu.asu.jmars.util.Config;
 import edu.asu.jmars.util.DebugLog;
+import edu.asu.jmars.util.JmarsHttpRequest;
 import edu.asu.jmars.util.Util;
+import edu.asu.jmars.util.HttpRequestType;
 
 /**
  * WMSMapServer stores properties for a WMS Map Server.
@@ -66,19 +73,21 @@ import edu.asu.jmars.util.Util;
  * to read and parse, so fetching is deferred until the GetMap URI or list of
  * sources is truly needed.
  */
-public class WMSMapServer implements MapServer, Serializable {
+public class WMSMapServer extends MapServerDefault implements MapServer, Serializable {
 	private static DebugLog log = DebugLog.instance();
 	private static final long serialVersionUID = -691994868567732767L;
 	
-	/** The name of the default map server */
-	public static String DEFAULT_NAME = Config.get("map.default.server");
-	
-	/** Prefix for all MapServer attributes stored in jmars.config */
-	public static final String prefix = "map.map_server";
-	
+	/**
+	 * Get the prefix for map server properties, but append the current product body prefix
+	 * @since change bodies
+	 * @return
+	 */
+	public static String getPrefix() {
+		return Util.getProductBodyPrefix() + MapServer.prefix;
+	}
 	/** Gets the jmars.config key that stores this attribute for this MapServer */
 	private static String getAttrKey(String name, String attr) {
-		return prefix + "." + name + "." + attr;
+		return getPrefix() + "." + name + "." + attr; // @since change bodies - added product.body prefix
 	}
 	
 	// Object properties, constructors, and accessors
@@ -89,6 +98,9 @@ public class WMSMapServer implements MapServer, Serializable {
 	private int maxRequests;
 	private URI uri;
 	private String title;
+	
+	private StringBuffer user;
+	private StringBuffer pass;
 	
 	/** Transient since GetMap service URL can be recovered from the capabilities document */
 	private transient WMSCapabilities capabilities;
@@ -182,6 +194,7 @@ public class WMSMapServer implements MapServer, Serializable {
 			if (query.length() > 0 && !query.endsWith("&"))
 				query += "&";
 			query += Util.join("&", args);
+			query += "&"+CustomMapServer.getServiceVersion()+"="+CustomMapServer.getVersionNumber();
 			return new URI(baseURI.getScheme(), baseURI.getUserInfo(), baseURI.getHost(),
 				baseURI.getPort(), baseURI.getPath(), query, baseURI.getFragment());
 		} catch (URISyntaxException e) {
@@ -268,9 +281,9 @@ public class WMSMapServer implements MapServer, Serializable {
 		return getSuffixedURI(uri, "service=wms","wmsver=1.1.1","request=GetCapabilities");
 	}
 	
-	/** returns an unconnected method for downloading the GetCapabilities response from this server */
-	protected HttpMethod getCapsMethod() {
-		return new GetMethod(getCapabilitiesURI().toString());
+//	/** returns an unconnected method for downloading the GetCapabilities response from this server */
+	protected JmarsHttpRequest getCapsMethod() {
+		return new JmarsHttpRequest(getCapabilitiesURI().toString(), HttpRequestType.GET);
 	}
 	
 	/**
@@ -299,11 +312,26 @@ public class WMSMapServer implements MapServer, Serializable {
 			oldLayers = Collections.emptyList();
 		}
 		
+		refactoredMethod(cached, oldLayers);
+	}
+	
+	private int getHttpDefaultCode(JmarsHttpRequest method, boolean diskCache, final File file, HttpClient client) 
+			throws URIException, HttpException, IOException, URISyntaxException {
+		client.getParams().setCookiePolicy(CookiePolicy.BROWSER_COMPATIBILITY);
+		if (diskCache && file.exists() && file.lastModified() != 0)
+			method.setRequestHeader("If-Modified-Since", DateUtil.formatDate(new Date(file.lastModified())));
+		
+		method.send();
+		
+		return method.getStatus();
+	}
+
+	private void refactoredMethod(boolean cached, List<WMSLayer> oldLayers) {
 		WMSCapabilities newCaps = null;
 		try {
 			final String fileName = Main.getJMarsPath() + getCacheName();
-			HttpMethod method = getCapsMethod();
-			String networkPath = method.getURI().toString();
+			JmarsHttpRequest method = getCapsMethod();
+			String networkPath = getCapabilitiesURI().toString();
 			
 			// determine if we're using disk caching
 			// normally the config setting is unset, so we cache if we're running out of a jar
@@ -318,74 +346,53 @@ public class WMSMapServer implements MapServer, Serializable {
 			if (!diskLoad) {
 				try {
 					HttpClient client = new HttpClient();
-					client.getParams().setCookiePolicy(CookiePolicy.BROWSER_COMPATIBILITY);
-					if (diskCache && file.exists() && file.lastModified() != 0) {
-						method.setRequestHeader("If-Modified-Since", DateUtil.formatDate(new Date(file.lastModified())));
-					}
-					
-					int code;
-					if (method instanceof PostMethod) {
-						code = Util.postWithRedirect(client, (PostMethod)method, 3);
-					} else {
-						code = client.executeMethod(method);
-					}
+					int code = getHttpDefaultCode(method, diskCache, file, client);
 					
 					switch (code) {
-					case HttpURLConnection.HTTP_OK:
-						String stringDoc = Util.readResponse(method.getResponseBodyAsStream());
-						if (stringDoc.startsWith("ERROR:")) {
-							String message = stringDoc.replaceAll("^ERROR: *", "");
-							throw new IllegalStateException("Server returned error: " + message);
-						}
-						newCaps = new WMSCapabilities(new StringReader(stringDoc));
-						if (diskCache) {
-							final long lastModified;
-							long time = 0;
-							try {
-								Header lastModifiedHeader = method.getResponseHeader("last-modified");
-								if (lastModifiedHeader != null) {
-									String lastModifiedString = lastModifiedHeader.getValue();
-									time = DateUtil.parseDate(lastModifiedString).getTime();
-								}
-							} catch (Exception e) {
-								log.println(e);
-							}
-							lastModified = time;
-							
-							// save on another thread, since it takes a second that we
-							// don't want to slow down startup
-							Thread t = new Thread(new Runnable() {
-								public void run() {
-									try {
-										synchronized(WMSMapServer.this) {
-											capabilities.save(file, lastModified);
-										}
-									} catch (Exception e) {
-										log.aprintln("Failure saving capabilities for " +
-											WMSMapServer.this.getName() + " to " + fileName + ": " + e.getMessage());
-										log.println(e);
-									}
-								}
-							});
-							t.setName("capabilities-caching-thread");
-							t.setPriority(Thread.MIN_PRIORITY);
-							t.setDaemon(true);
-							t.start();
-						}
+					case HttpStatus.SC_OK: //HttpURLConnection.HTTP_OK:  TODO remove these comments later
+						newCaps = getHttpOk(fileName, method, diskCache, file);
 						log.println("Capabilities updated from network");
 						break;
-					case HttpURLConnection.HTTP_NOT_MODIFIED:
+					case HttpStatus.SC_NOT_MODIFIED: // HttpURLConnection.HTTP_NOT_MODIFIED:
 						log.println("Capabilities are already up to date");
+						break;
+					case HttpStatus.SC_UNAUTHORIZED: // HttpURLConnection.HTTP_UNAUTHORIZED:
+						log.aprintln("Capabilities update failed with response code: " + code +
+								", trying implicit user supplied parameters");
+						Credentials defaultcreds = new UsernamePasswordCredentials(user.toString(), pass.toString());
+						client.getState().setCredentials(AuthScope.ANY, defaultcreds);
+						code = getHttpDefaultCode(method, diskCache, file, client);
+						switch (code) {
+						case HttpStatus.SC_OK: // HttpURLConnection.HTTP_OK:
+							newCaps = getHttpOk(fileName, method, diskCache, file);
+							log.println("Capabilities updated from network");
+							break;
+						default:
+							log.aprintln("Capabilities update failed with response code: " + code +
+							", trying explicit supplied parameters");
+							promptUserPass();
+							defaultcreds = new UsernamePasswordCredentials(user.toString(), pass.toString());
+							client.getState().setCredentials(AuthScope.ANY, defaultcreds);
+							code = getHttpDefaultCode(method, diskCache, file, client);
+							switch (code) {
+							case HttpStatus.SC_OK: // HttpURLConnection.HTTP_OK:
+								newCaps = getHttpOk(fileName, method, diskCache, file);
+								log.println("Capabilities updated from network");
+								break; 
+							default:
+								log.aprintln("Capabilities update failed with response code: " + code);
+								break;
+							}
+							break;
+						}
 						break;
 					default:
 						log.aprintln("Capabilities update failed with response code: " + code);
 						break;
 					}
 				} catch (Exception e) {
-					log.aprintln(MessageFormat.format(
-						"Unable to load capabilities from \"{0}\" for server \"{1}\", due to:",
-						networkPath,
-						getName()));
+					log.aprintln(MessageFormat.format("Unable to load capabilities from \"{0}\" for server \"{1}\", due to:",
+							networkPath, getName()));
 					e.printStackTrace();
 				}
 			}
@@ -425,6 +432,174 @@ public class WMSMapServer implements MapServer, Serializable {
 		}
 	}
 	
+	public void promptUserPass()
+	 {
+		class MyLabel extends JLabel
+		 {
+			MyLabel(String s)
+			 {
+				super(s);
+				setAlignmentX(1);
+				setAlignmentY(0.5f);
+			 }
+		 }
+
+		class MyBox extends Box
+		 {
+			MyBox(JComponent a, JComponent b)
+			 {
+				super(BoxLayout.Y_AXIS);
+				add(a);
+				add(b);
+			 }
+		 }
+
+		final JTextField txtUser = new JTextField();
+		final JPasswordField txtPass = new JPasswordField();
+
+		txtUser.addFocusListener(new FocusListener() {
+			public void focusLost(FocusEvent e) {
+				// Do not let the Dialog OK button steal the default focus from us
+	            if (e.getOppositeComponent() instanceof JButton) {
+	            	txtUser.grabFocus();
+	            	txtUser.removeFocusListener(this);
+	            }
+			}
+		
+			public void focusGained(FocusEvent e) {
+				// nop
+			}		
+		});
+
+		txtPass.addFocusListener(new FocusListener() {
+			public void focusLost(FocusEvent e) {
+				// Do not let the Dialog OK button steal the default focus from us
+	            if (e.getOppositeComponent() instanceof JButton) {
+	            	txtPass.grabFocus();
+	            	txtPass.removeFocusListener(this);
+	            }
+			}
+		
+			public void focusGained(FocusEvent e) {
+				// nop
+			}		
+		});
+		
+		Box fields = new Box(BoxLayout.X_AXIS);
+		fields.add(new MyBox(new MyLabel(Config.get("login.lbl") + " "), new MyLabel("Password: ")), BorderLayout.WEST);
+		fields.add(new MyBox(txtUser, txtPass), BorderLayout.CENTER);
+		
+		String jmarsWelcomeMsg = "Default Credentials not recognized.  Please re-enter.\n";
+		String hideRegLink = Config.get("hideRegPageLink");
+		Object[] loginDialogContents;
+		if(hideRegLink != null && !hideRegLink.equalsIgnoreCase("false")) {
+			loginDialogContents = new Object[] {
+				jmarsWelcomeMsg, "\n", fields, "",
+				"\nJMARS homepage: ",new UrlLabel(Config.get("homepage"), null), "\n"};
+		} else {
+			loginDialogContents = new Object[] {
+				jmarsWelcomeMsg, "\n", fields, "",
+				"\nTo register, please visit:\n",
+				new UrlLabel(Config.get("registrationpage"), null),
+				"\nJMARS homepage: ",new UrlLabel(Config.get("homepage"), null), "\n"};		
+		}
+		
+		JOptionPane op =
+			new JOptionPane(
+				loginDialogContents,
+				JOptionPane.WARNING_MESSAGE,
+				JOptionPane.OK_CANCEL_OPTION
+				);
+
+		JDialog dialog = op.createDialog(
+			null, Config.get("edition") + " AUTHENTICATION");
+       dialog.addWindowListener(
+			new WindowAdapter()
+			 {
+				public void windowActivated(WindowEvent we)
+				 {
+					if(txtUser.getText().equals(""))
+						txtUser.grabFocus();
+					else
+						txtPass.grabFocus();
+               }
+			 }
+			);
+       
+		dialog.setResizable(false);
+		dialog.setVisible(true);
+		if(!new Integer(JOptionPane.OK_OPTION).equals(op.getValue()))
+		 {
+			log.println("User exited.");
+//			System.exit(-1);
+		 }
+		user = new StringBuffer(txtUser.getText());
+		pass = new StringBuffer(String.copyValueOf(txtPass.getPassword()));
+	 }
+	
+	private WMSCapabilities getHttpOk(final String fileName, JmarsHttpRequest request, boolean diskCache, final File file) 
+			throws IOException,	DocumentException, URISyntaxException {
+		WMSCapabilities newCaps;
+		String stringDoc = Util.readResponse(request.getResponseAsStream());  // TODO (PW) use JmarsHttpRequest.getResponseAsStream() DONE
+		if (stringDoc.startsWith("ERROR:")) {
+			String message = stringDoc.replaceAll("^ERROR: *", "");
+			throw new IllegalStateException("Server returned error: " + message);
+		}
+		newCaps = new WMSCapabilities(new StringReader(stringDoc));
+		if (diskCache) {
+			final long lastModified;
+			long time = 0;
+			try {
+//				Header lastModifiedHeader = method.getResponseHeader("last-modified");
+                Header lastModifiedHeader = request.getLastModifiedHeader();  // TODO (PW) Ah!  need a new method!!!  DONE
+
+				if (lastModifiedHeader != null) {
+					String lastModifiedString = lastModifiedHeader.getValue();
+					SimpleDateFormat formatter = new SimpleDateFormat();
+					time = formatter.parse(lastModifiedString).getTime();
+				}
+			} catch (Exception e) {
+				log.println(e);
+			}
+			lastModified = time;
+			
+			// save on another thread, since it takes a second that we
+			// don't want to slow down startup
+			Thread t = new Thread(new Runnable() {
+				public void run() {
+					try {
+						synchronized(WMSMapServer.this) {
+							capabilities.save(file, lastModified);
+						}
+					} catch (Exception e) {
+						log.aprintln("Failure saving capabilities for " +
+							WMSMapServer.this.getName() + " to " + fileName + ": " + e.getMessage());
+						log.println(e);
+					}
+				}
+			});
+			t.setName("capabilities-caching-thread");
+			t.setPriority(Thread.MIN_PRIORITY);
+			t.setDaemon(true);
+			t.start();
+		}
+		request.close();
+		return newCaps;
+	}
+
+//	private int getHttpDefaultCode(HttpMethod method, boolean diskCache, final File file, HttpClient client) 
+//			throws URIException, HttpException, IOException {
+//		client.getParams().setCookiePolicy(CookiePolicy.BROWSER_COMPATIBILITY);
+//		if (diskCache && file.exists() && file.lastModified() != 0)
+//			method.setRequestHeader("If-Modified-Since", DateUtil.formatDate(new Date(file.lastModified())));
+//		
+//		if (method instanceof PostMethod) {
+//			return Util.postWithRedirect(client, (PostMethod)method, 3);
+//		} else {
+//			return client.executeMethod(method);
+//		}
+//	}
+	
 	/**
 	 * Adds a new source from the given source
 	 */
@@ -440,9 +615,9 @@ public class WMSMapServer implements MapServer, Serializable {
 	
 	public void add(WMSLayer layer) {
 		log.println("Adding layer [" + layer + "]");
-		add(new WMSMapSource(layer.getName(), layer.getTitle(), layer.getAbstract(),
-			layer.getCategories(), this, layer.isNumeric(), layer.getLatLonBoundingBox(),
-			layer.getIgnoreValue(), layer.getMaxPPD()));
+		add(new WMSMapSource(layer.getName(), layer.getTitle(), layer.getAbstract(), layer.getUnits(),
+			layer.getCategories(), this, layer.isNumeric(), layer.hasElevation(), layer.getLatLonBoundingBox(),
+			layer.getIgnoreValue(), layer.getMaxPPD(), layer.getOwner()));
 	}
 	
 	public void remove(String name) {
@@ -492,7 +667,7 @@ public class WMSMapServer implements MapServer, Serializable {
 		name = serverName;
 		title = Config.get(getAttrKey(name, "title"), null);
 		try {
-			uri = new URI(Config.getReplaced(getAttrKey(name, "url"), ""));
+			uri = new URI(Config.getReplaced(getAttrKey(name, "url"), ""));// @since change bodies - added prefix
 		} catch (URISyntaxException e) {
 			log.println("Unable to load server named " + serverName + ": " + e.getMessage());
 			throw new IllegalArgumentException("Server named " + serverName + " refers to invalid server", e);
@@ -527,7 +702,7 @@ public class WMSMapServer implements MapServer, Serializable {
 		Config.set(getAttrKey(name, "custom"), (String)null);
 		Config.set(getAttrKey(name, "maxRequests"), (String)null);
 		Config.set(getAttrKey(name, "timeout"), (String)null);
-		Config.set(prefix + "." + name, (String)null);
+		Config.set(getPrefix() + "." + name, (String)null);
 	}
 	
 	private void writeObject(ObjectOutputStream out) throws IOException {
@@ -540,6 +715,12 @@ public class WMSMapServer implements MapServer, Serializable {
 	}
 	
 	private void initTransients() {
+		String tempUser = "";
+		if (Main.USER != null) {
+			tempUser = Main.USER;
+		}
+		user = new StringBuffer(tempUser);
+		pass = new StringBuffer(Main.PASS);
 		listeners = new LinkedList<MapServerListener>();
 		sources = new ArrayList<MapSource>();
 		capsFailure = false;

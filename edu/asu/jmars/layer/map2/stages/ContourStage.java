@@ -1,23 +1,3 @@
-// Copyright 2008, Arizona Board of Regents
-// on behalf of Arizona State University
-// 
-// Prepared by the Mars Space Flight Facility, Arizona State University,
-// Tempe, AZ.
-// 
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-// 
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU General Public License for more details.
-// 
-// You should have received a copy of the GNU General Public License
-// along with this program.  If not, see <http://www.gnu.org/licenses/>.
-
-
 package edu.asu.jmars.layer.map2.stages;
 
 import java.awt.Color;
@@ -65,6 +45,7 @@ public class ContourStage extends AbstractStage implements Cloneable, Serializab
 		double start = getSettings().getBase();
 		double step = getSettings().getStep();
 		Color    color = getSettings().getColor();
+		int lineThickness = getSettings().getLineThickness();
 		
 		RasterOp binOp = new BinRasterOp(start, step);
 		WritableRaster binnedRaster = binOp.filter(data.getImage().getRaster(), null);
@@ -99,8 +80,35 @@ public class ContourStage extends AbstractStage implements Cloneable, Serializab
 						}
 					}
 					
-					if (filled)
-						outImage.setRGB(i, j, color.getRGB());
+					if (filled) {
+						switch(lineThickness) {
+						case 1:
+							outImage.setRGB(i, j, color.getRGB());
+							break;
+						case 2:
+							outImage.setRGB(i, j, color.getRGB());
+							if (i<w-1) 
+								outImage.setRGB(i+1, j, color.getRGB());
+							if (j<h-1) 
+								outImage.setRGB(i, j+1, color.getRGB());
+							
+							break;	
+						case 3:
+							outImage.setRGB(i, j, color.getRGB());
+							if (i<w-1) 
+								outImage.setRGB(i+1, j, color.getRGB());
+							if (i>0)
+								outImage.setRGB(i-1, j, color.getRGB());
+							if (j<h-1) 
+								outImage.setRGB(i, j+1, color.getRGB());
+							if (j>0)
+								outImage.setRGB(i, j-1, color.getRGB());							
+							break;
+						default:
+							outImage.setRGB(i, j, color.getRGB());
+							break;
+						}
+					}
 						//outRaster.setSample(i, j, k, dArray[lcloc]);
 				}
 			}
@@ -112,7 +120,7 @@ public class ContourStage extends AbstractStage implements Cloneable, Serializab
 		changedArea.reset();
 		changedArea.add(new Area(data.getRequest().getExtent()));
 		
-		return data.getDeepCopyShell(outImage);
+		return data.getDeepCopyShell(outImage, null);
 	}
 
 	public String getStageName(){

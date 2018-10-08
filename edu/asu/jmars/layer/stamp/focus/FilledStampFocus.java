@@ -1,23 +1,3 @@
-// Copyright 2008, Arizona Board of Regents
-// on behalf of Arizona State University
-// 
-// Prepared by the Mars Space Flight Facility, Arizona State University,
-// Tempe, AZ.
-// 
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-// 
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU General Public License for more details.
-// 
-// You should have received a copy of the GNU General Public License
-// along with this program.  If not, see <http://www.gnu.org/licenses/>.
-
-
 package edu.asu.jmars.layer.stamp.focus;
 
 import java.awt.BorderLayout;
@@ -26,7 +6,6 @@ import java.awt.Component;
 import java.awt.Dimension;
 import java.awt.GridBagConstraints;
 import java.awt.GridBagLayout;
-import java.awt.GridLayout;
 import java.awt.Insets;
 import java.awt.Point;
 import java.awt.datatransfer.Clipboard;
@@ -36,15 +15,10 @@ import java.awt.event.ActionListener;
 import java.awt.event.KeyAdapter;
 import java.awt.event.KeyEvent;
 import java.awt.event.MouseEvent;
-import java.awt.geom.Dimension2D;
-import java.awt.geom.Point2D;
 import java.io.BufferedReader;
 import java.io.File;
 import java.io.FileInputStream;
-import java.io.IOException;
 import java.io.InputStreamReader;
-import java.net.URL;
-import java.text.MessageFormat;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Comparator;
@@ -53,60 +27,45 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.StringTokenizer;
+import java.util.Timer;
+import java.util.TimerTask;
 
 import javax.swing.AbstractAction;
-import javax.swing.BorderFactory;
 import javax.swing.Box;
-import javax.swing.BoxLayout;
 import javax.swing.DefaultListModel;
-import javax.swing.GrayFilter;
-import javax.swing.Icon;
-import javax.swing.ImageIcon;
 import javax.swing.JButton;
 import javax.swing.JCheckBox;
 import javax.swing.JDialog;
-import javax.swing.JFileChooser;
-import javax.swing.JFrame;
 import javax.swing.JLabel;
 import javax.swing.JList;
 import javax.swing.JOptionPane;
 import javax.swing.JPanel;
 import javax.swing.JScrollPane;
-import javax.swing.JTextArea;
-import javax.swing.JTextField;
 import javax.swing.ListCellRenderer;
-import javax.swing.ListSelectionModel;
 import javax.swing.SwingUtilities;
 import javax.swing.border.TitledBorder;
-import javax.swing.event.ChangeEvent;
-import javax.swing.event.ChangeListener;
 import javax.swing.event.ListSelectionEvent;
 import javax.swing.event.ListSelectionListener;
 import javax.swing.event.MouseInputAdapter;
 
 import edu.asu.jmars.Main;
-import edu.asu.jmars.layer.MultiProjection;
 import edu.asu.jmars.layer.stamp.FilledStamp;
+import edu.asu.jmars.layer.stamp.FilledStampImageType;
 import edu.asu.jmars.layer.stamp.StampImage;
 import edu.asu.jmars.layer.stamp.StampImageFactory;
 import edu.asu.jmars.layer.stamp.StampLView;
 import edu.asu.jmars.layer.stamp.StampLayer;
 import edu.asu.jmars.layer.stamp.StampShape;
-import edu.asu.jmars.layer.stamp.FilledStamp.State;
 import edu.asu.jmars.layer.stamp.StampLayer.StampSelectionListener;
 import edu.asu.jmars.layer.stamp.chart.ChartView;
-import edu.asu.jmars.swing.FancyColorMapper;
-import edu.asu.jmars.swing.MultiLabel;
-import edu.asu.jmars.swing.PasteField;
+import edu.asu.jmars.layer.stamp.radar.FilledStampRadarTypeFocus;
 import edu.asu.jmars.swing.ValidClipboard;
 import edu.asu.jmars.util.DebugLog;
-import edu.asu.jmars.util.HVector;
-import edu.asu.jmars.util.Util;
+import edu.emory.mathcs.backport.java.util.Collections;
 
 
-public class FilledStampFocus extends JPanel implements StampSelectionListener
-{
-    private static final DebugLog log = DebugLog.instance();
+public class FilledStampFocus extends JPanel implements StampSelectionListener {
+    protected static final DebugLog log = DebugLog.instance();
     
     final protected StampLView parent;
     final protected StampLayer stampLayer;
@@ -114,7 +73,6 @@ public class FilledStampFocus extends JPanel implements StampSelectionListener
     protected JList listStamps;
     protected DefaultListModel listModel;
     
-    protected JButton btnViewPds;
     protected JButton btnListCopy;
     protected JButton btnListImport;
     
@@ -124,235 +82,29 @@ public class FilledStampFocus extends JPanel implements StampSelectionListener
     private JButton btnBottom;
     private JButton btnDelete;
     private JButton btnSort;
-    
-    private JButton btnPanNW, btnPanN, btnPanNE;
-    private JButton btnPanW,           btnPanE;
-    private JButton btnPanSW, btnPanS, btnPanSE;
-    private JButton btnPanSize;
-    
-    JButton resetPan;
-    JLabel xoffset;
-    JLabel yoffset;
+    private JButton btnDetails;
+    private JButton btnPlay;
     
     protected boolean stampListDragging = false;
     
     private final JCheckBox onlyFillSelected;
+    private JCheckBox loop;
     
-    private FancyColorMapper mapper;
-        
     private int dragStartIndex = -1;
     private int dragCurIndex = -1;
     
     // Examine this very very carefully for race conditions
     boolean modelUpdating = false;
-        
-	public void selectionsChanged() {
-        List<StampShape> selectedStamps = stampLayer.getSelectedStamps();
-        
-        // We want to know what was selected at the start of this process, since it
-        // can and will change as we're processing
-		Object[] obj=listStamps.getSelectedValues();
-
-        Enumeration listElements=listModel.elements();
-        
-        modelUpdating=true;
-        
-		while(listElements.hasMoreElements()) {
-			FilledStamp fs = (FilledStamp)listElements.nextElement();
-			if (selectedStamps.contains(fs.stamp)) {
-				boolean alreadySelected=false;
-				
-				for (int i=0; i<obj.length; i++) {
-					FilledStamp fso = (FilledStamp)obj[i];
-					if (fso.stamp==fs.stamp) {
-						alreadySelected=true;
-						break;
-					}
-				}
-				if (!alreadySelected) {
-					int idx =listModel.indexOf(fs);
-					if (idx>-1) {
-						listStamps.addSelectionInterval(idx, idx);
-					}
-				}
-			} else {
-				int idx =listModel.indexOf(fs);
-				if (idx>-1) {
-					listStamps.removeSelectionInterval(idx, idx);
-				}
-			}
-		}
-		
-		modelUpdating=false;
-		redrawTriggered();
-	}
-	
-	public void selectionsAdded(java.util.List<StampShape> newStamps) {
-        Enumeration listElements=listModel.elements();
-
-        // We want to know what was selected at the start of this process, since it
-        // can and will change as we're processing
-		Object[] obj=listStamps.getSelectedValues();
-        
-		while(listElements.hasMoreElements()) {
-			FilledStamp fs = (FilledStamp)listElements.nextElement();
-			if (newStamps.contains(fs.stamp)) {
-				boolean alreadySelected=false;
-				
-				for (int i=0; i<obj.length; i++) {
-					FilledStamp fso = (FilledStamp)obj[i];
-					if (fso.stamp==fs.stamp) {
-						alreadySelected=true;
-						break;
-					}
-				}
-				if (!alreadySelected) {
-					int idx =listModel.indexOf(fs);
-					if (idx>-1) {
-						listStamps.addSelectionInterval(idx, idx);
-					}
-				}
-			}
-		}
-	}
     
-	int startSelectionIndex=-1;
+	private int startSelectionIndex=-1;
 	
-	protected class ListKeyListener extends KeyAdapter {
-
-		public void keyReleased(KeyEvent e) {
-			if (e.isShiftDown()==false) {
-				startSelectionIndex=-1;
-				lastRow=-1;
-			}
-		}
-
-		public void keyPressed(KeyEvent e) {
-			// Do not override the standard copy/paste functionality
-			if (e.isControlDown()) {
-				super.keyPressed(e);
-				return;
-			}
-
-			// Override standard selection, so we can make it work the way we want it to
-			e.consume();
-			
-			if (e.isShiftDown()) {
-				handleShiftClick(e);
-				return;
-			}
-			
-			int lastClicked = listStamps.getSelectionModel().getLeadSelectionIndex();
-
-			if (e.isShiftDown()) {
-				if (startSelectionIndex==-1) {
-					startSelectionIndex=lastClicked;
-				}
-			}
-			
-			int newRow;
-			if (e.getKeyCode()==KeyEvent.VK_UP) {
-				newRow=lastClicked-1;
-			} else if (e.getKeyCode()==KeyEvent.VK_DOWN) {
-				newRow=lastClicked+1;
-			} else {
-				return; 
-			}
-			
-			if (newRow>=listStamps.getModel().getSize() || newRow<0) { 
-				return;
-			}
-			
-			FilledStamp fs = (FilledStamp)listStamps.getModel().getElementAt(newRow);
-
-			if (listStamps.getSelectedValues().length==1) {
-				FilledStamp oldSelection = (FilledStamp)listStamps.getSelectedValue();
-				if (oldSelection.stamp == fs.stamp) {
-					listStamps.setSelectedIndex(newRow);
-					return;
-				}
-			}
-			
-			modelUpdating=true;
-			stampLayer.clearSelectedStamps();
-            listStamps.setSelectedIndex(newRow);
-			stampLayer.toggleSelectedStamp(fs.stamp);
-			modelUpdating=false;
-			redrawTriggered();
-		}
-		
-		private int lastRow = -1;
-		
-		private void handleShiftClick(KeyEvent e) {
-			if (lastRow==-1) {
-				lastRow = listStamps.getSelectionModel().getLeadSelectionIndex();
-			}
-
-			if (startSelectionIndex==-1) {
-				startSelectionIndex=lastRow;
-			}
-			
-			int newRow;
-			if (e.getKeyCode()==KeyEvent.VK_UP) {
-				newRow=lastRow-1;
-			} else if (e.getKeyCode()==KeyEvent.VK_DOWN) {
-				newRow=lastRow+1;
-			} else {
-				return; 
-			}
-
-			FilledStamp fs;
-			
-			// If we are reducing the number of rows selected
-			if ((e.getKeyCode()==KeyEvent.VK_UP && newRow>=startSelectionIndex)
-					|| (e.getKeyCode()==KeyEvent.VK_DOWN && newRow<=startSelectionIndex))
-			{
-				fs = (FilledStamp)listStamps.getModel().getElementAt(lastRow);
-			} else {
-				if (newRow>=listStamps.getModel().getSize() || newRow<0) { 
-					return;
-				}
-
-				fs = (FilledStamp)listStamps.getModel().getElementAt(newRow);
-			}				
-					
-			listStamps.setSelectionInterval(startSelectionIndex, newRow);
-
-			if (!othersSelected(fs)) {
-				stampLayer.toggleSelectedStamp(fs.stamp);									
-			} 	
-			lastRow=newRow;
-		}
-		
-	}
+	private int lastRow = -1;
 	
-	private boolean othersSelected(FilledStamp fs) {
-		Object[] obj = listStamps.getSelectedValues();
-		boolean othersSelected=false;
-		for (int i=0; i<obj.length; i++) {
-			FilledStamp fso = (FilledStamp)obj[i];
-			if (fso==fs) continue;
-			if (fso.stamp==fs.stamp) {
-				othersSelected=true;
-				break;
-			}
-		}
-		
-		return othersSelected;
-	}
-	
-	private void clearClipAreas() {
-		List<FilledStamp> filledStamps = getFilled();
-		
-		for (FilledStamp fs : filledStamps) {			
-			fs.pdsi.clearCurrentClip();
-		}		
-		
-		parent.clearLastFilled();
-	}
-	
-    public FilledStampFocus(final StampLView parent)
-    {
+	//used for building the UI and adding components
+    protected int pad = 4;
+    protected Insets in = new Insets(pad,pad,pad,pad);
+    
+    public FilledStampFocus(final StampLView parent) {
         this.parent = parent;
         stampLayer = parent.stampLayer;
         
@@ -663,6 +415,89 @@ public class FilledStampFocus extends JPanel implements StampSelectionListener
         );
         btnBottom.setToolTipText("Move the currently selected stamp(s) to BOTTOM" +
                                  " of the filled-stamps list.");
+
+        btnDetails = new JButton(
+                new AbstractAction("View Details")
+                {
+                    public void actionPerformed(ActionEvent e)
+                    {
+                        int[] selected = listStamps.getSelectedIndices();
+
+                        int selIndex = selected[0];
+                                                
+                        FilledStamp fs = (FilledStamp)listModel.get(selIndex);
+
+                        HashMap<String,String> params = fs.pdsi.getProjectionParams();
+                        
+                        ArrayList<String> displayStrings = new ArrayList<String>();
+                        
+                        for (String key: params.keySet()) {
+                        	displayStrings.add(key + " : " + params.get(key));
+                        }
+                        
+                        Collections.sort(displayStrings);
+                        
+                        JList<String> paramList = new JList<String>(displayStrings.toArray(new String[0]));
+                        
+                        JOptionPane.showMessageDialog(FilledStampFocus.this, paramList, "Product Parameters", JOptionPane.INFORMATION_MESSAGE);                        
+                    }
+                }
+            );
+            btnDetails.setToolTipText("Display processing and projection details for the selected rendered item");
+
+        
+        loop = new JCheckBox("Loop");
+        btnPlay = new JButton(
+                new AbstractAction("Play")
+                {
+                    public void actionPerformed(ActionEvent e)
+                    {
+                    	btnPlay.setSelected(!btnPlay.isSelected());
+                    	
+                    	TimerTask timerTask = new TimerTask() {	
+                 			public void run() {
+                 				if (btnPlay.isSelected()) {
+                 					btnPlay.setText("Pause");
+                                    if (!onlyFillSelected.isSelected()){
+                                       onlyFillSelected.setSelected(true);
+                                    }
+
+                                    stampLayer.getSettings().setRenderSelectedOnly(onlyFillSelected.isSelected());
+                                    
+                                    int min = listStamps.getMinSelectionIndex();
+                                    
+                                    if (loop.isSelected()){
+	                                    if (listModel.getSize()<=min+1) {
+	                                    	listStamps.setSelectionInterval(0, 0);
+	                                    } else {
+	                                    	listStamps.setSelectionInterval(min+1, min+1);
+	                                    }
+                                    }
+                                    if (!loop.isSelected()){
+                                    	if (listModel.getSize()<=min+1){
+                                    		cancel();
+                                    		btnPlay.setText("Play");
+                                    	} else {
+                                    		listStamps.setSelectionInterval(min+1, min+1);
+                                    	}
+                                    }
+                                           
+                                    redrawTriggered();                 
+                                    
+                 				} else {
+                 					btnPlay.setText("Play");
+                 					cancel();
+                 				}
+                			}			
+                		};
+                    	
+                    	Timer playTimer=new Timer();
+                    	playTimer.schedule(timerTask, 1000, 1000);
+                    }
+                }
+            );
+         btnPlay.setToolTipText("Display each image in sequence, slide-show style.");
+            
         
         btnDelete = new JButton(
             new AbstractAction("Delete")
@@ -708,6 +543,7 @@ public class FilledStampFocus extends JPanel implements StampSelectionListener
                         for (int i = 0; i < sorted.length; i++)
                             listModel.set(i, sorted[i]);
                         listStamps.clearSelection();    
+                        selectionsChanged();
                         
                         clearClipAreas();
 						enableEverything();
@@ -720,48 +556,25 @@ public class FilledStampFocus extends JPanel implements StampSelectionListener
                                "leftmost orbit track.");
 
         
-        btnPanNW = new PanButton(-1, +1);
-        btnPanN =  new PanButton( 0, +1);
-        btnPanNE = new PanButton(+1, +1);
-        btnPanE =  new PanButton(+1,  0);
-        btnPanSE = new PanButton(+1, -1);
-        btnPanS =  new PanButton( 0, -1);
-        btnPanSW = new PanButton(-1, -1);
-        btnPanW =  new PanButton(-1,  0);
-        btnPanSize = new PanButton();
-        
-        JPanel pnlPanning = new JPanel(new GridLayout(3, 3));
-        pnlPanning.add(btnPanNW);
-        pnlPanning.add(btnPanN);
-        pnlPanning.add(btnPanNE);
-        pnlPanning.add(btnPanW);
-        pnlPanning.add(btnPanSize);
-        pnlPanning.add(btnPanE);
-        pnlPanning.add(btnPanSW);
-        pnlPanning.add(btnPanS);
-        pnlPanning.add(btnPanSE);
-                                
-        btnViewPds = new JButton(
-             new AbstractAction("View PDS Label")
-             {
-                 public void actionPerformed(ActionEvent e)
-                 {
-                     FilledStamp fs = getFilledSingle();
-                     JFrame frame = new JFrame(fs.stamp.getId());
-                     JTextArea txt = new JTextArea(fs.pdsi.getLabel(), 24, 0);
-                     frame.getContentPane().add(new JScrollPane(txt));
-                     frame.pack();
-                     frame.setVisible(true);
-                 }
-             }
-        );
-        
-        if (parent.stampLayer.getInstrument().equalsIgnoreCase("themis")) {
-        	btnViewPds.setVisible(true);
-        } else {
-        	btnViewPds.setVisible(false);
-        }
-        
+        // This button seems to have been removed from the interface at
+        // some point... and no one has complained.  This functionality
+        // should be added back at some point, but in a more generic fashion
+        // that works for any stamp on any instrument.
+//        btnViewPds = new JButton(
+//             new AbstractAction("View PDS Label")
+//             {
+//                 public void actionPerformed(ActionEvent e)
+//                 {
+//                     FilledStamp fs = getFilledSingle();
+//                     JFrame frame = new JFrame(fs.stamp.getId());
+//                     JTextArea txt = new JTextArea(fs.pdsi.getLabel(), 24, 0);
+//                     frame.getContentPane().add(new JScrollPane(txt));
+//                     frame.pack();
+//                     frame.setVisible(true);
+//                 }
+//             }
+//        );
+                
         btnListCopy = new JButton(
     		new AbstractAction("Copy") {
     			public void actionPerformed(ActionEvent e) {
@@ -801,7 +614,7 @@ public class FilledStampFocus extends JPanel implements StampSelectionListener
              {
                  public void actionPerformed(ActionEvent e)
                  {
-     				stampLayer.getSettings().setRenderSelectedOnly(onlyFillSelected.isSelected());
+     				 stampLayer.getSettings().setRenderSelectedOnly(onlyFillSelected.isSelected());
                 	 clearClipAreas();
                      redrawTriggered();
                  }
@@ -809,61 +622,8 @@ public class FilledStampFocus extends JPanel implements StampSelectionListener
         );
         
         onlyFillSelected.setSelected(stampLayer.getSettings().renderSelectedOnly());
-
         
-        mapper = new FancyColorMapper();
-        mapper.addChangeListener(
-             new ChangeListener()
-             {
-                 public void stateChanged(ChangeEvent e)
-                 {
-                     if (mapper.isAdjusting())
-                         return;
-                     getFilledSingle().colors = mapper.getState();
-                     parent.clearLastFilled();
-                     redrawTriggered();
-                 }
-             }
-        );
-        mapper.btnAuto.setEnabled(true);
-        mapper.btnAuto.addActionListener(
-	         new ActionListener()
-	         {
-	             public void actionPerformed(ActionEvent e)
-	             {
-	                 FilledStamp fs = getFilledSingle();
-	                 if (fs == null)
-	                     return;
-	                                                 
-	                 int[] hist=null;;
-	                 
-	                 try {
-	                	 hist = fs.pdsi.getHistogram();
-	                 } catch (IOException ioe) {
-	                	 ioe.printStackTrace();
-	                	 return;
-	                 }
-	                 
-	                 // Find the peak
-	                 int top = 0;
-	                 for (int i=0; i<256; i++)
-	                     if (hist[i] > hist[top])
-	                         top = i;
-	                     
-	                     // Find the hi boundary: the next time we hit 5% peak
-	                 int hi = top;
-	                 while(hi < 255  &&  hist[hi]*20 > hist[top])
-	                     ++hi;
-	                 
-	                 // Find the lo boundary: the prior time we hit 5% peak
-	                 int lo = top;
-	                 while(lo > 0  &&  hist[lo]*20 > hist[top])
-	                     --lo;
-	                 
-	                 mapper.rescaleTo(lo, hi);
-	             }
-	         }
-        );
+
         
         JCheckBox hideOutlines = new JCheckBox() {
         	{
@@ -884,34 +644,13 @@ public class FilledStampFocus extends JPanel implements StampSelectionListener
         };
         hideOutlines.setSelected(stampLayer.getSettings().hideOutlines());
         
-        resetPan = new JButton("Reset Offset");
-        xoffset = new JLabel("X offset: ");
-        yoffset = new JLabel("Y offset: ");
-        
-        resetPan.addActionListener(new ActionListener(){		
-			public void actionPerformed(ActionEvent e) {
-				List<FilledStamp> filledStamps = getFilledSelections();
-				for (FilledStamp fs : filledStamps)
-				{
-					fs.setOffset(new Point2D.Double(0,0));        					
-					fs.saveOffset();
-					refreshPanInfo(fs);
-				}
-
-                clearClipAreas();
-                
-				redrawTriggered();
-			}
-        });
-        
-        resetPan.setToolTipText("Reset this stamp to the original, unnudged position");
-        
-        int pad = 4;
-        Insets in = new Insets(pad,pad,pad,pad);
         
         Box row1 = Box.createHorizontalBox();
-        row1.add(btnListImport);
-        row1.add(Box.createHorizontalStrut(pad));
+        if (!stampLayer.getInstrument().equalsIgnoreCase("davinci")) {
+        	row1.add(btnListImport);
+            row1.add(Box.createHorizontalStrut(pad));
+        }
+        
         row1.add(btnListCopy);
         row1.add(Box.createHorizontalStrut(pad));
         row1.add(btnSort);
@@ -928,77 +667,268 @@ public class FilledStampFocus extends JPanel implements StampSelectionListener
         row++;
         listPanel.add(row2, new GridBagConstraints(0,row,2,1,0,0,GridBagConstraints.NORTHWEST,GridBagConstraints.HORIZONTAL,in,pad,pad));
         row++;
-        listPanel.add(pnlListStamps, new GridBagConstraints(0,row,1,5,1,1,GridBagConstraints.NORTHWEST,GridBagConstraints.BOTH,in,pad,pad));
-        listPanel.add(btnDelete, new GridBagConstraints(1,row,1,1,0,0,GridBagConstraints.NORTHWEST,GridBagConstraints.HORIZONTAL,in,pad,pad));
+        listPanel.add(pnlListStamps, new GridBagConstraints(1,row,1,5,1,1,GridBagConstraints.NORTHWEST,GridBagConstraints.BOTH,in,pad,pad));
+        listPanel.add(btnDelete, new GridBagConstraints(0,row,1,1,0,0,GridBagConstraints.NORTHWEST,GridBagConstraints.HORIZONTAL,in,pad,pad));
         row++;
-        listPanel.add(btnTop, new GridBagConstraints(1,row,1,1,0,0,GridBagConstraints.NORTHWEST,GridBagConstraints.HORIZONTAL,in,pad,pad));
+        listPanel.add(btnTop, new GridBagConstraints(0,row,1,1,0,0,GridBagConstraints.NORTHWEST,GridBagConstraints.HORIZONTAL,in,pad,pad));
         row++;
-        listPanel.add(btnRaise, new GridBagConstraints(1,row,1,1,0,0,GridBagConstraints.NORTHWEST,GridBagConstraints.HORIZONTAL,in,pad,pad));
+        listPanel.add(btnRaise, new GridBagConstraints(0,row,1,1,0,0,GridBagConstraints.NORTHWEST,GridBagConstraints.HORIZONTAL,in,pad,pad));
         row++;
-        listPanel.add(btnLower, new GridBagConstraints(1,row,1,1,0,0,GridBagConstraints.NORTHWEST,GridBagConstraints.HORIZONTAL,in,pad,pad));
+        listPanel.add(btnLower, new GridBagConstraints(0,row,1,1,0,0,GridBagConstraints.NORTHWEST,GridBagConstraints.HORIZONTAL,in,pad,pad));
         row++;
-        listPanel.add(btnBottom, new GridBagConstraints(1,row,1,1,0,0,GridBagConstraints.NORTHWEST,GridBagConstraints.HORIZONTAL,in,pad,pad));
+        listPanel.add(btnBottom, new GridBagConstraints(0,row,1,1,0,0,GridBagConstraints.NORTHWEST,GridBagConstraints.HORIZONTAL,in,pad,pad));
+        row++;
+        listPanel.add(btnDetails, new GridBagConstraints(0,row,1,1,0,0,GridBagConstraints.NORTHWEST,GridBagConstraints.HORIZONTAL,in,pad,pad));
+        row++;
+        listPanel.add(btnPlay, new GridBagConstraints(0,row,1,1,0,0,GridBagConstraints.NORTHWEST,GridBagConstraints.HORIZONTAL,in,pad,pad));
+        listPanel.add(loop, new GridBagConstraints(1,row,2,1,0,0,GridBagConstraints.NORTHWEST,GridBagConstraints.HORIZONTAL,in,pad,pad));
         row++;
         
-        JPanel col1 = new JPanel(new GridBagLayout());
-        col1.add(pnlPanning, new GridBagConstraints(0,0,1,1,1,1,GridBagConstraints.NORTHWEST,GridBagConstraints.BOTH,in,pad,pad));
-        
-        JPanel col2 = new JPanel(new GridBagLayout());
-        col2.add(xoffset, new GridBagConstraints(0,0,1,1,0,0,GridBagConstraints.NORTHWEST,GridBagConstraints.NONE,in,pad,pad));
-        col2.add(yoffset, new GridBagConstraints(0,1,1,1,0,0,GridBagConstraints.NORTHWEST,GridBagConstraints.NONE,in,pad,pad));
-        col2.add(resetPan, new GridBagConstraints(0,2,1,1,0,0,GridBagConstraints.NORTHWEST,GridBagConstraints.NONE,in,pad,pad));
-                
-        Box h = Box.createHorizontalBox();
-        h.add(col1);
-        h.add(Box.createHorizontalStrut(pad));
-        h.add(col2);
-        h.add(Box.createHorizontalGlue());
-        
-        JPanel selPanel = new JPanel(new GridBagLayout());
-        selPanel.setBorder(new TitledBorder("Selected Stamps"));
-        selPanel.add(h, new GridBagConstraints(0,0,1,1,0,0,GridBagConstraints.NORTHWEST,GridBagConstraints.HORIZONTAL,in,pad,pad));
-        selPanel.add(mapper, new GridBagConstraints(0,1,1,1,1,0,GridBagConstraints.NORTHWEST,GridBagConstraints.HORIZONTAL,in,pad,pad));
-        
+
         // Assemble everything together
         setLayout(new GridBagLayout());
         add(listPanel, new GridBagConstraints(0,0,1,1,1,1,GridBagConstraints.NORTHWEST,GridBagConstraints.BOTH,in,pad,pad));
-        add(selPanel, new GridBagConstraints(0,1,1,1,1,0,GridBagConstraints.NORTHWEST,GridBagConstraints.BOTH,in,pad,pad));
         
         // Set proper state
         enableEverything();
     }
+	
+	
+	public void selectionsChanged() {
+        List<StampShape> selectedStamps = stampLayer.getSelectedStamps();
+        
+        // We want to know what was selected at the start of this process, since it
+        // can and will change as we're processing
+		Object[] obj=listStamps.getSelectedValues();
+
+        Enumeration listElements=listModel.elements();
+        
+        modelUpdating=true;
+        try {
+    		while(listElements.hasMoreElements()) {
+    			FilledStamp fs = (FilledStamp)listElements.nextElement();
+    			if (selectedStamps.contains(fs.stamp)) {
+    				boolean alreadySelected=false;
+    				
+    				for (int i=0; i<obj.length; i++) {
+    					FilledStamp fso = (FilledStamp)obj[i];
+    					if (fso.stamp==fs.stamp) {
+    						alreadySelected=true;
+    						break;
+    					}
+    				}
+    				if (!alreadySelected) {
+    					int idx =listModel.indexOf(fs);
+    					if (idx>-1) {
+    						listStamps.addSelectionInterval(idx, idx);
+    					}
+    				}
+    			} else {
+    				int idx =listModel.indexOf(fs);
+    				if (idx>-1) {
+    					listStamps.removeSelectionInterval(idx, idx);
+    				}
+    			}
+    		}
+        } finally {
+    		modelUpdating=false;
+        }
+        
+		redrawTriggered();
+	}
+	
+	public void selectionsAdded(java.util.List<StampShape> newStamps) {
+        Enumeration listElements=listModel.elements();
+
+        // We want to know what was selected at the start of this process, since it
+        // can and will change as we're processing
+		Object[] obj=listStamps.getSelectedValues();
+        
+		while(listElements.hasMoreElements()) {
+			FilledStamp fs = (FilledStamp)listElements.nextElement();
+			if (newStamps.contains(fs.stamp)) {
+				boolean alreadySelected=false;
+				
+				for (int i=0; i<obj.length; i++) {
+					FilledStamp fso = (FilledStamp)obj[i];
+					if (fso.stamp==fs.stamp) {
+						alreadySelected=true;
+						break;
+					}
+				}
+				if (!alreadySelected) {
+					int idx =listModel.indexOf(fs);
+					if (idx>-1) {
+						listStamps.addSelectionInterval(idx, idx);
+					}
+				}
+			}
+		}
+	}
+    
+
+	
+	protected class ListKeyListener extends KeyAdapter {
+
+		public void keyReleased(KeyEvent e) {
+			if (e.isShiftDown()==false) {
+				startSelectionIndex=-1;
+				lastRow=-1;
+			}
+		}
+
+		public void keyPressed(KeyEvent e) {
+			// Do not override the standard copy/paste functionality
+			if (e.isControlDown()) {
+				super.keyPressed(e);
+				return;
+			}
+
+			// Override standard selection, so we can make it work the way we want it to
+			e.consume();
+			
+			if (e.isShiftDown()) {
+				handleShiftClick(e);
+				return;
+			}
+			
+			int lastClicked = listStamps.getSelectionModel().getLeadSelectionIndex();
+
+			if (e.isShiftDown()) {
+				if (startSelectionIndex==-1) {
+					startSelectionIndex=lastClicked;
+				}
+			}
+			
+			int newRow;
+			if (e.getKeyCode()==KeyEvent.VK_UP) {
+				newRow=lastClicked-1;
+			} else if (e.getKeyCode()==KeyEvent.VK_DOWN) {
+				newRow=lastClicked+1;
+			} else {
+				return; 
+			}
+			
+			if (newRow>=listStamps.getModel().getSize() || newRow<0) { 
+				return;
+			}
+			
+			FilledStamp fs = (FilledStamp)listStamps.getModel().getElementAt(newRow);
+
+			if (listStamps.getSelectedValues().length==1) {
+				FilledStamp oldSelection = (FilledStamp)listStamps.getSelectedValue();
+				if (oldSelection.stamp == fs.stamp) {
+					listStamps.setSelectedIndex(newRow);
+					return;
+				}
+			}
+			
+			modelUpdating=true;
+			stampLayer.clearSelectedStamps();
+            listStamps.setSelectedIndex(newRow);
+            stampLayer.addSelectedStamp(fs.stamp);
+//			stampLayer.toggleSelectedStamp(fs.stamp);
+			modelUpdating=false;
+			redrawTriggered();
+		}
+		
+		
+		private void handleShiftClick(KeyEvent e) {
+			if (lastRow==-1) {
+				lastRow = listStamps.getSelectionModel().getLeadSelectionIndex();
+			}
+
+			if (startSelectionIndex==-1) {
+				startSelectionIndex=lastRow;
+			}
+			
+			int newRow;
+			if (e.getKeyCode()==KeyEvent.VK_UP) {
+				newRow=lastRow-1;
+			} else if (e.getKeyCode()==KeyEvent.VK_DOWN) {
+				newRow=lastRow+1;
+			} else {
+				return; 
+			}
+
+			FilledStamp fs;
+			
+			// If we are reducing the number of rows selected
+			if ((e.getKeyCode()==KeyEvent.VK_UP && newRow>=startSelectionIndex)
+					|| (e.getKeyCode()==KeyEvent.VK_DOWN && newRow<=startSelectionIndex))
+			{
+				fs = (FilledStamp)listStamps.getModel().getElementAt(lastRow);
+			} else {
+				if (newRow>=listStamps.getModel().getSize() || newRow<0) { 
+					return;
+				}
+
+				fs = (FilledStamp)listStamps.getModel().getElementAt(newRow);
+			}				
+					
+			listStamps.setSelectionInterval(startSelectionIndex, newRow);
+
+			if (!othersSelected(fs)) {
+				stampLayer.toggleSelectedStamp(fs.stamp);									
+			} 	
+			lastRow=newRow;
+		}
+		
+	}
+	
+	private boolean othersSelected(FilledStamp fs) {
+		Object[] obj = listStamps.getSelectedValues();
+		boolean othersSelected=false;
+		for (int i=0; i<obj.length; i++) {
+			FilledStamp fso = (FilledStamp)obj[i];
+			if (fso==fs) continue;
+			if (fso.stamp==fs.stamp) {
+				othersSelected=true;
+				break;
+			}
+		}
+		
+		return othersSelected;
+	}
+	
+	protected void clearClipAreas() {
+		List<FilledStamp> filledStamps = getFilled();
+		
+		for (FilledStamp fs : filledStamps) {			
+			fs.pdsi.clearCurrentClip();
+		}		
+		
+		parent.clearLastFilled();
+	}
+	
+
 
 	/**
 	 * Creates a sorted list from the specified stamps. The sort order is
-	 * according to each stamp's equator intercept location, i.e., the point at
-	 * which the stamp's corresponding orbit track would intercept the equator.
-	 * Stamps are ordered from west-to-east intercept longitude.
+	 * according to each stamp's average longitude, calculated by averaging together
+	 * each of the points in the stamp's polygon.
+	 * Stamps are ordered from west-to-east.
 	 * 
 	 * @param unsorted
 	 *            List of unsorted stamps
 	 */
     protected FilledStamp[] orbitTrackSort(FilledStamp[] unsorted) {
+
     	if (unsorted == null)
     		return null;
 
-    	// Compute equator intercept longitude for each stamp.
-    	final Map<FilledStamp, Double> equatorLon = new HashMap<FilledStamp, Double>();
+    	final Map<FilledStamp, Double> averageLon = new HashMap<FilledStamp, Double>();
     	for (FilledStamp s : unsorted) {
-    		HVector nw = new HVector(s.stamp.getNW());
-    		HVector sw = new HVector(s.stamp.getSW());
-    		HVector npole = new HVector(0, 0, 1);
-    		HVector orbitPlane = nw.cross(sw);
-    		HVector npoleCross = orbitPlane.cross(npole);
-    		equatorLon.put(s, new Double(npoleCross.lonE()));
+    		averageLon.put(s, s.stamp.getCenter().getX());
     	}
 
     	FilledStamp[] sorted = (FilledStamp[]) unsorted.clone();
     	Arrays.sort(sorted, new Comparator<FilledStamp>() {
     		public int compare(FilledStamp a, FilledStamp b) {
-    			double diff = equatorLon.get(a).doubleValue() - equatorLon.get(b).doubleValue();
-    			if (diff < 0)
+    			double diff = averageLon.get(a).doubleValue() - averageLon.get(b).doubleValue();
+    			if (diff > 0)
     				return -1;
-    			else if (diff > 0)
+    			else if (diff < 0)
     				return 1;
     			else
     				return 0;
@@ -1029,7 +959,6 @@ public class FilledStampFocus extends JPanel implements StampSelectionListener
     {
         int[] selected = listStamps.getSelectedIndices();
         boolean anySelected = !listStamps.isSelectionEmpty();
-        boolean singleSelected = selected.length == 1;
         boolean rangeSelected = isContiguous(selected);
         
         btnRaise.setEnabled(rangeSelected);
@@ -1037,42 +966,16 @@ public class FilledStampFocus extends JPanel implements StampSelectionListener
         btnTop.setEnabled(rangeSelected);
         btnBottom.setEnabled(rangeSelected);
         btnDelete.setEnabled(anySelected);
+        btnPlay.setEnabled(anySelected);
+        loop.setEnabled(anySelected);
         btnSort.setEnabled(listModel.size() > 0);
-        
-        btnPanNW.setEnabled(anySelected);
-        btnPanN .setEnabled(anySelected);
-        btnPanNE.setEnabled(anySelected);
-        btnPanW .setEnabled(anySelected);
-        btnPanE .setEnabled(anySelected);
-        btnPanSW.setEnabled(anySelected);
-        btnPanS .setEnabled(anySelected);
-        btnPanSE.setEnabled(anySelected);
-        btnPanSize.setEnabled(anySelected);
-        
-        btnViewPds.setEnabled(singleSelected);
         
         if (listModel.getSize() > 0)
             btnListCopy.setEnabled(true);
         else
             btnListCopy.setEnabled(false);
-        
-        FilledStamp fs = getFilledSingle();
-        
-        mapper.setEnabled(singleSelected  &&
-                          fs != null);
 
-        resetPan.setEnabled(anySelected);
-        
-        if (fs != null) {
-            log.println("Implementing newly-selected " + fs.stamp);
-            
-            refreshPanInfo(fs);
-
-            mapper.setState(fs.colors);
-        } else {
-        	xoffset.setText("X offset: 0");
-        	yoffset.setText("Y offset: 0");
-        }
+        btnDetails.setEnabled(selected.length==1);
 
     }
     
@@ -1081,125 +984,7 @@ public class FilledStampFocus extends JPanel implements StampSelectionListener
         return  values.length != 0
                 &&  values[values.length-1] == values[0] + values.length-1;
     }
-    
-    private void refreshPanInfo(FilledStamp fs) {
-        String fmt = "{0} offset: {1,number,#.####}";
-        xoffset.setText(MessageFormat.format(fmt, "X", fs.getOffset().getX()));
-        yoffset.setText(MessageFormat.format(fmt, "Y", fs.getOffset().getY()));    	
-    }
-    
-    private static final int[] panSizeList = { 1, 2, 5, 10 };
-    private static final ImageIcon[] panSizeIcons;
-    private static final ImageIcon[] panSizeIconsD; // disabled icons
-    static
-    {
-        panSizeIcons  = new ImageIcon[panSizeList.length];
-        panSizeIconsD = new ImageIcon[panSizeList.length];
-        for (int i=0; i<panSizeList.length; i++)
-            try
-            {
-                URL url = Main.getResource("resources/pan_" +
-                                           panSizeList[i] + ".gif");
-                panSizeIcons[i]  = new ImageIcon(url);
-                panSizeIconsD[i] = new ImageIcon(
-                                                 GrayFilter.createDisabledImage(
-                                                                                panSizeIcons[i].getImage())
-                );
-            }
-        catch(Throwable e)
-        {
-            log.println("Failed to load icon for pansize " +
-                        panSizeList[i]);
-        }
-    }
-    private int panIdx = 0;
-    private int panSize = panSizeList[panIdx];
-    private class PanButton extends JButton
-    {
-        // Button for toggling pan step-size
-        PanButton()
-        {
-            setAction(
-                  new AbstractAction(null, panSizeIcons[0])
-                  {
-                      public void actionPerformed(ActionEvent e)
-                      {
-                          panIdx = (panIdx + 1) % panSizeList.length;
-                          panSize = panSizeList[panIdx];
-                          setIcon        (panSizeIcons [panIdx]);
-                          setDisabledIcon(panSizeIconsD[panIdx]);
-                      }
-                  }
-            );
-            setToolTipText("Toggle the number of pixels" +
-                           " that the arrow buttons shift by.");
-            squish();
-        }
-        // Movement button
-        PanButton(final int x, final int y)
-        {
-            // Determine an icon for the given x/y direction
-            String dir = "";
-            switch(y)
-            {
-            case -1:  dir += "s";  break;
-            case +1:  dir += "n";  break;
-            }
-            switch(x)
-            {
-            case -1:  dir += "w";  break;
-            case +1:  dir += "e";  break;
-            }
-            Icon dirIcon = null;
-            try
-            {
-                dirIcon =
-                    new ImageIcon(Main.getResource(
-                                                   "resources/pan_" + dir + ".gif"));
-            }
-            catch(Throwable e)
-            {
-                log.aprintln("Unable to load dir " + dir);
-            }
-            
-            setAction(
-            		new AbstractAction(null, dirIcon)
-            		{
-            			public void actionPerformed(ActionEvent e)
-            			{
-            				Point2D worldPan = getWorldPan(x * panSize,
-            						y * panSize);
-            				List<FilledStamp> filledStamps = getFilledSelections();
-            				for (FilledStamp fs : filledStamps)
-            				{
-            					Point2D oldOffset = fs.getOffset();
-            					fs.setOffset(new Point2D.Double(oldOffset.getX() + worldPan.getX(),
-            														oldOffset.getY() + worldPan.getY()));
-            					
-            					fs.saveOffset();
-            					
-            					refreshPanInfo(fs);
-            				}
 
-            				clearClipAreas();
-            				
-           					redrawTriggered();
-            			}
-            		}
-            );
-            setToolTipText("Shift the filled stamp(s) on-screen.");
-            squish();
-        }
-        void squish()
-        {
-            setFocusPainted(false);
-            
-            Dimension d = this.getMinimumSize();
-            d.width = d.height;
-            setMaximumSize(d);
-            setPreferredSize(d);
-        }
-    }
     
     public List<FilledStamp> getFilledSelections()
     {
@@ -1212,7 +997,7 @@ public class FilledStampFocus extends JPanel implements StampSelectionListener
         return  filledSelected;
     }
     
-    private FilledStamp getFilledSingle()
+    protected FilledStamp getFilledSingle()
     {
         Object[] selected = listStamps.getSelectedValues();
         if (selected.length != 1)
@@ -1239,11 +1024,14 @@ public class FilledStampFocus extends JPanel implements StampSelectionListener
     }
     
     /**
+     * This will return a {@link FilledStampImageType} object by default.
+     * The {@link FilledStampRadarTypeFocus} should override this method and return
+     * a {@link FilledStampRadarType} object.
      ** @param state optional position offset and color map state settings
      ** used to restore FilledStamp state; may be null.
      **/
-    protected FilledStamp getFilled(StampShape s, FilledStamp.State state, String type)
-    {
+    protected FilledStamp getFilled(StampShape s, FilledStamp.State state, String type) {
+    	
     	if (type==null && state!=null) {
     		type = state.getImagetype();
     	}
@@ -1252,15 +1040,16 @@ public class FilledStampFocus extends JPanel implements StampSelectionListener
             
         if (pdsi == null)
            return  null;
-            
-        return new FilledStamp(s, pdsi, state);
+        
+        //return FilledStampImageType by default    
+        return new FilledStampImageType(s, pdsi, state);
     }
     
     public void addStamp(StampShape s, String type)
     {
         addStamp(s, null, true, false, false, type);
     }
-        
+    
     /**
      *  @param state optional position offset and color map state settings
      *  used to restore FilledStamp state; may be null.
@@ -1285,6 +1074,7 @@ public class FilledStampFocus extends JPanel implements StampSelectionListener
     		}
     	}
 
+    	// Do we really still need this logic?
     	if (type==null && stampLayer.getInstrument().equalsIgnoreCase("THEMIS")) {
     		if (s.getId().startsWith("I")) type="BTR"; else type="ABR";
     	}
@@ -1301,7 +1091,7 @@ public class FilledStampFocus extends JPanel implements StampSelectionListener
                                               JOptionPane.ERROR_MESSAGE);
             return;
         }
-                       
+        
         listModel.insertElementAt(fs, 0);
 
         listStamps.addSelectionInterval(0, 0);
@@ -1321,6 +1111,54 @@ public class FilledStampFocus extends JPanel implements StampSelectionListener
         	redrawTriggered();
         }
     }
+
+    // This is called from the DavinciFocusPanel when new stamps are received from Davinci
+    protected void addStamp(FilledStamp fs, FilledStamp.State state, boolean redraw, 
+            boolean ignoreAlreadyFilled, boolean ignoreNotLoaded)
+	{
+		if (fs == null ||
+		fs.pdsi == null)
+		{
+		if (!ignoreNotLoaded)
+		JOptionPane.showMessageDialog(this,
+		                              "Unable to load " + fs.stamp,
+		                              "PDS LOAD ERROR",
+		                              JOptionPane.ERROR_MESSAGE);
+		return;
+		}
+		
+		String id=fs.stamp.getId();
+
+		List<FilledStamp> stamps=getFilled();
+		
+		for (FilledStamp s : stamps) {
+			if (s.stamp.getId().equalsIgnoreCase(id)) {
+				listModel.removeElement(s);
+				clearClipAreas();
+			}
+		}
+		
+		listModel.insertElementAt(fs, 0);
+		
+		listStamps.addSelectionInterval(0, 0);
+		
+		if (!stampLayer.isSelected(fs.stamp)) {
+			stampLayer.addSelectedStamp(fs.stamp);
+		}
+		
+		ChartView myChart = parent.myFocus.chartView;
+		if (myChart!=null) {
+		myChart.mapChanged();
+		}
+		
+		enableEverything();
+		
+		if (redraw) {
+		redrawTriggered();
+		}
+	}
+    
+    
     
     /**
      * Adds any stamps from file that are found in the associated
@@ -1365,26 +1203,7 @@ public class FilledStampFocus extends JPanel implements StampSelectionListener
         }
     }
        
-    /**
-     ** Given a user-requested pan in pixels, should return the actual
-     ** pan in world coordinates.
-     **/
-	protected Point2D getWorldPan(int px, int py) {
-		MultiProjection proj = parent.viewman.getProj();
-		if (proj == null) {
-			log.aprintln("null projection");
-			return null;
-		}
-		
-		Dimension2D pixelSize = proj.getPixelSize();
-		if (pixelSize == null) {
-			log.aprintln("no pixel size");
-			return null;
-		}
-		
-		return  new Point2D.Double(px * pixelSize.getWidth(),
-		                           py * pixelSize.getHeight());
-	}
+
         
     /**
      ** Indicates that the user changed the drawing parameters of a
@@ -1404,7 +1223,7 @@ public class FilledStampFocus extends JPanel implements StampSelectionListener
     	
         parent.redrawEverything(true);
     }
-        
+    
     public Dimension getMinimumSize()
     {
         return  getPreferredSize();
@@ -1421,10 +1240,16 @@ public class FilledStampFocus extends JPanel implements StampSelectionListener
     		
     		if (types==null) {
     			types = new String[stampsToAdd.length];
+    			
+    			for (int i=0; i<stampsToAdd.length; i++) {
+    				if (states[i]==null) {
+    					types[i]=null;
+    				} else {
+    					types[i]=states[i].getImagetype();    				
+    				}
+    			}
+    			
     		}
-    	
-    	
-    	
     	
 			Enumeration stamps = listModel.elements();
 						
@@ -1454,6 +1279,7 @@ public class FilledStampFocus extends JPanel implements StampSelectionListener
 				
 			
 				if (types[i]==null) {
+					// Do we really need to handle BTR/ABR so different?
 					if (stampLayer.getInstrument().equalsIgnoreCase("THEMIS")) {
 						if (stampsToAdd[i].getId().startsWith("I"))  {
 							types[i]="BTR"; }

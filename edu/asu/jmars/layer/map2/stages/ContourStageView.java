@@ -1,23 +1,3 @@
-// Copyright 2008, Arizona Board of Regents
-// on behalf of Arizona State University
-// 
-// Prepared by the Mars Space Flight Facility, Arizona State University,
-// Tempe, AZ.
-// 
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-// 
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU General Public License for more details.
-// 
-// You should have received a copy of the GNU General Public License
-// along with this program.  If not, see <http://www.gnu.org/licenses/>.
-
-
 package edu.asu.jmars.layer.map2.stages;
 
 import java.awt.BorderLayout;
@@ -31,6 +11,7 @@ import java.text.DecimalFormat;
 import java.text.ParseException;
 
 import javax.swing.Box;
+import javax.swing.JComboBox;
 import javax.swing.JLabel;
 import javax.swing.JPanel;
 import javax.swing.JTextField;
@@ -44,6 +25,8 @@ public class ContourStageView implements StageView, PropertyChangeListener {
 	JPanel stagePanel;
 	JTextField baseValField, stepValField;
 	ColorCombo colorField;
+	JComboBox thicknessField;
+	
 	DecimalFormat nf = new DecimalFormat("###0.########");
 	
 	public ContourStageView(ContourStageSettings settings){
@@ -97,6 +80,15 @@ public class ContourStageView implements StageView, PropertyChangeListener {
 		});
 		updateColorFieldFromSettings();
 
+		Object lineChoices[] = {1,2,3};
+		thicknessField = new JComboBox(lineChoices);
+		thicknessField.addActionListener(new ActionListener(){
+			public void actionPerformed(ActionEvent e) {
+				updateSettingsFromLineThicknessField();
+			}
+		});
+		updateLineThicknessFromSettings();
+		
 		Box baseStepBox = Box.createHorizontalBox();
 		baseStepBox.add(new JLabel("Base:", JLabel.RIGHT));
 		baseStepBox.add(baseValField);
@@ -106,6 +98,9 @@ public class ContourStageView implements StageView, PropertyChangeListener {
 		baseStepBox.add(Box.createHorizontalStrut(5));
 		baseStepBox.add(new JLabel("Color:", JLabel.RIGHT));
 		baseStepBox.add(colorField);
+		baseStepBox.add(Box.createHorizontalStrut(5));
+		baseStepBox.add(new JLabel("Line Thickness:", JLabel.RIGHT));
+		baseStepBox.add(thicknessField);
 		
 		JPanel slim = new JPanel(new BorderLayout());
 		slim.add(baseStepBox, BorderLayout.NORTH);
@@ -124,7 +119,11 @@ public class ContourStageView implements StageView, PropertyChangeListener {
 	private void updateColorFieldFromSettings(){
 		colorField.setColor(settings.getColor());
 	}
-	
+
+	private void updateLineThicknessFromSettings(){
+		thicknessField.setSelectedItem(settings.getLineThickness());
+	}
+
 	private void updateSettingsFromBaseField(){
 		try {
 			settings.setBase(getFieldValue(baseValField));
@@ -150,6 +149,11 @@ public class ContourStageView implements StageView, PropertyChangeListener {
 			settings.setColor(colorField.getColor());
 	}
 	
+	private void updateSettingsFromLineThicknessField() {
+		if (settings.getLineThickness()!=(Integer)thicknessField.getSelectedItem())
+			settings.setLineThickness((Integer)thicknessField.getSelectedItem());
+	}
+	
 	private void setFieldValue(JTextField textField, double val){
 		textField.setText(nf.format(val));
 	}
@@ -168,6 +172,8 @@ public class ContourStageView implements StageView, PropertyChangeListener {
 			updateStepFieldFromSettings();
 		else if (prop.equals(ContourStageSettings.propColor))
 			updateColorFieldFromSettings();
+		else if (prop.equals(ContourStageSettings.propLineThickness))
+			updateLineThicknessFromSettings();
 	}
 
 }

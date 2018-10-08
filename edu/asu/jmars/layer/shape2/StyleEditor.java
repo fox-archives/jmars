@@ -1,23 +1,3 @@
-// Copyright 2008, Arizona Board of Regents
-// on behalf of Arizona State University
-// 
-// Prepared by the Mars Space Flight Facility, Arizona State University,
-// Tempe, AZ.
-// 
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-// 
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU General Public License for more details.
-// 
-// You should have received a copy of the GNU General Public License
-// along with this program.  If not, see <http://www.gnu.org/licenses/>.
-
-
 package edu.asu.jmars.layer.shape2;
 
 import java.awt.BasicStroke;
@@ -64,6 +44,8 @@ import javax.swing.event.DocumentListener;
 
 import org.jdesktop.swingx.combobox.ListComboBoxModel;
 
+import edu.asu.jmars.Main;
+import edu.asu.jmars.graphics.JFontChooser;
 import edu.asu.jmars.layer.util.features.Field;
 import edu.asu.jmars.layer.util.features.Style;
 import edu.asu.jmars.layer.util.features.StyleFieldSource;
@@ -148,7 +130,7 @@ public class StyleEditor {
 			Object styleDefault;
 			if (source instanceof StyleFieldSource<?>) {
 				StyleFieldSource<?> fieldSource = (StyleFieldSource<?>)source;
-				styleField = fieldSource.getField();
+				styleField = fieldSource.getFields().iterator().next();
 				styleDefault = fieldSource.getValue(null);
 			} else if (source instanceof StyleGlobalSource<?>) {
 				StyleGlobalSource<?> orideSource = (StyleGlobalSource<?>)source;
@@ -225,6 +207,33 @@ public class StyleEditor {
 			if (styleDefault == null) {
 				log.println("Editor is ignoring uneditable source " + source.getClass().getName());
 				continue;
+			} else if (s == styles.labelFont) {
+				final JComboBox cb = new JComboBox(JFontChooser.fonts);
+				cb.setSelectedItem(s.getValue(null));
+				cb.addActionListener(new ActionListener() {
+					public void actionPerformed(ActionEvent e) {
+						newDefaults.put(s, cb.getSelectedItem().toString());
+					}
+				});
+				comp = cb;
+			} else if (s == styles.labelStyle) {
+				final JComboBox cb = new JComboBox(JFontChooser.fontStyles);
+				cb.setSelectedItem(s.getValue(null));
+				cb.addActionListener(new ActionListener() {
+					public void actionPerformed(ActionEvent e) {
+						newDefaults.put(s, cb.getSelectedItem().toString());
+					}
+				});
+				comp = cb;
+			} else if (s == styles.labelSize) {
+				final JComboBox cb = new JComboBox(JFontChooser.sizes);
+				cb.setSelectedItem(""+s.getValue(null));
+				cb.addActionListener(new ActionListener() {
+					public void actionPerformed(ActionEvent e) {
+						newDefaults.put(s, Integer.valueOf(cb.getSelectedItem().toString()));
+					}
+				});
+				comp = cb;
 			} else if (String.class.isInstance(defaultValue)) {
 				final JTextField txt = new JTextField(styleDefault.toString());
 				txt.getDocument().addDocumentListener(new DocumentListener() {
@@ -311,13 +320,20 @@ public class StyleEditor {
 				});
 				comp = cb;
 			} else if (Color.class.isInstance(defaultValue)) {
-				final ColorButton cb = new ColorButton("Color...", (Color)styleDefault);
+				Box h = Box.createHorizontalBox();
+				Color col = (Color)styleDefault;
+				final ColorButton cb = new ColorButton("Color...", col, true);
+				cb.setToolTipText(col.getAlpha()*100/255 + "% opaque");
 				cb.addPropertyChangeListener("background", new PropertyChangeListener() {
 					public void propertyChange(PropertyChangeEvent evt) {
-						newDefaults.put(s, cb.getBackground());
+						Color col = cb.getBackground();
+						newDefaults.put(s, col);
+						cb.setToolTipText(col.getAlpha()*100/255 + "% opaque");
 					}
 				});
-				comp = cb;
+				h.add(cb);
+				h.add(Box.createHorizontalGlue());
+				comp = h;
 			} else {
 				log.println("Editor is skipping unrecognized type " + defaultValue.getClass().getName());
 				continue;
@@ -325,6 +341,10 @@ public class StyleEditor {
 			
 			oldFields.put(s, styleField);
 			oldDefaults.put(s, styleDefault);
+			
+			if (s == styles.pointSize || s == styles.drawOutlines  || s == styles.fillPolygons || s == styles.showLabels) {
+				itemPanel.add(new JSeparator(), new GridBagConstraints(0,row++,3,1,0,1,GridBagConstraints.WEST, GridBagConstraints.HORIZONTAL,in,0,0));
+			}
 			
 			gbc.gridy = row++;
 			gbc.gridx = 0;
@@ -375,6 +395,7 @@ public class StyleEditor {
 		content.add(new JScrollPane(itemPanel), BorderLayout.CENTER);
 		d.getContentPane().add(content);
 		d.pack();
+		d.setLocationRelativeTo(Main.mainFrame);
 		d.setVisible(true);
 		
 		// if dialog returned because okay was not hit, get out now

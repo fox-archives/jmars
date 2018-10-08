@@ -1,36 +1,24 @@
-// Copyright 2008, Arizona Board of Regents
-// on behalf of Arizona State University
-// 
-// Prepared by the Mars Space Flight Facility, Arizona State University,
-// Tempe, AZ.
-// 
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-// 
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU General Public License for more details.
-// 
-// You should have received a copy of the GNU General Public License
-// along with this program.  If not, see <http://www.gnu.org/licenses/>.
-
-
 package edu.asu.jmars.layer.map2;
 
+import java.awt.Dimension;
+import java.awt.Graphics2D;
 import java.awt.Rectangle;
+import java.awt.RenderingHints;
 import java.awt.geom.AffineTransform;
 import java.awt.geom.Area;
 import java.awt.geom.Point2D;
 import java.awt.geom.Rectangle2D;
 import java.awt.image.AffineTransformOp;
 import java.awt.image.BufferedImage;
+import java.awt.image.BufferedImageOp;
 import java.awt.image.ColorModel;
 import java.awt.image.ComponentColorModel;
+import java.awt.image.DataBuffer;
+import java.awt.image.IndexColorModel;
+import java.awt.image.PackedColorModel;
 import java.awt.image.Raster;
 import java.awt.image.WritableRaster;
+import java.util.Arrays;
 
 import edu.asu.jmars.util.DebugLog;
 import edu.asu.jmars.util.PolyArea;
@@ -53,15 +41,40 @@ public final class MapData {
 	private final MapRequest request;
 	private Area finishedArea;
 	private Area fuzzyArea;
+	/**
+	 * Updates to the 'image' field should be done through
+	 * {@link #setImage(BufferedImage, double[])} to ensure the null tester is
+	 * also updated properly.
+	 */
 	private BufferedImage image;
+	private double[] nullPixel;
 	private boolean finished;
+	private NullTest nullTester;
 	
 	public MapData(MapRequest request) {
+		this(request, null, null);
+	}
+	
+	private MapData(MapRequest request, BufferedImage image, double[] nullPixel) {
 		this.request = request;
+		setImage(image, nullPixel);
 		finishedArea = new Area();
 		fuzzyArea = new Area();
-		image = null;
 		finished = false;
+	}
+	
+	private void setImage(BufferedImage image, double[] nullPixel) {
+		this.image = image;
+		this.nullPixel = nullPixel;
+		if (image == null) {
+			nullTester = null;
+		} else if (nullPixel != null && (nullPixel.length == 1 ||nullPixel.length == image.getColorModel().getNumColorComponents())) {
+			nullTester = new IgnoreTest(image, nullPixel);
+		} else if (image.getAlphaRaster() != null) {
+			nullTester = new AlphaTest(image.getAlphaRaster());
+		} else {
+			nullTester = new DefaultTest();
+		}
 	}
 	
 	public MapRequest getRequest() {
@@ -98,6 +111,24 @@ public final class MapData {
 	}
 	
 	/**
+	 * @return a raster that shares the given image's databuffer but only
+	 *         provides access to the color bands, complementing
+	 *         {@link BufferedImage#getAlphaRaster()}.
+	 */
+	public static Raster getColorRaster(BufferedImage bi) {
+		return getColorRaster(bi.getColorModel(), bi.getRaster());
+	}
+	
+	public static Raster getColorRaster(ColorModel cm, Raster wr) {
+		// use all bands but the alpha band (we assume alpha has the highest band index)
+		int[] bandFilter = new int[cm.getNumColorComponents()];
+		for (int i = 0; i < bandFilter.length; i++) {
+			bandFilter[i] = i;
+		}
+		return wr.createChild(0, 0, wr.getWidth(), wr.getHeight(), 0, 0, bandFilter);
+	}
+	
+	/**
 	 * Returns a portion of this MapData's WritableRaster covering the given
 	 * world extent. May throw all manner of exceptions if the image isn't
 	 * present. If the given extent does not intersect this MapData at all, null
@@ -112,6 +143,8 @@ public final class MapData {
 	 * inputExtent) that lies within outputExtent. If there is no intersection,
 	 * this returns null. Any pixel touched by the intersection is in the returned
 	 * Raster. The input image and input extent must have the same aspect ratio.
+	 * The returned raster's origin is at (0,0), regardless of what part of the
+	 * image it is cropped from.
 	 */
 	public static WritableRaster getRasterForWorld(WritableRaster raster, Rectangle2D inputExtent, Rectangle2D outputExtent) {
 		Rectangle overlap = getRasterBoundsForWorld(raster, inputExtent, outputExtent);
@@ -171,21 +204,23 @@ public final class MapData {
 			throw new IllegalArgumentException("Tile has no image");
 		}
 		
+		Dimension size = request.getImageSize();
+		
+		// create the target image to be compatible with the given image, if necessary
+		if (image == null) {
+			setImage(Util.createCompatibleImage(tileImage, size.width, size.height), tileRequest.getSource().getIgnoreValue());
+		}
+		
 		// create image when the first tile is received
 		Rectangle2D worldExtent = request.getExtent();
 		int ppd = request.getPPD();
-		int w = (int)Math.ceil(worldExtent.getWidth()*ppd);
-		int h = (int)Math.ceil(worldExtent.getHeight()*ppd);
-		if (image == null) {
-			image = Util.createCompatibleImage(tileImage, w, h);
-		}
 		
 		Point2D offset = request.getSource().getOffset();
 		
 		// get an extent that includes all the pixels in 'image'
 		// Use the offset values (which default to 0.0 for an unnudged map)
 		Rectangle2D fixedExtent = new Rectangle2D.Double(worldExtent.getMinX()+offset.getX(),
-				worldExtent.getMinY()+offset.getY(), w / (double)ppd, h / (double)ppd);
+				worldExtent.getMinY()+offset.getY(), size.width / (double)ppd, size.height / (double)ppd);
 		
 		int outBands = image.getRaster().getNumBands();
 		int inBands = tileImage.getRaster().getNumBands();
@@ -206,7 +241,7 @@ public final class MapData {
 					worldExtents[i].getHeight());
 			
 			Rectangle2D unShiftedExtent = new Rectangle2D.Double(worldExtent.getMinX(),
-					worldExtent.getMinY(), w / (double)ppd, h / (double)ppd);
+					worldExtent.getMinY(), size.width / (double)ppd, size.height / (double)ppd);
 			
 			WritableRaster target = getRasterForWorld(image.getRaster(), unShiftedExtent, worldTile);
 			
@@ -249,16 +284,15 @@ public final class MapData {
 	
 	/** Returns a deep copy of this object, including the image */
 	public synchronized MapData getDeepCopy() {
-		return getDeepCopyShell(image == null ? null : copyImage(image));
+		return getDeepCopyShell(image == null ? null : copyImage(image), nullPixel);
 	}
 	
 	/** Returns a new MapData object with clones of this MapData's properties, but the given image instead. */
-	public synchronized MapData getDeepCopyShell(BufferedImage image) {
-		MapData md = new MapData(request);
+	public synchronized MapData getDeepCopyShell(BufferedImage image, double[] nullPixel) {
+		MapData md = new MapData(request, image, nullPixel);
 		md.finished = isFinished();
 		md.finishedArea = (Area)getFinishedArea().clone();
 		md.fuzzyArea = (Area)getFuzzyArea().clone();
-		md.image = image;
 		return md;
 	}
 	
@@ -278,15 +312,17 @@ public final class MapData {
 				srcCm.hasAlpha(),
 				false,
 				srcCm.getTransparency(),
-				srcCm.getTransferType());
+				DataBuffer.TYPE_BYTE);
 			
 			WritableRaster dstRaster = dstCm.createCompatibleWritableRaster(image.getWidth(), image.getHeight());
 			BufferedImage dst = new BufferedImage(dstCm, dstRaster, dstCm.isAlphaPremultiplied(), null);
-			dst.setData(image.getRaster());
-			return getDeepCopyShell(dst);
+			Graphics2D g2 = dst.createGraphics();
+			g2.drawImage(image, null, 0, 0);
+			g2.dispose();
+			return getDeepCopyShell(dst, nullPixel);
 		}
 	}
-
+	
 	/**
 	 * Returns <code>this</code> if this {@link MapData}'s request is equal to
 	 * the given request, otherwise a new {@link MapData} object is created with
@@ -368,11 +404,10 @@ public final class MapData {
 			outImage = copyImage(image);
 		}
 		
-		final MapData outdata = new MapData(newRequest);
+		final MapData outdata = new MapData(newRequest, outImage, nullPixel);
 		outdata.finishedArea = new Area(finishedArea);
 		outdata.fuzzyArea = new Area(fuzzyArea);
 		outdata.finished = finished;
-		outdata.image = outImage;
 		// clip the areas down to the new request extent
 		final Area clip = new Area(newExtent);
 		outdata.finishedArea.intersect(clip);
@@ -387,5 +422,146 @@ public final class MapData {
 			image.getColorModel(),
 			image.copyData(null),
 			image.isAlphaPremultiplied(), null);
+	}
+	
+	/**
+	 * @return True if the given location in this image contains a null pixel;
+	 *         common reasons for a null pixel are a transparent alpha value or
+	 *         that pixel is equal to the ignore value
+	 */
+	public boolean isNull(int x, int y) {
+		return nullTester.isNull(x, y);
+	}
+	
+	public double[] getNullPixel() {
+		return nullPixel;
+	}
+	
+	/**
+	 * Used to test if individual pixels are null, and to get Composite
+	 * implementations suitable for drawing MapData objects.
+	 */
+	interface NullTest {
+		boolean isNull(int x, int y);
+	}
+	
+	/** The default null tester handles images that have no null pixels */ 
+	private static final class DefaultTest implements NullTest {
+		public boolean isNull(int x, int y) {
+			return false;
+		}
+	}
+	
+	/** The alpha null tester handles images that have an alpha band */
+	private static final class AlphaTest implements NullTest {
+		private final Raster alphaBand;
+		public AlphaTest(Raster alphaBand) {
+			this.alphaBand = alphaBand;
+			if (alphaBand == null) {
+				throw new IllegalArgumentException("The alpha band must not be null");
+			}
+		}
+		public boolean isNull(int x, int y) {
+			return alphaBand.getSample(x, y, 0) == 0;
+		}
+	}
+	
+	/**
+	 * The ignore null tester handles images that have an ignore value. Testing
+	 * is done by getting the transfer type of the image, and casting it to an
+	 * array of the image's transfer type. Comparison of packed pixels is done by
+	 * converting the ignore value into the same packed representation and
+	 * masking off an alpha band if applicable.
+	 */
+	private static final class IgnoreTest implements NullTest {
+		private final Raster raster;
+		private double[] ignore;
+		private double[] pixel;
+		public IgnoreTest(BufferedImage bi, double[] ignore) {
+			// check for a match between non-alpha band count and ignore count
+			final int numColors = bi.getColorModel().getNumColorComponents();
+			if (ignore.length != 1 && numColors != ignore.length) {
+				throw new IllegalArgumentException("Unable to create ignore test, given " +
+					ignore.length + " samples for an image with " + numColors + " bands");
+			}
+			
+			this.raster = getColorRaster(bi);
+			
+			if (ignore.length == 1 && numColors != 1) {
+				double tmp = ignore[0];
+				ignore = new double[numColors];
+				Arrays.fill(ignore, tmp);
+			}
+			
+			this.ignore = ignore;
+		}
+		/**
+		 * This method is not thread safe and should be guarded by a lock
+		 * outside the loop over the x/y range being tested.
+		 * @return true if the given position in the image contains no data.
+		 */
+		public boolean isNull(int x, int y) {
+			pixel = raster.getPixel(x, y, pixel);
+			for (int i = 0; i < ignore.length; i++) {
+				if (ignore[i] != pixel[i]) {
+					return false;
+				}
+			}
+			return true;
+		}
+	}
+	
+	/**
+	 * @return an operator that will add an alpha band if necessary and set
+	 *         alpha=0 where source pixel values equal a given ignore value,
+	 *         or null if the image already has an alpha band.
+	 */
+	public BufferedImageOp getOperator() {
+		if (nullPixel == null) {
+			return null;
+		} else {
+			return new IgnoreOp(nullTester);
+		}
+	}
+	
+	private static final class IgnoreOp implements BufferedImageOp {
+		private final NullTest test;
+		public IgnoreOp(NullTest nullTester) {
+			this.test = nullTester;
+		}
+		public BufferedImage createCompatibleDestImage(BufferedImage src, ColorModel destCM) {
+			if (!destCM.hasAlpha()) {
+				throw new IllegalArgumentException("Destination color model must have an alpha band");
+			}
+			return new BufferedImage(
+				destCM,
+				destCM.createCompatibleWritableRaster(src.getWidth(), src.getHeight()),
+				false, null);
+		}
+		public BufferedImage filter(BufferedImage src, BufferedImage dest) {
+			final WritableRaster alpha = dest.getAlphaRaster();
+			final int[] hidden = {0};
+			final int[] pixels = new int[dest.getWidth()];
+			for (int j = 0; j < dest.getHeight(); j++) {
+				src.getRGB(0, j, pixels.length, 1, pixels, 0, pixels.length);
+				for (int i = 0; i < pixels.length; i++) {
+					if (test.isNull(i, j)) {
+						alpha.setPixel(i, j, hidden);
+					} else {
+						dest.setRGB(i, j, pixels[i]);
+					}
+				}
+			}
+			return dest;
+		}
+		public Rectangle2D getBounds2D(BufferedImage src) {
+			return src.getRaster().getBounds();
+		}
+		public Point2D getPoint2D(Point2D srcPt, Point2D dstPt) {
+			throw new UnsupportedOperationException();
+		}
+		public RenderingHints getRenderingHints() {
+			return null;
+		}
 	}
 }

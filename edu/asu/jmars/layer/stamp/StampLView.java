@@ -1,29 +1,11 @@
-// Copyright 2008, Arizona Board of Regents
-// on behalf of Arizona State University
-// 
-// Prepared by the Mars Space Flight Facility, Arizona State University,
-// Tempe, AZ.
-// 
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-// 
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU General Public License for more details.
-// 
-// You should have received a copy of the GNU General Public License
-// along with this program.  If not, see <http://www.gnu.org/licenses/>.
-
-
 package edu.asu.jmars.layer.stamp;
 
 import java.awt.AlphaComposite;
 import java.awt.BasicStroke;
+import java.awt.BorderLayout;
 import java.awt.Color;
 import java.awt.Component;
+import java.awt.FlowLayout;
 import java.awt.Graphics;
 import java.awt.Graphics2D;
 import java.awt.Point;
@@ -32,56 +14,61 @@ import java.awt.datatransfer.Clipboard;
 import java.awt.datatransfer.StringSelection;
 import java.awt.event.ActionEvent;
 import java.awt.event.ActionListener;
-import java.awt.event.KeyEvent;
-import java.awt.event.KeyListener;
 import java.awt.event.MouseEvent;
-import java.awt.event.MouseMotionAdapter;
-import java.awt.geom.AffineTransform;
 import java.awt.geom.Dimension2D;
+import java.awt.geom.Ellipse2D;
 import java.awt.geom.GeneralPath;
-import java.awt.geom.Line2D;
-import java.awt.geom.PathIterator;
 import java.awt.geom.Point2D;
 import java.awt.geom.Rectangle2D;
+import java.awt.image.BufferedImage;
 import java.io.ObjectInputStream;
-import java.io.OutputStreamWriter;
-import java.net.URL;
-import java.net.URLConnection;
-import java.text.DecimalFormat;
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.Collection;
-import java.util.Collections;
 import java.util.Enumeration;
 import java.util.List;
+import java.util.Set;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ThreadFactory;
 
+import javax.swing.JButton;
+import javax.swing.JDialog;
+import javax.swing.JList;
 import javax.swing.JMenu;
 import javax.swing.JMenuItem;
 import javax.swing.JOptionPane;
 import javax.swing.JPanel;
-import javax.swing.JPopupMenu;
-import javax.swing.MenuElement;
-import javax.swing.ProgressMonitor;
-import javax.swing.SwingUtilities;
+import javax.swing.JScrollPane;
+import javax.swing.event.ListSelectionEvent;
+import javax.swing.event.ListSelectionListener;
 import javax.swing.event.MouseInputListener;
 import javax.swing.table.TableColumn;
 
 import edu.asu.jmars.Main;
-import edu.asu.jmars.layer.FocusPanel;
-import edu.asu.jmars.layer.LViewManager;
+import edu.asu.jmars.layer.InvestigateData;
+import edu.asu.jmars.layer.LManager;
 import edu.asu.jmars.layer.Layer;
+import edu.asu.jmars.layer.LayerParameters;
 import edu.asu.jmars.layer.MultiProjection;
 import edu.asu.jmars.layer.SerializedParameters;
 import edu.asu.jmars.layer.WrappedMouseEvent;
+import edu.asu.jmars.layer.shape2.ShapeFactory;
+import edu.asu.jmars.layer.shape2.ShapeLView;
+import edu.asu.jmars.layer.shape2.ShapeLayer;
 import edu.asu.jmars.layer.stamp.StampLayer.StampSelectionListener;
 import edu.asu.jmars.layer.stamp.StampLayer.StampTask;
 import edu.asu.jmars.layer.stamp.StampLayer.Status;
 import edu.asu.jmars.layer.stamp.chart.ChartView;
 import edu.asu.jmars.layer.stamp.chart.ProfileLineCueingListener;
 import edu.asu.jmars.layer.stamp.chart.ProfileLineDrawingListener;
-import edu.asu.jmars.layer.stamp.focus.FilledStampFocus;
+import edu.asu.jmars.layer.stamp.focus.OutlineFocusPanel;
 import edu.asu.jmars.layer.stamp.focus.StampFocusPanel;
-import edu.asu.jmars.layer.stamp.functions.RenderFunction;
+import edu.asu.jmars.layer.stamp.radar.FilledStampRadarType;
+import edu.asu.jmars.layer.stamp.radar.FullResHighlightListener;
+import edu.asu.jmars.layer.stamp.radar.RadarFocusPanel;
+import edu.asu.jmars.layer.stamp.radar.RadarHorizon;
+import edu.asu.jmars.layer.util.features.FeatureProvider;
+import edu.asu.jmars.layer.util.features.FeatureProviderStamp;
 import edu.asu.jmars.swing.ValidClipboard;
 import edu.asu.jmars.util.Config;
 import edu.asu.jmars.util.DebugLog;
@@ -96,31 +83,49 @@ import edu.asu.jmars.util.stable.FilteringColumnModel;
 
 public class StampLView extends Layer.LView implements StampSelectionListener
 {
-	private static final String VIEW_SETTINGS_KEY = "stamp";
+	private static final long serialVersionUID = 1L;
 
+	private static final String VIEW_SETTINGS_KEY = "stamp";
+    private static ExecutorService pool = Executors.newCachedThreadPool(new ThreadFactory() {
+    	int id = 0;
+		public Thread newThread(Runnable r) {
+			Thread t = new Thread(r);
+			t.setName("StampLView-render-" + (id++));
+			t.setPriority(Thread.MIN_PRIORITY);
+			t.setDaemon(true);
+			return t;
+		}
+    });
+    
 	static DebugLog log = DebugLog.instance();
 
 	private static final int proximityPixels = 8;
+	
 	private static final int STAMP_RENDER_REPAINT_COUNT_MIN = 1;
 	private static final int STAMP_RENDER_REPAINT_COUNT_MAX = 10;
 	private static final int STAMP_RENDER_REPAINT_COUNT_BASE = 10;
-
-    public static final int OUTLINE_BUFFER_IDX = 1;
-    public static final int SELECTED_OUTLINE_BUFFER_IDX = 2;
-    
+	
+	// Used for identifying which backbuffer to use
+	private static final int OUTLINES=0;
+	private static final int IMAGES=1;
+	private static final int SELECTIONS=2;
+		
 	public StampShape[] stamps;
 
-	public FilledStamp[] filled;
-	
-	// This is the list of stamps that are in the view and selected
-	private List<StampShape> selectedStamps=new ArrayList<StampShape>();
-	
     // stamp outline drawing state
     private StampShape[] lastStamps;
     private Color lastUnsColor;
+    private double lastMag;
+    private double lastOriginMag;
+    private Color lastOriginColor;
     private int projHash = 0;
-
-	public FilledStampFocus focusFilled = null;
+    
+    // filled stamp drawing state
+	private volatile DrawFilledRequest lastRequest;
+	private volatile List<FilledStamp> lastFilledStamps;
+	private volatile StampShape[] lastAlphaStamps;
+	private volatile Color lastFillColor;
+	
 	protected boolean restoreStampsCalled = false;
 
 	protected boolean settingsLoaded = false;
@@ -129,46 +134,62 @@ public class StampLView extends Layer.LView implements StampSelectionListener
 	
 	public StampLayer stampLayer;
 	
+	
+	/** If this lview can produce a MapSource for map layers to use, this will be non-null */  // Used to be final...
+	private StampSource stampSource;
+	private NumericStampSource numericStampSource;
+	
 	/** Line for which the profile is to be plotted */
 	public Shape profileLine;
 	/** Stores the profile line and manages mouse events in relation to it */
 	private ProfileLineDrawingListener profileLineMouseListener = null;
 	/** Stores the cue position and manages mouse events in relation to it */
 	private ProfileLineCueingListener profileLineCueingListener = null;
-	/** Name of this layer, automatically created when the layer does not have a defined name */
-
-	public StampLView(StampFactory factory, StampLayer parent, AddLayerWrapper wrapper) {
-		this(parent, wrapper, false);
+	/** Used for the sharad layer, to highlight the section of a footprint that is
+	 * being viewed in full resolution.	 */
+	private FullResHighlightListener fullResHighlightListener = null;	
+	
+	
+	public StampLView(StampFactory factory, StampLayer parent, AddLayerWrapper wrapper, LayerParameters lp) {
+		this(parent, wrapper, false, lp);
 		originatingFactory = factory;
 	}
 	
-	public StampLView(StampLayer parent, AddLayerWrapper wrapper, boolean isChild)
-	{	
+	public StampLView(StampLayer parent, AddLayerWrapper wrapper, boolean isChild, LayerParameters lp)
+	{
 		super(parent);
+		
+		layerParams = lp;
+
+		javax.swing.ToolTipManager.sharedInstance().registerComponent(this);
 		
 		stampLayer = parent;
 		
 		if (!isChild) {
+			// only the main view will have a stampSource
+			stampSource = StampSource.create(stampLayer.getSettings());
+			numericStampSource = NumericStampSource.create(stampLayer.getSettings());
+			
 			stampLayer.addSelectionListener(this);
+		} else {
+			stampSource = null;
+			numericStampSource = null;
 		}
 		
+		// Outlines, Images, and Selections
         setBufferCount(3);
 
         this.wrapper = wrapper;
-	    if (wrapper==null) {
-	    	this.wrapper = new AddLayerWrapper(stampLayer.getSettings().getInstrument());
+	    if (wrapper==null && !parent.getInstrument().equalsIgnoreCase("davinci")) {
+	    	this.wrapper = new AddLayerWrapper(stampLayer.getSettings());
 	    }
-        
-		if (!isChild) {
-			focusFilled = createFilledStampFocus();
-		}
 		
 		MouseHandler mouseHandler = new MouseHandler();
-		
+	
 		addMouseListener(mouseHandler);
 		addMouseMotionListener(mouseHandler);
 		
-		if (stampLayer.getInstrument().equalsIgnoreCase("themis")) {
+        if (stampLayer.getParam(stampLayer.PLOT_UNITS).length()>0) {
 			// Add mouse listener for profile line updates
 			profileLineMouseListener = new ProfileLineDrawingListener(this);
 			addMouseListener(profileLineMouseListener);
@@ -179,25 +200,47 @@ public class StampLView extends Layer.LView implements StampSelectionListener
 			addMouseMotionListener(profileLineCueingListener);
 		}
 		
+        //If it's a sharad layer, add the profile cue listener for line updates
+        //Also add the full res listener.
+        if (stampLayer.lineShapes()){
+			profileLineCueingListener = new ProfileLineCueingListener(this);
+			addMouseMotionListener(profileLineCueingListener);
+			
+			fullResHighlightListener = new FullResHighlightListener(this);
+			addMouseMotionListener(fullResHighlightListener);
+        }
+        
 		myFocus = null;
+		
+		if (!isChild) {
+			getFocusPanel();
+		}		
 	}
 
-	// Stupid.
-	protected void setBufferVisible(int i, boolean visible)
-	 {
-		super.setBufferVisible(i, visible);
-	 }
-	
+	protected void updateStampSource() {
+		if (stampSource != null) {
+			try {
+				StampServer.getInstance().remove(stampSource);
+			} catch (Exception e) {
+				log.aprintln("Unable to remove stamp source " + stampSource.getName() + ", caused by: " + e.getMessage());
+			}
+		}
+		if (numericStampSource != null) {
+			try {
+				StampServer.getInstance().remove(numericStampSource);
+			} catch (Exception e) {
+				log.aprintln("Unable to remove stamp source " + numericStampSource.getName() + ", caused by: " + e.getMessage());
+			}
+		}
+		stampSource = StampSource.create(stampLayer.getSettings());
+		numericStampSource = NumericStampSource.create(stampLayer.getSettings());
+	}
+		
 	public final String getName()
 	{ 
-		return  stampLayer.getSettings().getName();
-	}
-        
-	// Override to create own subclasses of MyFilledStampFocus
-	//  as part of this classes constructor.
-	protected FilledStampFocus createFilledStampFocus()
-	{
-		return new FilledStampFocus(this);
+		if (stampLayer != null && stampLayer.getSettings() != null && stampLayer.getSettings().getName() != null)
+			return  stampLayer.getSettings().getName();
+		return "Stamp Layer";
 	}
 
 	/**
@@ -209,80 +252,37 @@ public class StampLView extends Layer.LView implements StampSelectionListener
 	}
 
 	public List<StampFilter> getFilters() {
+		if (wrapper==null) {
+			List<StampFilter> blankList = new ArrayList<StampFilter>();
+			return blankList;
+		}
 		return wrapper.getFilters();
 	}
 	
 	public StampFocusPanel myFocus;
 
-	public FocusPanel getFocusPanel()
+	public StampFocusPanel getFocusPanel()
 	{
 		// Do not create a focus panel for the panner!
 		if (stampLayer==null) {
 			return null;
 		}
-		
-		if (focusPanel == null)
-			focusPanel =
-				new DelayedFocusPanel()
-				{
-					private boolean calledOnceAlready = false;
 
-					public JPanel createFocusPanel()
-					{
-						if (calledOnceAlready)
-							return myFocus;
-						synchronized(StampLView.this)
-						{
-							if (myFocus == null) {
-							    myFocus = new StampFocusPanel(StampLView.this, wrapper);
-							    calledOnceAlready = true;
-							}
-							return  myFocus;
-						}
-					}
-
-					public void run()
-					{
-						JPanel fp = createFocusPanel();
-						removeAll();
-						add(fp);
-						validate();
-						repaint();
-
-						// After creation of the focus panel, restore any rendered stamps 
-						// if this is a view restoration and settings have been loaded.
-						if (settingsLoaded &&
-						    stampLayer.getSettings() != null)
-						{
-							log.println("calling restoreStamps from createFocusPanel");
-							restoreStamps(stampLayer.getSettings().getStampStateList());
-						}
-					}
-				}
-				;
-
-		return  focusPanel;
-	}
-
-	// Forces creation if it's been delayed
-	protected void createFocusPanel()
-	{
-		final Runnable builder = new Runnable() {
-			public void run() {
-				( (DelayedFocusPanel) getFocusPanel() ).createFocusPanel();
-			}
-		};
-		try {
-			// create it on the AWT thread if we're not already on it
-			if (SwingUtilities.isEventDispatchThread()) {
-				builder.run();
-			} else {
-				SwingUtilities.invokeAndWait(builder);
-			}
-		} catch (Exception e) {
-			log.aprintln("Error occurred building the focus panel:");
-			log.aprintln(e);
+		if (focusPanel == null) {
+			focusPanel = myFocus = new StampFocusPanel(StampLView.this, wrapper);
 		}
+				
+		return (StampFocusPanel)focusPanel;
+	}
+	
+	/**
+	 * Returns the settings object from the stampLayer. The stampLayer is public, but still a 
+	 * better way of getting the settings.
+	 * @return StampLayerSettings
+	 * 03/28/2012
+	 */
+	public StampLayerSettings getSettings() {
+		return this.stampLayer.getSettings();
 	}
 	
 	/**
@@ -290,10 +290,15 @@ public class StampLView extends Layer.LView implements StampSelectionListener
 	 */
 	protected synchronized void updateSettings(boolean saving)
 	{
-		if (saving){
+		// Don't save OR restore saved Davinci settings.
+		if (stampLayer.getInstrument().equalsIgnoreCase("davinci")) {
+			return;
+		}
+		
+		if (saving) {
 			log.println("saving settings");
 
-			stampLayer.getSettings().setStampStateList(focusFilled.getStampStateList());
+			stampLayer.getSettings().setStampStateList(myFocus.getRenderedView().getStampStateList());
 			
 			FilteringColumnModel colModel = (FilteringColumnModel) myFocus.table.getColumnModel();
 			
@@ -305,36 +310,30 @@ public class StampLView extends Layer.LView implements StampSelectionListener
 				cols[i]=colEnum.nextElement().getHeaderValue().toString();
 			}
 			
-			stampLayer.getSettings().setInitialColumns(cols);
+			if (cols.length>0) {
+				stampLayer.getSettings().setInitialColumns(cols);
+			}
 			viewSettings.put(VIEW_SETTINGS_KEY, stampLayer.getSettings());
-		}
-		else
-		{
+		} else {
 			log.println("loading settings");
 
-			if ( viewSettings.containsKey(VIEW_SETTINGS_KEY) )
-			{
+			if ( viewSettings.containsKey(VIEW_SETTINGS_KEY) ) {
 				stampLayer.setSettings((StampLayerSettings) viewSettings.get(VIEW_SETTINGS_KEY));
-				if (stampLayer.getSettings() != null)
-				{
+				if (stampLayer.getSettings() != null) {
 					log.println("lookup of settings via key succeeded");
 
-					if (focusFilled != null)
+					if (myFocus.getRenderedView() != null)
 					{
 						// Reload and rerender filled stamps; requires that both MyFocus
 						// and MyFilledStampFocus panels exist.
-						if (stampLayer.getSettings().getStampStateList() != null &&
-						    myFocus != null)
-						{
+						if (stampLayer.getSettings().getStampStateList() != null && myFocus != null) {
 							log.println("calling restoreStamps from updateSettings");
 							restoreStamps(stampLayer.getSettings().getStampStateList());
 						}
 					}
 					
 					settingsLoaded = true;
-				}
-				else
-				{
+				} else {
 					log.println("lookup of settings via key failed");
 					stampLayer.setSettings(new StampLayerSettings());
 				}
@@ -347,26 +346,31 @@ public class StampLView extends Layer.LView implements StampSelectionListener
 	 * @param worldCuePoint The new point within the profileLine segment boundaries
 	 *        where the cue is to be generated.
 	 */
-	public void cueChanged(Point2D worldCuePoint){
+	public void cueChanged(Point2D worldCuePoint) {
 		profileLineCueingListener.setCuePoint(worldCuePoint);
 	}
-	
-
-	
-
-
 
 	public Shape getProfileLine() {
 		return profileLine;
 	}
+	
+	
+	/**
+	 * Used explicitly for updating the full resolution highlight
+	 * on a selected sharad footprint
+	 * @param highlightPath
+	 */
+	public void highlightChanged(GeneralPath highlightPath){
+		fullResHighlightListener.setHighlightPath(highlightPath);
+	}
+	
 	
 	/**
 	 * Sets line for which profile is to be extracted.
 	 * @param newProfileLine Set the new line to be profiled to this line.
 	 *        A null value may be passed as this argument to clear the profile line.
 	 */
-	public void setProfileLine(Shape newProfileLine){
-
+	public void setProfileLine(Shape newProfileLine) {
 		profileLine = newProfileLine;
 		
 		if (focusPanel != null && myFocus != null){
@@ -377,79 +381,94 @@ public class StampLView extends Layer.LView implements StampSelectionListener
 		}
 	}
     
-	public void receiveData(Object layerData)
-	{
-		if (!isAlive())
+	public void receiveData(Object layerData) {
+		if (!isAlive()) {
 			return;
+		}
 
-		if (layerData instanceof StampShape[])
-		{
+		if (layerData instanceof StampShape[]) {
 				log.println("STARTED receiveData in "
 					    + Thread.currentThread().getName());
 
 				stamps = (StampShape[]) layerData;
 
+				if (stampLayer.pointShapes()) {
+	    			OutlineFocusPanel ofp = null;
+	    			
+	    			if (getChild()==null) {
+	    				ofp = ((StampFocusPanel)getParentLView().focusPanel).outlinePanel;
+	    			} else {
+	    				ofp = ((StampFocusPanel)focusPanel).outlinePanel;
+	    			}
+	    			ofp.recalculateMinMaxValues();
+				}
+    			
 				if (getChild()!=null) {
-					createFocusPanel();
-					if (myFocus != null)
-					{
+					if (myFocus != null) {
 						myFocus.dataRefreshed();
 					}
 				}
 				
-				// It is not necessary to redraw child view (if any)
-				// in this context as both Main and Panner views
-				// receive data separately for view changes, etc.
-				// Force a redraw of filled stamps
 				synchronized (this) {
-					lastFilled=null;
+					// Force a redraw of filled stamps
+					lastRequest=null;
 					
+					// It is not necessary to redraw child view (if any)
+					// in this context as both Main and Panner views
+					// receive data separately for view changes, etc.
 					redrawEverything(false);
 				}
-							
+				
 				log.println("STOPPED receiveData in "
 				            + Thread.currentThread().getName());
 				repaint();
-		}
-		else
+		} else {
 			log.aprintln("BAD DATA CLASS: " + layerData.getClass().getName());
+		}
 	}
 
-    protected void viewChangedPost()
-    {
-        if (!isVisible())
+    protected void viewChangedPost() {
+        if (!isVisible()) {
             setDirty(true);
+        }
     }
 	
-    public void clearOffScreen(int i) {
-    	super.clearOffScreen(i);
-    }
-    	
-    	
-	public void redrawEverything(boolean redrawChild)
-	{
+	public void redrawEverything(final boolean redrawChild) {
 		if (stamps != null) {
-            StampTask task = ((StampLayer)getLayer()).startTask();
-            task.updateStatus(Status.YELLOW);
-            
-            // Normal redraw: clear window, draw alpha-filling,
-            // draw filled stamps, and then draw outlines.
- //           clearOffScreen(0);
-
-              
-            if (getChild()!=null) {
-            	drawFilled();
-            }
-            
+			if (getChild() != null) {
+	            drawFilled();
+			}
+			
             drawOutlines();
-            
-			if (redrawChild  &&  getChild() != null)
+			
+    		drawSelections(((StampLayer)getLayer()).getSelectedStamps(), true);
+			
+			if (redrawChild  &&  getChild() != null) {
 				((StampLView) getChild()).redrawEverything(false);
-			task.updateStatus(Status.DONE);
-			repaint();
+			}
 		}
 	}
     
+	/**
+	 * @return a Runnable that calls the given runnable, and associates a
+	 *         StampTask with the lifetime of the execution of the given
+	 *         runnable
+	 */
+	private Runnable tasked(final Runnable r) {
+		return new Runnable() {
+			public void run() {
+				StampTask task = ((StampLayer)getLayer()).startTask();
+				try {
+					task.updateStatus(Status.YELLOW);
+					r.run();
+				} finally {
+					task.updateStatus(Status.DONE);
+					repaint();
+				}
+			}
+		};
+	}
+	
 	/**
 	 * Paints the component using the super's paintComponent(Graphics),
 	 * followed by the profile-line drawing onto the on-screen graphics
@@ -457,15 +476,16 @@ public class StampLView extends Layer.LView implements StampSelectionListener
 	 */
 	public synchronized void paintComponent(Graphics g) {
 		// Don't try to draw unless the view is visible
-		if (!isVisible() || viewman2 == null)
+		if (!isVisible() || viewman == null) {//@since remove viewman2
 			return;
+		}
 		
 		// super.paintComponent draws the back buffers onto the layer panel
 		super.paintComponent(g);
 		
 		// then we draw the profile line on top of the layer panel
 		Graphics2D g2 = (Graphics2D) g.create();
-		g2 = viewman2.wrapWorldGraphics(g2);
+		g2 = viewman.wrapWorldGraphics(g2);
 		g2.transform(getProj().getWorldToScreen());
 		g2.setStroke(new BasicStroke(0));
 		
@@ -479,92 +499,277 @@ public class StampLView extends Layer.LView implements StampSelectionListener
 			g2.setColor(Color.red);
 			g2.draw(profileLine);
 		}
-	}
-	
-    /**
-     * Draws alpha-filling of stamp regions.
-     */
-	protected void drawAlpha()
-	{
-			Graphics2D g2 = getOffScreenG2();
-
-			if (g2 == null)
-				return;
-
-			g2.setStroke(new BasicStroke(0));
-			g2.setPaint(stampLayer.getSettings().getFilledStampColor());
-			for (int i=0; i<stamps.length; i++)
-			{
-				g2.fill(stamps[i].getPath());
-
-				if (i % 1000 == 999)
-				{
-//					getLayer().setStatus(Color.yellow);
-					repaint();
+		
+		
+		//if this is a radar layer
+		if(stampLayer.lineShapes()){
+			//draw the full res highlight for sharad footprints
+			if (fullResHighlightListener !=null){
+				fullResHighlightListener.paintHighlight(g2);
+			}
+			//draw any horizons on the sharad footprints if there are any
+			RadarFocusPanel radarPnl = getFocusPanel().getRadarView();
+			
+			for(FilledStamp fs : getFocusPanel().getRenderedView().getFilled()){
+				//TODO there might be a better way than this loop to recast?
+				ArrayList<FilledStampRadarType> list = new ArrayList<FilledStampRadarType>();
+				if(fs instanceof FilledStampRadarType){
+					list.add((FilledStampRadarType)fs);
+				}
+				for(FilledStampRadarType fsr : list){
+					for(RadarHorizon h : fsr.getHorizons()){
+						//if the horizon isn't hidden, and if its color is being displayed in 2d 
+						// (as determined in the settings focus panel tab and stored in the layer settings)
+						if(h.isVisible() && getSettings().getHorizonColorDisplayMap().get(h.getColor())){
+							//if this horizon is selected, color it differently
+							if(h.equals(radarPnl.getSelectedHorizon())){
+								g2.setColor(new Color(~h.getColor().getRGB()));
+							}else{
+								g2.setColor(h.getColor());
+							}
+							g2.setStroke(getProj().getWorldStroke(h.getLViewWidth()));
+							g2.draw(h.getWorldPathForProj(getProj()));
+						}
+					}
 				}
 			}
-            
-			repaint();
+		}
 	}
+	
+	private volatile int drawOutlineSequence = 0, drawFilledSequence = 0, drawSelectionSequence = 0;
+	private Object drawOutlineLock = new Object(), drawFilledLock = new Object(), drawSelLock = new Object();
+	
+	/**
+	 * Draws stamp outlines in window. Outlines are only redrawn if the
+	 * projection, outline colors, or the in-view stamp list have changed since
+	 * the last drawing (or if being drawn for the first time). Otherwise,
+	 * outlines are simply drawn to the screen with existing buffer contents.
+	 */
+	public void drawOutlines() {
+		final int seq = ++drawOutlineSequence;
+		pool.execute(tasked(new Runnable() {
+			public void run() {
+				synchronized(drawOutlineLock) {
+					
+					// Check for various reasons to NOT draw the outlines
+					
+					// Reason 1: This is not the most recent sequence, ie there's already been another request to redraw, so don't bother
+					if (seq != drawOutlineSequence) {
+						return;
+					}
+					
+					// Reason 2: We don't actually have any stamps to draw
+					if (stamps==null || stamps.length<1) {
+						return;
+					}
 
-    /**
-     * Draws stamp outlines in window. 
-     * Selected stamp outlines are only drawn if hiding is 
-     * not selected.
-     * 
-	 * Outlines are only redrawn if the projection, 
-     * outline colors, or the in-view stamp list have changed since the last drawing 
-     * (or if being drawn for the first time).  Otherwise, outlines are simply drawn 
-     * to the screen with existing buffer contents.
-     *
-     * @see #drawSelections 
-     */
-	public void drawOutlines()
-	{
-		setBufferVisible(StampLView.OUTLINE_BUFFER_IDX, !stampLayer.getSettings().hideOutlines());
-        
-		if (!stampLayer.getSettings().hideOutlines()) {
-			Color unsColor = stampLayer.getSettings().getUnselectedStampColor();
-			
-            if (lastStamps != stamps ||
-                lastUnsColor != unsColor ||
-                projHash != Main.PO.getProjectionSpecialParameters().hashCode())
-            {            	
-                lastStamps = stamps;
-                lastUnsColor = unsColor;
-                projHash = Main.PO.getProjectionSpecialParameters().hashCode();
-                
-                // Draw stamp outlines in their own off screen buffer to speed up outline toggling
-                clearOffScreen(OUTLINE_BUFFER_IDX);
-    			Graphics2D g2 = getOffScreenG2(OUTLINE_BUFFER_IDX);
-    
-    			if (g2 == null)
-    				return;
-    
-    			g2.setStroke(new BasicStroke(0));
-    			g2.setPaint(unsColor);
-    			for (int i=0; i<stamps.length; i++)
-    			{
-    				g2.draw(stamps[i].getPath());    
-    			}
-                
-            }
-		} 
+					// Toggle the entire outline buffer on or off based on the user's selected setting.  May be the only thing that's changed
+					setBufferVisible(OUTLINES, !stampLayer.getSettings().hideOutlines());
+
+					// Reason 3: The user has selected the 'Hide Outlines' checkbox.  
+					if (stampLayer.getSettings().hideOutlines()) {
+						return;
+					}
+					
+					// Collect some user settings that trigger redraws upon change
+					Color unsColor = stampLayer.getSettings().getUnselectedStampColor();
+					Color fillColor = stampLayer.getSettings().getFilledStampColor();
+					
+					// wind vectors
+					double mag = stampLayer.getSettings().getMagnitude();
+					double originMag = stampLayer.getSettings().getOriginMagnitude();
+					Color originColor = stampLayer.getSettings().getOriginColor();
+				
+					// If all of these values are the same as they were last time, there's no need to redraw
+		            if ((lastStamps == stamps) && (lastUnsColor == unsColor) &&
+		                (projHash == Main.PO.getProjectionSpecialParameters().hashCode()) &&
+		                (fillColor.equals(lastFillColor)) && (lastMag == mag) && (lastOriginColor == originColor) &&
+		                (lastOriginMag == originMag) && (lastAlphaStamps == stamps)) {
+		            	return;
+		            }
+		            		            	
+		            // If we've made it this far, something's changed.  Clear the buffer so we can redraw fresh
+	                clearOffScreen(OUTLINES);
+	                
+	                try {
+		    			Graphics2D g2 = getOffScreenG2(OUTLINES);
+		    			if (g2 == null)
+		    				return;
+		    			
+						g2.setStroke(new BasicStroke(0));
+						
+		    			g2.setPaint(unsColor);
+		    		
+		    			if(stampLayer.vectorShapes() || stampLayer.pointShapes() || stampLayer.spectraData()){
+			    			// Custom color code
+			    			OutlineFocusPanel ofp = null;
+			    			
+			    			if (getChild()==null) {
+			    				ofp = ((StampFocusPanel)getParentLView().focusPanel).outlinePanel;
+			    			} else {
+			    				ofp = ((StampFocusPanel)focusPanel).outlinePanel;
+			    			}
+			    			
+			    			double min = 0;
+			    			double max = 0;	
+			    			int columnToColor = -1;				    			
+		    				Color colors[] = new Color[0];
+		    				
+		    				if (ofp!=null) {
+		    					min = ofp.getMinValue();
+				    			max = ofp.getMaxValue();
+		    					columnToColor=ofp.getColorColumn();
+		    					colors=ofp.getColorMap();
+		    				}
+			    			// End custom color code
+		    				
+							
+			    			int ppd=viewman.getZoomManager().getZoomPPD();
+			    			
+			    			// May or may not apply to outlines
+							if (stampLayer.vectorShapes()) {   // Such as Wind
+								double userScale = stampLayer.getSettings().getOriginMagnitude();
+				    			int factor=(int)(Math.log(ppd)/Math.log(2));
+								double degrees = 0.1*(32.0/ppd)*(factor/4.0)*userScale; 
 	
-        selectedStamps = ((StampLayer)getLayer()).getSelectedStamps();
-		drawSelections(selectedStamps, true);
-        
-        repaint();
+	
+				    			for (int i=0; i<stamps.length; i++) {
+									if (seq != drawOutlineSequence) {
+										return;
+									}
+	
+									Point2D p=((WindShape)stamps[i]).getOrigin();
+				    				Ellipse2D oval = new Ellipse2D.Double(p.getX()-degrees, (p.getY()-degrees), 2*degrees, 2*degrees);
+	
+				    				g2.setPaint(originColor);
+				    				g2.fill(oval);
+				    									    				
+					    			g2.setPaint(unsColor);
+				    				g2.draw(stamps[i].getPath());
+				    				
+									if (i % 1000 == 999) {
+										repaint();
+									}										
+				    			}
+							} else if (stampLayer.pointShapes()) {   // Such as MOLA Shots
+				    			double userScale = stampLayer.getSettings().getOriginMagnitude();
+	
+				    			String spotSize = stampLayer.getParam(stampLayer.SPOT_SIZE);
+				    			
+								double degrees = 0;
+								
+								try {
+									degrees = Double.parseDouble(spotSize);
+								} catch (Exception e) {
+									// If SPOT_SIZE was unspecified or otherwise invalid, this might fail.  In that case,
+									// it will default to 0 degrees in size, but be drawn at 1 pixel 
+								}
+								
+								degrees = degrees / 2.0;				
+								
+								degrees = degrees * userScale;
+								
+								double pixels = ppd * degrees;
+								
+								// Make the spot size at least 1 pixel on the screen, no matter how far we zoom out.
+								if (pixels<1.0) {
+									degrees = 1.0 / ppd;
+								}
+													    			
+				    			for (int i=0; i<stamps.length; i++) {
+									if (seq != drawOutlineSequence) {
+										return;
+									}
+	
+									// For PointShapes, the points in the stamp object are just a single lon,lat value
+									Point2D  p=  ((PointShape)stamps[i]).getOrigin();
+									
+				    				double val = Double.parseDouble(stamps[i].getStamp().getData()[columnToColor]+"");
+				    									    				
+				    				float colorVal = (float)((val-min)/(max-min));
+				    				
+				    				// TODO: Or do you make them transparent?  Offer an option?
+				    				if (colorVal<0) colorVal=0.0f;					    				
+				    				if (colorVal>1) colorVal=1.0f;
+				    				
+				    				int colorInt = (int)(colorVal * 255);
+				    				
+				    				Color color = colors[colorInt];
+				    				Ellipse2D oval = new Ellipse2D.Double(p.getX()-degrees, (p.getY()-degrees), 2*degrees, 2*degrees);
+	
+				    				g2.setPaint(color);
+				    				g2.fill(oval);
+				    				
+									if (i % 1000 == 999) {
+										repaint();
+									}
+				    			}
+							} else if (stampLayer.spectraData()) { // Such as TES					    			
+				    			for (int i=0; i<stamps.length; i++) {
+									if (seq != drawOutlineSequence) {
+										return;
+									}
+									
+				    				Color color = stamps[i].getCalculatedColor();
+	
+				    				if (color==null) continue;
+				    				
+				    				g2.setPaint(color);
+				    				g2.fill(stamps[i].getPath());	
+				    							    				
+									if (i % 1000 == 999) {
+										repaint();
+									}
+				    			}	
+							}
+						} else {  // Normal stamp outlines
+			    			for (int i=0; i<stamps.length; i++) {
+								if (seq != drawOutlineSequence) {
+									return;
+								}
+
+								///
+								if (stampLayer.getSettings().getFilledStampColor().getAlpha() != 0) {
+									g2.setPaint(fillColor);
+
+									g2.fill(stamps[i].getPath());
+								}								
+								///
+								
+								
+				    			g2.setPaint(unsColor);
+			    				g2.draw(stamps[i].getPath());
+								if (i % 1000 == 999) {
+									repaint();
+								}
+			    			}
+						}
+		    							                
+		                lastStamps = stamps;
+		                lastUnsColor = unsColor;
+		                projHash = Main.PO.getProjectionSpecialParameters().hashCode();
+						lastFillColor = fillColor;
+						lastAlphaStamps = stamps;
+		                lastMag = mag;
+		                lastOriginColor = originColor;
+		                lastOriginMag = originMag;
+	                } finally {
+						repaint();
+	                }
+	            }
+			}
+		}));
 	}
 	
-	// forces drawFilled to rerender filled stamps
+	/** Forces drawFilled to rerender filled stamps. */
 	public void clearLastFilled() {
-		lastFilled=null;
+		lastRequest = null;
 	}
 	
-	List<FilledStamp> lastFilled;
-	Color lastFillColor;
-
+	/** Forces drawOutlines to redraw stamp outlines.  Might be a better way to do this. */
+	public void clearLastOutlines() {
+		lastUnsColor = null;
+	}
     /**
      * Draws specified list of filled stamps to the primary buffer
      * of the stamp view's window.  Does not otherwise alter the
@@ -579,316 +784,273 @@ public class StampLView extends Layer.LView implements StampSelectionListener
      * @return Returns <code>true</code> if drawing of stamps completed
      * without interruption because of current redraw thread becoming
      * stale (i.e., stale call to receiveData()) or if there were no
-     * filled stamps specifed; returns <code>false</code> if drawing of 
+     * filled stamps specified; returns <code>false</code> if drawing of 
      * stamps was interrupted or if there was some internal error.
      */
-	private synchronized boolean drawFilled()
-	{
-		if (viewman == null) {
-			log.aprintln("view manager not available");
-			return false;
-		}
-
-		final int renderPPD = viewman.getMagnification();
-
+	private void drawFilled() {
+		final int seq  = ++drawFilledSequence;
+		pool.execute(tasked(new Runnable() {
+			public void run() {
+				synchronized(drawFilledLock) {
+					if (seq != drawFilledSequence) {
+						return;
+					}
+					
+					int renderPPD = viewman.getZoomManager().getZoomPPD();
+					DrawFilledRequest request = new StampRequest(seq, getProj(), renderPPD);
+					List<FilledStamp> filledStamps = getFilteredFilledStamps();
+					
+					if (!request.equals(lastRequest) || !filledStamps.equals(lastFilledStamps)) {
+						Graphics2D g2 = getOffScreenG2(IMAGES);
+						if (g2 != null) {
+							clearOffScreen(IMAGES);
+							doRender(request, filledStamps, new RenderBackBufferProgress(renderPPD), g2, null);
+						}
+					}
+					
+					if (seq != drawFilledSequence) {
+						lastRequest = request;
+						lastFilledStamps = filledStamps;
+					}
+					
+					// for a view that has a defined stamp source
+					if (stampSource != null) {
+						// if the request did not change, then we are here because of a settings change, and must
+						// flush the StampSource's cache.
+						if (lastRequest == null || lastRequest.equals(request)) {
+							stampSource.clearCache();
+							numericStampSource.clearCache();
+						}
+					}
+				}
+			}
+		}));
+	}
+	
+	/** Gets all stamps that should be displayed */
+	List<FilledStamp> getFilteredFilledStamps() {
 		final List<FilledStamp> allFilledStamps;
 		
 		if (stampLayer.getSettings().renderSelectedOnly()) {
-			allFilledStamps = focusFilled.getFilledSelections();
+			allFilledStamps = myFocus.getRenderedView().getFilledSelections();
 		} else {
-			allFilledStamps = focusFilled.getFilled();
+			allFilledStamps = myFocus.getRenderedView().getFilled();
 		}
 		
-		final ArrayList<FilledStamp> filledStamps = new ArrayList<FilledStamp>();
 		// Filter out any stamps that aren't in the view
+		List<FilledStamp> filtered = new ArrayList<FilledStamp>();
 		for (FilledStamp fs : allFilledStamps) {
 			for (int i=0; i<stamps.length; i++) {
 				if (fs.stamp.getId().equalsIgnoreCase(stamps[i].getId())) {
-					filledStamps.add(fs);
+					filtered.add(fs);
 				}
 			}
 		}
-				
-		final MultiProjection proj = getProj();
-		if (proj == null) {
-			log.aprintln("null projection");
-			return false;
-		}
-
-		if (lastFilled!=null && lastFilled.size()==filledStamps.size() 
-				&& lastFillColor==stampLayer.getSettings().getFilledStampColor()) {
-			List<FilledStamp> tmpList = new ArrayList<FilledStamp>();
-			tmpList.addAll(lastFilled);
-			
-			for (FilledStamp fs: filledStamps) {
-				if (tmpList.contains(fs)) {
-					tmpList.remove(fs);
-				} else {
-					break;
+		
+		return filtered;
+	}
+	
+	/**
+	 * Draw the given stamps to the given Graphics2D, using the given request
+	 * and the interrupted bit of the current thread to check for interruption,
+	 * and reporting the progress of rendering to the given RenderProgress.
+	 */
+	void doRender(final DrawFilledRequest request, final List<FilledStamp> stamps, final RenderProgress progress, final Graphics2D g2, BufferedImage target) {
+		int repaintCount = 0;
+		int totalCount = stamps.size();
+		try {
+			List<StampImage> higherStamps=new ArrayList<StampImage>();
+			for (FilledStamp fs : stamps) {
+				fs.pdsi.calculateCurrentClip(higherStamps);
+				higherStamps.add(fs.pdsi);
+			}
+			// Draw in reverse order so the top of the list is drawn on top
+			for (int i = totalCount - 1; i >= 0; i--) {
+				if (request.changed()) {
+					return;
 				}
-			}
-			
-			// Same stamps as before, don't redraw
-			if (tmpList.size()==0) {
-				return true;
-			}
-		}
-		
-		
-//        if (lastFilled != filledStamps ||
-//                projHash != Main.PO.getProjectionSpecialParameters().hashCode())
-//            {
-        lastFilled = filledStamps;
-        lastFillColor = stampLayer.getSettings().getFilledStampColor();
-//                projHash = Main.PO.getProjectionSpecialParameters().hashCode();
-//
-//		
-				
-		final long repaintThreshold = Math.round(Math.min(STAMP_RENDER_REPAINT_COUNT_MAX,
-		                                            Math.max(STAMP_RENDER_REPAINT_COUNT_MIN,
-		                                                     STAMP_RENDER_REPAINT_COUNT_BASE - 
-		                                                     Math.log(renderPPD) / Math.log(2))));
-		log.println("Repainting every " + repaintThreshold + " images");
-
-    	Runnable runme = new Runnable() {    		
-			public void run() {
-
-				long repaintCount = 0;
-
-				clearOffScreen(0);
-				
-	            if (stampLayer.getSettings().getFilledStampColor().getAlpha() != 0)
-	                drawAlpha();
-	            
-				ArrayList<FilledStamp> reverseStamps = new ArrayList<FilledStamp>();
-				
-				ArrayList<StampImage> higherStamps=new ArrayList<StampImage>();
-				for (FilledStamp fs : filledStamps) 
-		        {
-					fs.pdsi.calculateCurrentClip(higherStamps);
-					
-					higherStamps.add(fs.pdsi);
-					reverseStamps.add(fs);
-		        }
-
-				// Reverse the order of the stamps so that we can iterate through them starting
-				// from last to first
-				Collections.reverse(reverseStamps);
-				
-				for (FilledStamp fs : reverseStamps) 
-		        {
-					Graphics2D g2 = getOffScreenG2();
-					
-					Point2D offset = fs.getOffset();
-					g2.translate(offset.getX(), offset.getY());
-	
-					if (fs.pdsi != null) {
-					    fs.pdsi.renderImage(g2,
-					                fs.getColorMapOp().forAlpha(1),
-					                proj,
-					                renderPPD, stampLayer.startTask());
-						if ((repaintCount % repaintThreshold) == 0)
-							repaint();
-	
-						repaintCount++;
-	                    
+				if(stamps.get(i) instanceof FilledStampImageType){
+					FilledStampImageType fs = (FilledStampImageType)stamps.get(i);
+					Graphics2D stampG2 = (Graphics2D) g2.create();
+					try {
+						Point2D offset = fs.getOffset();
+						stampG2.translate(offset.getX(), offset.getY());
+						
+						fs.pdsi.renderImage(stampG2, fs, request, stampLayer.startTask(), offset, target);
+						progress.update(repaintCount++, totalCount);
+					} finally {
+						stampG2.dispose();
 					}
 				}
-			    
-				// Complete repaint of last few images
+			}
+		} finally {
+			progress.update(totalCount, totalCount);
+		}
+	}
+	
+	/**
+	 * Translates progress updates into StampLView#repaint() calls at some
+	 * interval, and when the last update is received.
+	 */
+	private final class RenderBackBufferProgress implements RenderProgress {
+		private final long repaintThreshold;
+		public RenderBackBufferProgress(int renderPPD) {
+			repaintThreshold = Math.round(Math.min(STAMP_RENDER_REPAINT_COUNT_MAX,
+				Math.max(STAMP_RENDER_REPAINT_COUNT_MIN,
+					STAMP_RENDER_REPAINT_COUNT_BASE -
+					Math.log(renderPPD) / Math.log(2))));
+			log.println("Repainting every " + repaintThreshold + " images");
+		}
+		public void update(int current, int max) {
+			if (current == max || (current % repaintThreshold) == 0)
 				repaint();
-			}
-    	};
-		
-		Thread renderThread = new Thread(runme);
-		renderThread.start();
-
-//            }
-        return true;
-	}
-
-	class StampMenu extends JMenu {
-
-		StampShape stamp = null;
-		
-		StampMenu(StampShape stamp) {
-			super("Stamp " + stamp.getId());
-			this.stamp=stamp;
 		}
-		
-	    public Component[] getMenuComponents() {
-	    	if (!initialized) {
-	    		initSubMenu();
-	    	} 
-	    	
-	    	return super.getMenuComponents();
-	    }
-		
-		boolean initialized = false;
-		
-		private synchronized void initSubMenu() {
-			if (initialized) return;
-			List<String> supportedTypes = stamp.getSupportedTypes();
-			
-			for (String supportedType : supportedTypes) {
-				JMenuItem renderMenu = new JMenuItem("Render " + supportedType);
-				final String type = supportedType;
-				renderMenu.addActionListener(new ActionListener() {			
-					public void actionPerformed(ActionEvent e) {
-					    Runnable runme = new Runnable() {
-					        public void run() {
-					            focusFilled.addStamp(stamp, type);
-					        }
-					    };
-	
-				        SwingUtilities.invokeLater(runme);
-					}
-				});
-				add(renderMenu);
-			}
-			
-			if (supportedTypes.size()==0) {
-				JMenuItem noRenderOptions = new JMenuItem("Sorry - there are no rendering options available for this stamp");
-				noRenderOptions.setEnabled(false);
-				add(noRenderOptions);
-			}
-			
-			JMenuItem webBrowse = new JMenuItem("Web browse " + stamp.getId());
-			
-			webBrowse.addActionListener(new ActionListener() {			
-				public void actionPerformed(ActionEvent e) {
-					browse(stamp);
-				}			
-			});				
-			
-			add(webBrowse);
-
-			if (stampLayer.getInstrument().equalsIgnoreCase("hirise")) {
-				JMenuItem webBrowse2 = new JMenuItem("Launch IAS Viewer for " + stamp.getId());
-				
-				webBrowse2.addActionListener(new ActionListener() {			
-					public void actionPerformed(ActionEvent e) {
-						quickView(stamp);
-					}			
-				});				
-				
-				add(webBrowse2);
-			}
-			initialized=true;			
-		}
-		
-	    public MenuElement[] getSubElements() {		
-	    	if (!initialized) {
-	    		initSubMenu();
-	    	}			
-	 
-	    	return super.getSubElements();
-	    }
-	    
-	    public JPopupMenu getPopupMenu() {
-	    	initSubMenu();
-	    	return super.getPopupMenu();
-	    }
 	}
 	
-	protected Component[] getContextMenuTop(Point2D worldPt)
-	{
-		List<Component> newItems =
-			new ArrayList<Component>( Arrays.asList(super.getContextMenuTop(worldPt)) );
-
-		// See what the user clicked on... leave menu unchanged if nothing.
-		List<StampShape> list = findStampsByWorldPt(worldPt);
-		if (list == null)
-			return null;
-
-		if (list.size()>0) {
+	public String toString() {
+		return getName();
+	}
 		
-			JMenu viewMenu = new JMenu("View " + stampLayer.getInstrument() + " Stamps");
-			
-			for (final StampShape stamp : list)
-			{
-				StampMenu sub = new StampMenu(stamp);
-								
-				viewMenu.add(sub);
-			}
-
-			newItems.add(0, viewMenu);
+	private String buildTypeLookupData() {
+		String idList="";
+		for (StampShape stamp : stampLayer.getSelectedStamps()) {
+			idList+=stamp.getId()+",";
 		}
 		
-		// Check for selected stamps and offer option of loading/rendering these.
-		final int[] rowSelections = myFocus.getSelectedRows();
-		if (rowSelections != null && rowSelections.length > 0) {
-			
-			JMenu loadSelectedStamps = new JMenu("Render Selected " + stampLayer.getInstrument() + " Stamps");
-			
-			final List<StampShape> selectedStamps = stampLayer.getSelectedStamps();
-			
-			List<String> imageTypes = new ArrayList<String>();
+		if (idList.endsWith(",")) {
+			idList=idList.substring(0,idList.length()-1);
+		}
+		
+		String data = "id="+idList+"&instrument="+stampLayer.getInstrument()+"&format=JAVA";
+		
+		return data;
+	}
+
+	private List<String> getImageTypes() {
+		List<String> imageTypes = new ArrayList<String>();
+
+		try {						
+			ObjectInputStream ois = new ObjectInputStream(StampLayer.queryServer("ImageTypeLookup", buildTypeLookupData()));
+
+			List<String> supportedTypes = (List<String>)ois.readObject();
+
+			ois.close();
 
 			boolean btr=false;
 			boolean abr=false;
-			
-			try {
-				String idList="";
-				for (StampShape stamp : selectedStamps) {
-					idList+=stamp.getId()+",";
-				}
+	
+			for (String type : supportedTypes) {
+				if (type.equalsIgnoreCase("BTR")) {
+					btr=true;
+				} else if (type.equalsIgnoreCase("ABR")) {
+					abr=true;
+				} 
 				
-				if (idList.endsWith(",")) {
-					idList=idList.substring(0,idList.length()-1);
-				}
-				
-				String typeLookupStr = StampLayer.stampURL+"ImageTypeLookup";
-						
-				String data = "id="+idList+"&instrument="+stampLayer.getInstrument()+"&format=JAVA"+stampLayer.getAuthString()+StampLayer.versionStr;
-				
-				URL url = new URL(typeLookupStr);
-				URLConnection conn = url.openConnection();
-				conn.setDoOutput(true);
-				OutputStreamWriter wr = new OutputStreamWriter(conn.getOutputStream());
-				wr.write(data);
-				wr.flush();
-				wr.close();
-				
-				ObjectInputStream ois = new ObjectInputStream(conn.getInputStream());
-															
-				List<String> supportedTypes = (List<String>)ois.readObject();
-				for (String type : supportedTypes) {
-					if (type.equalsIgnoreCase("BTR")) {
-						btr=true;
-					} else if (type.equalsIgnoreCase("ABR")) {
-						abr=true;
-					} 
-					
-					imageTypes.add(type);								
-				}
-				ois.close();
-			} catch (Exception e2) {
-				e2.printStackTrace();
+				imageTypes.add(type);								
 			}
-
 			
 			if (abr && btr) {
 				imageTypes.add(0, "ABR / BTR");
 			}
+
 			
-			for (final String imageType : imageTypes) {
-				JMenuItem renderMenu = new JMenuItem("Render Selected as " + imageType);
-				renderMenu.addActionListener(new RenderFunction(stampLayer, focusFilled, imageType));
-				loadSelectedStamps.add(renderMenu);
-			}
-									
-					
-			newItems.add(0, loadSelectedStamps);
+		} catch (Exception e2) {
+			e2.printStackTrace();
+		}
+		
+		return imageTypes;
+	}
 	
+	protected Component[] getContextMenuTop(final Point2D worldPt)	{
+		final List<Component> newItems =
+			new ArrayList<Component>( Arrays.asList(super.getContextMenuTop(worldPt)) );
+
+		if (stampLayer.enableWeb()) {
+			// See what the user clicked on... leave menu unchanged if nothing.
+			final List<StampShape> list = findStampsByWorldPt(worldPt);
+			if (list == null)
+				return null;
+	
+			if (list.size()>0) {
 			
+				JMenu viewMenu = new JMenu("View " + stampLayer.getInstrument() + " Stamps");
+				
+				for (final StampShape stamp : list)
+				{
+					StampMenu sub = new StampMenu(stampLayer, myFocus.getRenderedView(), stamp);
+									
+					viewMenu.add(sub);
+				}
+	
+				newItems.add(0, viewMenu);
+				
+				JMenuItem selectUnderlying = new JMenuItem("Select Stamps");
+				selectUnderlying.addActionListener(new ActionListener(){
+					public void actionPerformed(ActionEvent e) {
+						final JDialog selectWindow = new JDialog(Main.mainFrame, true);
+						selectWindow.setSize(200,300);
+						selectWindow.setTitle("Select Stamps");
+						Point2D screenPoint = getProj().world.toScreen(worldPt);
+						int x = (int)screenPoint.getX()+(int)Main.testDriver.mainWindow.getLocationOnScreen().getX();
+						selectWindow.setLocation(x, (int)screenPoint.getY());
+						
+						final JList selectList = new JList(list.toArray());
+						selectList.addListSelectionListener(new ListSelectionListener() {
+							public void valueChanged(ListSelectionEvent e) {
+								List add = new ArrayList<StampShape>();
+								List remove = new ArrayList<StampShape>();
+								
+								int ids[]=selectList.getSelectedIndices();
+								for (int i=0; i<list.size(); i++) {
+									if (selectList.isSelectedIndex(i)) {
+										add.add(list.get(i));
+									} else {
+										remove.add(list.get(i));
+									}
+								}
+								
+								stampLayer.addAndRemoveSelectedStamps(add, remove);
+							}
+						});
+						
+						JButton dismiss = new JButton("Done selecting stamps");
+						dismiss.addActionListener(new ActionListener() {
+							public void actionPerformed(ActionEvent e) {
+								selectWindow.setVisible(false);
+							}
+						});
+						
+						JScrollPane selectSp = new JScrollPane(selectList);
+						
+						selectWindow.setLayout(new BorderLayout());
+						selectWindow.add(selectSp, BorderLayout.CENTER);
+						JPanel buttonPanel = new JPanel();
+						buttonPanel.setLayout(new FlowLayout());
+						buttonPanel.add(dismiss);
+						selectWindow.add(buttonPanel, BorderLayout.SOUTH);
+						selectWindow.setVisible(true);
+					}
+				});
+				
+				newItems.add(selectUnderlying);
+			}
+		}
+		// Check for selected stamps and offer option of loading/rendering these.
+		final int[] rowSelections = myFocus.getSelectedRows();
+		if (rowSelections != null && rowSelections.length > 0) {
+			if (stampLayer.enableRender()) {
+				StampMenu renderSelectedMenu = new StampMenu(stampLayer, myFocus.getRenderedView());
+				
+				newItems.add(renderSelectedMenu);
+			}
+						
 		    JMenuItem copySelected = new JMenuItem("Copy Selected " + stampLayer.getInstrument() + " Stamps to Clipboard");
-		    
+		
 		    copySelected.addActionListener(new ActionListener() {			
 				public void actionPerformed(ActionEvent e) {
 					StringBuffer buf = new StringBuffer();
 					
-				    for (StampShape stamp : selectedStamps) {
+				    for (StampShape stamp : stampLayer.getSelectedStamps()) {
 				    	buf.append( stamp.getId() );
 				        buf.append('\n');
 				    }
@@ -906,184 +1068,171 @@ public class StampLView extends Layer.LView implements StampSelectionListener
 				}			
 			});
 		    
-		    newItems.add(loadSelectedStamps);		    
 		    newItems.add(copySelected);
+
+		    Set<String> layerTypes=StampFactory.getLayerTypes();
+		    
+		    JMenu overlapMenu = new JMenu("Find stamps intersecting selected " + stampLayer.getInstrument() + " stamps");
+		    
+		    newItems.add(overlapMenu);
+		    
+		    for(final String type : layerTypes) {
+				JMenuItem findOverlaps= new JMenuItem("Find intersecting " + type + " stamps");
+				findOverlaps.addActionListener(new ActionListener(){
+					public void actionPerformed(ActionEvent e) {
+						int maxIntersections = Config.get("stamps.max_intersections", 1000);
+						List<StampShape> selectedStamps = stampLayer.getSelectedStamps();
+						
+						if (selectedStamps.size()>maxIntersections) {
+						    JOptionPane.showMessageDialog(
+				                    Main.mainFrame,
+				                    "Sorry - you selected " + selectedStamps.size() + " stamps, but stamp intersection is limited to a maximum of " + maxIntersections + " stamps.  " +
+				                    		"Please reduce the number of selections and try again.",
+				                    "JMARS",
+				                    JOptionPane.INFORMATION_MESSAGE);	
+							return;
+						}
+						ArrayList<GeneralPath> allStampPaths = new ArrayList<GeneralPath>();
+						ArrayList<String> allStampIds = new ArrayList<String>();
+						
+						for (StampShape s : selectedStamps) {
+							allStampPaths.add(s.getPath());
+							allStampIds.add(s.getId());
+						}
+
+						StampFactory.createOverlappingStampLayer(type, allStampIds, allStampPaths);
+					}
+				});		 
+				overlapMenu.add(findOverlaps);
+		    }			
+		    
+		    JMenuItem makeShapesMenu = new JMenuItem("Convert selected stamps to a shape layer");
+		    makeShapesMenu.addActionListener(new ActionListener() {				
+				public void actionPerformed(ActionEvent e) {
+					List<StampShape> selectedStamps = stampLayer.getSelectedStamps();
+					
+					LayerParameters lp = new LayerParameters(ShapeLayer.CUSTOM_SHAPE_NAME, "", "", "", false, "shape", null, null);
+					ShapeLView shpLView = (ShapeLView)new ShapeFactory().newInstance(false, lp);
+					ShapeLayer shpLayer = (ShapeLayer)shpLView.getLayer();
+					
+					//
+					String instrument = stampLayer.getInstrument();
+					FeatureProvider fp = new FeatureProviderStamp(selectedStamps, instrument);
+			    	final List<ShapeLayer.LoadData> sources = new ArrayList<ShapeLayer.LoadData>();
+			    	sources.add(new ShapeLayer.LoadData(fp,null));
+			    	
+					shpLayer.loadSources(sources);
+					
+					///
+										
+					LManager.getLManager().receiveNewLView(shpLView);
+					LManager.getLManager().repaint();
+					///
+				}
+			});
+		    newItems.add(makeShapesMenu);
+		    
 		}
 					
 		return  (Component[]) newItems.toArray(new Component[0]);
 	}
 
 
-	public String getToolTipText(MouseEvent event)
+	public String getToolTipText(final MouseEvent event)
 	{
-		try {
-			MultiProjection proj = getProj();
-			if (proj == null) {
-				log.aprintln("null projection");
-				return null;
-			}
-
-			Point2D mousePoint = event.getPoint();
-			Point2D worldPoint = proj.screen.toWorld(mousePoint);
-			
-			StampShape stamp = findStampByWorldPt(worldPoint);
-
-			if (stamp != null) {
-				if (stampLayer.getInstrument().equalsIgnoreCase("themis")) {
-				    {
-				        String temperatureStr = null;
-				        
-				        // Display the stamp and point temperature information if available
-				        // for the topmost filled stamp.
-			            temperatureStr = getTemperatureStringForPoint(mousePoint);
-			            
-			            if (temperatureStr != null)
-			                return temperatureStr;
-				    }					
-				} 
-				
-				return stamp.getPopupInfo(true);
-			}
-		} 
-        catch ( Exception ex) {
-			//ignore
-		}
-
-		return null;			
-	}
-
-    // Returns topmost filled stamp (if any) in the filled stamp list 
-    // that is intersected at the specified point in HVector space.
-    public FilledStamp getIntersectedFilledStamp(Point2D screenPt)
-    {
-    	
-    	List<FilledStamp> filledStamps = focusFilled.getFilled();
-    	
-        for (FilledStamp fs : filledStamps)
-        {
-            HVector ptVect = screenPointToHVector(screenPt, fs);
-            
-            if (ptVect != null)
-            {
-                StampImage image = fs.pdsi;
-                if (image !=null &&
-                    image.isIntersected(ptVect))
-                    return fs;
-            }
-        }
-        
-        return null;
-    }
-	
-	// Used for populating Chart samples
-	public double getValueAtPoint(Point2D samplePoint) {
+		// Don't do this for the panner
+ 		if (getChild()==null) return null;
+ 		
+		MultiProjection proj = getProj();
 		
+		if (proj == null) return null;
+
+		Point2D screenPt = event.getPoint();
+		Point2D worldPoint = proj.screen.toWorld(screenPt);
+			
+		StampShape stamp = findStampByWorldPt(worldPoint);
+
+		if (stamp==null) return null;
+		
+    	StringBuffer buf = new StringBuffer();
+    	
+    	// We'll show the stamp ID as a tooltip whether or not the stamp has been rendered	
+        buf.append("<html>");
+        
+        buf.append(stamp.getTooltipText());
+         
+        buf.append("</html>");
+        return buf.toString();
+	}
+		    	    
+	// Used for populating Chart samples
+    // samplePoint is in worldCoordinates
+	public double getValueAtPoint(Point2D samplePoint){
 		MultiProjection proj = getProj();
 		if (proj == null) {
-			log.aprintln("null projection");
-			return -1;
+			return Double.NaN;
 		}
-
-		Point2D screenPt=proj.getWorldToScreen().transform(samplePoint,
-				 null);
 		
-        FilledStamp fs = getIntersectedFilledStamp(screenPt);
-        if (fs != null &&
-            fs.pdsi != null)
-        {
-            // Only return temperature information for an IR stamp
-            if (fs.stamp.getId().startsWith("I") && 
-            		(fs.pdsi.imageType.startsWith("PBT")
-            		|| fs.pdsi.imageType.startsWith("BTR")))
-            {
-                HVector screenVec = screenPointToHVector(screenPt, fs);
-                Point2D imagePt = ((PdsImage)fs.pdsi).getImagePt(screenVec);
-                
-                if (imagePt != null)
-                {
-                    double temp = ((PdsImage)fs.pdsi).getTemp(imagePt);
-                    return temp;
-                }
-            }
-        }
+		Point2D screenPt=proj.getWorldToScreen().transform(samplePoint, null);
+		
+		///
+		Point2D worldPoint = proj.screen.toWorld(screenPt);
+		
+		// Get a list of stamp shapes under the cursor		
+		List<StampShape> stamps = findStampsByWorldPt(worldPoint);
+		if (stamps==null) return Double.NaN;
 
+		List<FilledStamp> filledStamps = getFilteredFilledStamps();
+		
+		// For each of the stampShapes, get their individual investigateData 
+		// and add that to the invData object	
+		stampShape: for (StampShape ss : stamps){
+			for (FilledStamp fs : filledStamps){
+				if (fs.stamp == ss){					
+
+					boolean isNumeric = fs.pdsi.isNumeric;
+
+					if (isNumeric) {						
+						try {
+							HVector vector = screenPointToHVector(screenPt, (FilledStampImageType)fs);	
+												
+							double val = fs.pdsi.getFloatVal(vector);
+							
+							if (val == StampImage.IGNORE_VALUE) {
+								// The value for this stamp is transparent... but another image could still have valid data at this location
+								continue stampShape;
+							}
+							
+							return val;
+//							return fs.pdsi.getFloatVal(vector);
+						}catch (Exception e) {
+							e.printStackTrace();
+						}
+					}
+					
+					continue stampShape;
+				}
+			}
+		}
+		
 		return Double.NaN;
 	}
-	
-    protected String getTemperatureStringForPoint(Point2D screenPt)
-    {
-        String str = null;
-        
-        FilledStamp fs = getIntersectedFilledStamp(screenPt);
-        if (fs != null &&
-            fs.pdsi != null)
-        {
-            log.println("Got filled stamp for point");
-            
-            // Only return temperature information for an IR stamp
-            if (fs.stamp.getId().startsWith("I") && 
-            		(fs.pdsi.imageType.startsWith("PBT")
-            		|| fs.pdsi.imageType.startsWith("BTR")))
-            {
-                HVector screenVec = screenPointToHVector(screenPt, fs);
-                Point2D imagePt = ((PdsImage)fs.pdsi).getImagePt(screenVec);
-                
-                if (imagePt != null)
-                {
-                    StringBuffer buf = new StringBuffer();
-                    double temp = ((PdsImage)fs.pdsi).getTemp(imagePt);
-                    
-                       buf.append("<html>");
-                    
-                    buf.append("ID: ");
-                    buf.append(fs.stamp.getId());
-                    
-                       buf.append("<br>");
-                    
-                    buf.append("Temp(K): ");
-                    
-                    DecimalFormat f = new DecimalFormat("0.0");
-                    buf.append(f.format(temp));
-                    
-                       buf.append("</html>");
-                    
-                    str = buf.toString();
-                    
-                    log.println("Got temp(K) for point: " + str);
-                }
-            }
-            else
-            {
-                // Return just a stamp ID label for non-IR stamps
-                StringBuffer buf = new StringBuffer();
-                
-                   buf.append("<html>");
-                
-                buf.append("ID: ");
-                buf.append(fs.stamp.getId());
-                
-                   buf.append("</html>");
-                
-                str = buf.toString();
-                
-                log.println("Create label for non-IR stamp point: " + str);
-            }
-            
-        }
-        
-        return str;
-    }
-	
-	public void browse(StampShape stamp)
+		
+	public void browse(StampShape stamp, int num)
 	{
 		String url = null;
 		
 		try {
-			String browseLookupStr = StampLayer.stampURL+"BrowseLookup?id="+stamp.getId()+"&instrument="+stampLayer.getInstrument()+"&format=JAVA"+stampLayer.getAuthString()+StampLayer.versionStr;
+			String browseLookupStr = "BrowseLookup?id="+stamp.getId()+"&instrument="+stampLayer.getInstrument()+"&format=JAVA";
 					
-			ObjectInputStream ois = new ObjectInputStream(new URL(browseLookupStr).openStream());
+			ObjectInputStream ois = new ObjectInputStream(StampLayer.queryServer(browseLookupStr));
 			
-			url = (String)ois.readObject();				
+			// Get the num-th URL
+			for (int i=0; i<num; i++) {
+				url = (String)ois.readObject();
+			}
+			
+			ois.close();
 		} catch (Exception e) {
 			e.printStackTrace();
 		}
@@ -1096,55 +1245,23 @@ public class StampLView extends Layer.LView implements StampSelectionListener
                     JOptionPane.INFORMATION_MESSAGE);			
 			return;
 		}
-        
-        // Check for custom browser program chosen by user.  If
-        // present, try it.  If it fails, log error and try default
-        // browser launch instead.
-        boolean customBrowseOK = false;
-        String browseCmd = Config.get(StampLayer.CFG_BROWSER_CMD_KEY, null);
-        
-        if (browseCmd != null &&
-            browseCmd.length() > 0)
-        {
-            int index = browseCmd.toLowerCase().indexOf(StampLayer.URL_TAG.toLowerCase());
-            if (index < 0)
-                log.aprintln("Missing webpage placeholder " + StampLayer.URL_TAG +
-                             " in custom browser command");
-            else {
-                // Replace the url placeholder in case-insensitive fashion with
-                // the webpage reference.  Try to launch custom browser with webpage.
-                browseCmd = browseCmd.substring(0, index) + url + 
-                            browseCmd.substring(index + StampLayer.URL_TAG.length());
-                try {
-                    Runtime.getRuntime().exec(browseCmd);
-                    customBrowseOK = true;
-                    log.aprintln(url);
-                }
-                catch (Exception e) {
-                    log.println(e);
-                    log.aprintln("Custom webbrowser command '" + browseCmd + "' failed: " +
-                                 e.getMessage());
-                    log.aprint("Will launch default webbrowser instead");
-                }
-            }
-        }
-        
-        if (!customBrowseOK)
+
     		Util.launchBrowser(url);
 	}
 
-	void quickView(StampShape stamp)
+	public void quickView(StampShape stamp)
 	{
 		String url = null;
 		
 		try {
-			String browseLookupStr = StampLayer.stampURL+"BrowseLookup?id="+stamp.getId()+"&instrument="+stampLayer.getInstrument()+"&format=JAVA"+stampLayer.getAuthString()+StampLayer.versionStr;
+			String browseLookupStr = "BrowseLookup?id="+stamp.getId()+"&instrument="+stampLayer.getInstrument()+"&format=JAVA";
 					
-			ObjectInputStream ois = new ObjectInputStream(new URL(browseLookupStr).openStream());
+			ObjectInputStream ois = new ObjectInputStream(StampLayer.queryServer(browseLookupStr));
 			
 			url = (String)ois.readObject();
 			url = (String)ois.readObject();				
-
+            
+			ois.close();
 		} catch (Exception e) {
 			e.printStackTrace();
 		}
@@ -1157,46 +1274,13 @@ public class StampLView extends Layer.LView implements StampSelectionListener
 		                                  "JMARS",
 		                                  JOptionPane.INFORMATION_MESSAGE);
         
-        // Check for custom browser program chosen by user.  If
-        // present, try it.  If it fails, log error and try default
-        // browser launch instead.
-        boolean customBrowseOK = false;
-        String browseCmd = Config.get(StampLayer.CFG_BROWSER_CMD_KEY, null);
-        
-        if (browseCmd != null &&
-            browseCmd.length() > 0)
-        {
-            int index = browseCmd.toLowerCase().indexOf(StampLayer.URL_TAG.toLowerCase());
-            if (index < 0)
-                log.aprintln("Missing webpage placeholder " + StampLayer.URL_TAG +
-                             " in custom browser command");
-            else {
-                // Replace the url placeholder in case-insensitive fashion with
-                // the webpage reference.  Try to launch custom browser with webpage.
-                browseCmd = browseCmd.substring(0, index) + url + 
-                            browseCmd.substring(index + StampLayer.URL_TAG.length());
-                try {
-                    Runtime.getRuntime().exec(browseCmd);
-                    customBrowseOK = true;
-                    log.aprintln(url);
-                }
-                catch (Exception e) {
-                    log.println(e);
-                    log.aprintln("Custom webbrowser command '" + browseCmd + "' failed: " +
-                                 e.getMessage());
-                    log.aprint("Will launch default webbrowser instead");
-                }
-            }
-        }
-        
-        if (!customBrowseOK)
     		Util.launchBrowser(url);
 	}
 
 
 	private List<StampShape> findStampsByWorldPt(Point2D worldPt)
 	{
-		if (viewman == null) {
+		if (!isVisible() || viewman == null) {//@since remove viewman2 
 			log.aprintln("view manager not available");
 			return null;
 		}
@@ -1264,9 +1348,16 @@ public class StampLView extends Layer.LView implements StampSelectionListener
         		( proximity2 != null && stampBounds.intersects(proximity2)))
 			{
 				if (shape.intersects(proximity1) ||
-		        		( proximity2 != null && shape.intersects(proximity2)))
-					list.add(stamps[i]);				
-			}
+		        		( proximity2 != null && shape.intersects(proximity2))) {
+					if (stampLayer.lineShapes()) {
+						if (stamps[i].intersects(proximity1, proximity2)) {
+							list.add(stamps[i]);
+						}
+					} else {
+						list.add(stamps[i]);				
+					}					
+				}
+			}			
 		}
 
 		return list;
@@ -1290,7 +1381,7 @@ public class StampLView extends Layer.LView implements StampSelectionListener
 		if (stamps == null)
 			return null;
 
-		if (viewman == null) {
+		if (!isVisible() || viewman == null) {//@since remove viewman2 
 			log.aprintln("view manager not available");
 			return null;
 		}
@@ -1331,11 +1422,20 @@ public class StampLView extends Layer.LView implements StampSelectionListener
 			proximity2 = new Rectangle2D.Double(x+360, y, w, h);
 			log.println("proximity2 = " + proximity2);
 		}
-
-		for (int i=0; i<stamps.length; i++)
-			if (stamps[i].getNormalPath().intersects(proximity1) ||
-			    ( proximity2 != null && stamps[i].getNormalPath().intersects(proximity2)))
-				return  stamps[i];
+		
+		for (int i=0; i<stamps.length; i++) {
+			Shape normalPath = stamps[i].getNormalPath();
+			
+			if (normalPath.intersects(proximity1) ||(proximity2 != null && normalPath.intersects(proximity2))) {
+				if (stampLayer.lineShapes()) {
+					if (stamps[i].intersects(proximity1, proximity2)) {
+						return  stamps[i];
+					}
+				} else {
+					return stamps[i];
+				}
+			}
+		}
 
 		return  null;
 	}
@@ -1347,7 +1447,7 @@ public class StampLView extends Layer.LView implements StampSelectionListener
 
 	protected Layer.LView _new()
 	{
-		return new StampLView((StampLayer)getLayer(), null, true);
+		return new StampLView((StampLayer)getLayer(), null, true, layerParams);
 	}
 
 	public Layer.LView dup()
@@ -1360,13 +1460,14 @@ public class StampLView extends Layer.LView implements StampSelectionListener
 	}
 
 	public void selectionsChanged() {
-        selectedStamps = ((StampLayer)getLayer()).getSelectedStamps();
-        
-		drawSelections(selectedStamps, true);
+		drawSelections(stampLayer.getSelectedStamps(), true);
+
+		if (((StampFocusPanel)focusPanel).spectraView!=null) {
+			((StampFocusPanel)focusPanel).spectraView.setDisplayData(stampLayer.getSelectedStamps());
+		}
 	}
 	
 	public void selectionsAdded(List<StampShape> newStamps) {
-		selectedStamps.addAll(newStamps);
 		drawSelections(newStamps, false);
 	}
 	
@@ -1386,32 +1487,88 @@ public class StampLView extends Layer.LView implements StampSelectionListener
      * the complete selection list.  Otherwise, buffer is not cleared
      * and the stamp list represents a partial selection/deselection.
      */
-	private void drawSelections(List<StampShape> selectedStamps, boolean redraw)
+	private void drawSelections(final List<StampShape> selectedStamps, final boolean redraw)
 	{
-		if (getChild()!=null) {
-			((StampLView)getChild()).drawSelections(selectedStamps, redraw);
-		}
-	    if (redraw)
-            clearOffScreen(SELECTED_OUTLINE_BUFFER_IDX);
-            
+		final int seq = ++drawSelectionSequence;
+		
+	    if (redraw) {
+            clearOffScreen(SELECTIONS);
+	    }
+        
 		if (selectedStamps == null || selectedStamps.size() < 1) {
 			repaint();
 		    return;
         }
 
-		Graphics2D g2 = getOffScreenG2(SELECTED_OUTLINE_BUFFER_IDX);
-		if (g2 == null) {
-			return;
-		}
-        
-        g2.setComposite(AlphaComposite.Src);
-        g2.setStroke(new BasicStroke(0));
-		g2.setColor(new Color(~stampLayer.getSettings().getUnselectedStampColor().getRGB()));
+		pool.execute(tasked(new Runnable() {
+			// copy the stamps on the calling thread, render them off of it
+			public void run() {
+				synchronized(drawSelLock) {
+					if (seq != drawSelectionSequence) {
+						return;
+					}
+					
+					if (getChild()!=null) {
+						((StampLView)getChild()).drawSelections(selectedStamps, redraw);
+					}
+					Graphics2D g2 = getOffScreenG2(SELECTIONS);
+					if (g2 == null) {
+						return;
+					}
+			        
+			        g2.setComposite(AlphaComposite.Src);
+			        g2.setStroke(new BasicStroke(0));
 
-        for (StampShape selectedStamp : selectedStamps) {
-			g2.draw(selectedStamp.getPath());
-        }
-        repaint();
+					if (stampLayer.pointShapes()) {   // Such as MOLA Shots
+		    			double userScale = stampLayer.getSettings().getOriginMagnitude();
+
+		    			String spotSize = stampLayer.getParam(stampLayer.SPOT_SIZE);
+		    			
+						double degrees = 0;
+						
+						try {
+							degrees = Double.parseDouble(spotSize);
+						} catch (Exception e) {
+							// If SPOT_SIZE was unspecified or otherwise invalid, this might fail.  In that case,
+							// it will default to 0 degrees in size, but be drawn at 1 pixel 
+						}
+						degrees = degrees / 2.0;				
+						
+						degrees = degrees * userScale;
+						
+		    			int ppd=viewman.getZoomManager().getZoomPPD();
+		    			
+						double pixels = ppd * degrees;
+						
+						// Make the spot size at least 1 pixel on the screen, no matter how far we zoom out.
+						if (pixels<1.0) {
+							degrees = 1.0 / ppd;
+						}
+								    			
+		    			for (StampShape selectedStamp : selectedStamps) {
+							// For PointShapes, the points in the stamp object are just a single lon,lat value
+							Point2D  p=  ((PointShape)selectedStamp).getOrigin();
+							
+		    				Ellipse2D oval = new Ellipse2D.Double(p.getX()-degrees, (p.getY()-degrees), 2*degrees, 2*degrees);
+
+							g2.setColor(new Color(~stampLayer.getSettings().getUnselectedStampColor().getRGB()));
+					        
+		    				g2.draw(oval);		    				
+		    			}
+					} else {
+						g2.setColor(new Color(~stampLayer.getSettings().getUnselectedStampColor().getRGB()));
+	
+				        for (StampShape selectedStamp : selectedStamps) {
+							if (seq != drawSelectionSequence) {
+								return;
+							}
+							g2.draw(selectedStamp.getPath());
+				        }
+					}
+			        repaint();
+				}
+			}
+		}));
 	}
 
 	public void panToStamp(StampShape s)
@@ -1432,8 +1589,6 @@ public class StampLView extends Layer.LView implements StampSelectionListener
 	 */
 	protected synchronized void restoreStamps(FilledStamp.State[] stampStateList)
 	{
-		log.println("entering");
-
 		if (stampStateList != null &&
 		    !restoreStampsCalled)
 		{
@@ -1443,7 +1598,7 @@ public class StampLView extends Layer.LView implements StampSelectionListener
 			// the addStamp operation has a push-down behavior and
 			// we want to reestablish the same order as in the list
 			// of stamp IDs.
-			if (focusFilled != null) {
+			if (myFocus.getRenderedView() != null) {
 				log.println("processing stamp ID list of length " + stampStateList.length);
 				log.println("with view stamp list of length " + (stamps == null ? 0 : stamps.length));
                 
@@ -1467,8 +1622,9 @@ public class StampLView extends Layer.LView implements StampSelectionListener
 
 				addSelectedStamps(stampList, stateList);
 				log.println("actually loaded " + count + " stamps");
-			}
-		}
+				if (count<1) restoreStampsCalled=false;
+			}		
+		}			
 
 		log.println("exiting");
 	}
@@ -1502,12 +1658,9 @@ public class StampLView extends Layer.LView implements StampSelectionListener
 	{
 		if (selectedStamps != null && selectedStamps.length > 0)
 			{
-			
-			
-				
 				final Runnable runner = new Runnable() {
 					public void run() {
-						focusFilled.addStamps(selectedStamps, stampStateList, null);						
+						myFocus.getRenderedView().addStamps(selectedStamps, stampStateList, null);						
 					}
 				};
 
@@ -1526,8 +1679,8 @@ public class StampLView extends Layer.LView implements StampSelectionListener
 	// projection progress dialog is displayed.
 	protected void drawStampsTogether()
 	{
-	    if (focusFilled != null) {
-	        if (viewman == null) {
+	    if (myFocus.getRenderedView() != null) {
+	    	if (!isVisible() || viewman == null) {//@since remove viewman2 
 	            log.aprintln("view manager not available");
 	            return;
 	        }
@@ -1553,7 +1706,18 @@ public class StampLView extends Layer.LView implements StampSelectionListener
 		// These three methods are required to implement the interface
 		public void mouseEntered(MouseEvent e){};
 		public void mouseExited(MouseEvent e){} ;
-		public void mouseMoved(MouseEvent e){};
+
+		public void mouseMoved(MouseEvent e){
+//			if (e.isAltDown() && mouseIsOverFilledStamp()) {
+//				getNumericToolTip(new Point(e.getX(), e.getY()), e.getComponent());
+//			} else {
+//				tipWindow.setVisible(false);
+//				tipWindow.repaint();
+//				tipWindow.toBack();
+//				javax.swing.ToolTipManager.sharedInstance().setEnabled(true);
+//				requestFocus();
+//			}
+		};
 		
 		public void mouseClicked(MouseEvent e)
 		{
@@ -1600,8 +1764,7 @@ public class StampLView extends Layer.LView implements StampSelectionListener
 			if (e.isShiftDown()) {
 				return;
 			}
-
-
+			
 			// Update drawing of rubberband stamp selection box.
 			if (curSelectionRect != null && mouseDown != null) {
 				Point curPoint = ((WrappedMouseEvent)e).getRealPoint();
@@ -1666,14 +1829,12 @@ public class StampLView extends Layer.LView implements StampSelectionListener
 				curSelectionRect = null;
 			}
 		}
-
-		
 	}
 	
     // Converts a screen position (e.g., mouse position) to an HVector
     // coordinate that includes correction for the offset shift of a
     // filled stamp at the current pixel resolution.
-    protected HVector screenPointToHVector(Point2D screenPt, FilledStamp fs)
+    public HVector screenPointToHVector(Point2D screenPt, FilledStampImageType fs)
     {
         HVector vec = null;
         
@@ -1691,33 +1852,180 @@ public class StampLView extends Layer.LView implements StampSelectionListener
         
         return vec;
     }
-
     
     public void requestFocus() {
     	requestFocusInWindow(true);
     }
-
+    
 	public void viewCleanup()
 	{
-		stamps=null;
-
-		filled=null;
+		if (stampSource != null) {
+			try {
+				StampServer.getInstance().remove(stampSource);
+			} catch (Exception e) {
+				log.aprintln("Unable to remove stamp source " + stampSource.getName() + ", caused by: " + e.getMessage());
+			}
+		}
+		if (numericStampSource != null) {
+			try {
+				StampServer.getInstance().remove(numericStampSource);
+			} catch (Exception e) {
+				log.aprintln("Unable to remove stamp source " + numericStampSource.getName() + ", caused by: " + e.getMessage());
+			}
+		}
 		
-		selectedStamps.clear();
+		stamps=null;
+		
+		lastFilledStamps=null;
 		
 	    lastStamps=null;
-
-	    if (focusFilled!=null) {
-	    	focusFilled.dispose();
-	    }
 	    
 	    if (myFocus!=null) {
 	    	myFocus.dispose();
 	    }
 	    
 		stampLayer.dispose();	
+		
+		//make the radar focus panel clean up after itself if it's in use
+		RadarFocusPanel rFocus = ((StampFocusPanel)getFocusPanel()).getRadarView();
+		if(rFocus!=null){
+			rFocus.cleanUp();
+		}
 	}
+	
+	/** represents a request to this LView to render filled stamps */
+	public static interface DrawFilledRequest {
+		/** returns true if the parameters the request is dependent on have changed */
+		boolean changed();
+		/** returns the extent of the request in the current projection */
+		Rectangle2D getExtent();
+		/** returns the ppd of the request */
+		int getPPD();
+	}
+	
+	public class StampRequest implements DrawFilledRequest {
+		private final MultiProjection proj;
+		private final Rectangle2D extent;
+		private final int ppd;
+		private final int seq;
+		public StampRequest(int seq, MultiProjection proj, int ppd) {
+			this.proj = proj;
+			extent = proj.getWorldWindow();
+			this.ppd = ppd;
+			this.seq = seq;
+		}
+		public boolean changed() {
+			return seq == drawFilledSequence && !this.extent.equals(proj.getWorldWindow());
+		}
+		public Rectangle2D getExtent() {
+			return extent;
+		}
+		public int getPPD() {
+			return ppd;
+		}
+		public boolean equals(Object o) {
+			if (o instanceof StampRequest) {
+				StampRequest req = (StampRequest)o;
+				return ppd == req.ppd && extent.equals(req.extent);
+			} else {
+				return false;
+			}
+		}
+	}
+	
+	public void requestFrameFocus() {
+		this.getTopLevelAncestor().setFocusable(true);
+		this.getTopLevelAncestor().repaint();
+	}
+	
+
+	// wait interval for the mouse to settle
+	static int waitMs = 250;
+		
+	public InvestigateData getInvestigateData(MouseEvent event){
+		// Don't do this for the panner
+ 		if (getChild()==null) return null;
+
+		MultiProjection proj = getProj();	
+		if (proj == null) return null;
+
+		Point2D screenPt = event.getPoint();
+		Point2D worldPoint = proj.screen.toWorld(screenPt);
+		
+		// Get a list of stamp shapes under the cursor		
+		List<StampShape> stamps = findStampsByWorldPt(worldPoint);
+		if (stamps==null) return null;
+
+		// Create the investigateData object with the name of the stamp layer	
+		InvestigateData invData = new InvestigateData(this.getName());
+ 		
+		
+		List<FilledStamp> filledStamps = getFilteredFilledStamps();
+		
+		// For each of the stampShapes, get their individual investigateData 
+		// and add that to the invData object	
+		stampShape: for (StampShape ss : stamps){
+			for (FilledStamp fs : filledStamps){
+				if (fs instanceof FilledStampImageType && fs.stamp == ss){					
+					Point p = new Point(event.getX(), event.getY());
+
+					boolean isNumeric = fs.pdsi.isNumeric;
+
+					if (isNumeric) {
+						String key = fs.stamp.getId() + "-" + fs.pdsi.getImageType();		
+						String value = "Invalid";
+						
+						try {
+							HVector vector = screenPointToHVector(p, (FilledStampImageType)fs);	
+												
+							double floatValue = fs.pdsi.getFloatVal(vector);
+	
+							value = "" + floatValue;
+							//if Not a Number, set isNumeric to false
+							if(Double.isNaN(floatValue)){
+								isNumeric = false;
+								continue;
+							}
+							
+							if (floatValue==StampImage.IGNORE_VALUE) {
+								// No valid data for this filledStamp, but continue to see if others have values
+								continue;
+							}
+						}catch (Exception e) {
+							e.printStackTrace();
+						}
+						invData.add(key, value, fs.pdsi.getUnits(), "ItalicSmallBlue","SmallBlue", isNumeric);
+					}
+						
+						continue stampShape;
+					}
+				}
+				ss.getInvestigateData(invData);
+			}
+
+		// Return the invData object with contains information for each
+		//stamp under the cursor.	
+		return invData;
+	}
+	
+//The following two methods are used to query for the
+// info panel fields (description, citation, etc)	
+	 public String getLayerKey(){
+		 if(layerParams!=null){
+			 String s = layerParams.options.get(0);
+			 s = s.replace("_", " ");
+			 return s;
+		 }else{
+			 String result = stampLayer.getInstrument();
+			 result = result.replace("_", " ");
+			 return result;
+		 }
+	 }
+	 public String getLayerType(){
+		 if(layerParams!=null)
+			 return layerParams.type;
+		 else
+			 return "stamp";
+	 }
+	
 } // end: class StampLView
-
-
-

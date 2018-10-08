@@ -1,32 +1,9 @@
-// Copyright 2008, Arizona Board of Regents
-// on behalf of Arizona State University
-// 
-// Prepared by the Mars Space Flight Facility, Arizona State University,
-// Tempe, AZ.
-// 
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-// 
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU General Public License for more details.
-// 
-// You should have received a copy of the GNU General Public License
-// along with this program.  If not, see <http://www.gnu.org/licenses/>.
-
-
 package edu.asu.jmars.layer.map2.stages.composite;
 
-import java.awt.Transparency;
-import java.awt.color.ColorSpace;
 import java.awt.geom.Area;
 import java.awt.geom.Rectangle2D;
 import java.awt.image.BufferedImage;
 import java.awt.image.ColorModel;
-import java.awt.image.ComponentColorModel;
 import java.awt.image.DataBuffer;
 import java.awt.image.Raster;
 import java.awt.image.WritableRaster;
@@ -62,17 +39,9 @@ public class SingleComposite extends CompositeStage implements Cloneable, Serial
 		
 		ColorModel cm = imagePreset.getColorModel();
 		if (cm.getNumColorComponents() == 1)
-			return createGrayImageWithAlpha(width, height);
+			return Util.createGrayscaleImage(width, height, true);
 		else
 			return new BufferedImage(width, height, BufferedImage.TYPE_INT_ARGB);
-	}
-	
-	private BufferedImage createGrayImageWithAlpha(int width, int height){
-		ColorModel outCM = new ComponentColorModel(ColorSpace.getInstance(ColorSpace.CS_GRAY),
-				true, false, Transparency.TRANSLUCENT, DataBuffer.TYPE_BYTE);
-		WritableRaster raster = outCM.createCompatibleWritableRaster(width, height);
-		BufferedImage image = new BufferedImage(outCM, raster, outCM.isAlphaPremultiplied(), null);
-		return image;
 	}
 	
 	/** Simply returns the input image */
@@ -140,7 +109,7 @@ public class SingleComposite extends CompositeStage implements Cloneable, Serial
 	
 	/** TODO: SingleComposite will be removed, this output type is wrong and will not apply any more. */
 	public MapAttr produces() {
-		return new MapAttr(MapAttr.NUM_CC_ANY, DataBuffer.TYPE_BYTE);
+		return new MapAttr(DataBuffer.TYPE_BYTE, null, null);
 	}
 	
 	public String getStageName(){

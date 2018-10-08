@@ -1,23 +1,3 @@
-// Copyright 2008, Arizona Board of Regents
-// on behalf of Arizona State University
-// 
-// Prepared by the Mars Space Flight Facility, Arizona State University,
-// Tempe, AZ.
-// 
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-// 
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU General Public License for more details.
-// 
-// You should have received a copy of the GNU General Public License
-// along with this program.  If not, see <http://www.gnu.org/licenses/>.
-
-
 package edu.asu.jmars.layer.stamp;
 
 import java.awt.Color;
@@ -27,110 +7,126 @@ import java.awt.Shape;
 import java.awt.geom.AffineTransform;
 import java.awt.geom.Area;
 import java.awt.geom.GeneralPath;
+import java.awt.geom.NoninvertibleTransformException;
 import java.awt.geom.Point2D;
 import java.awt.geom.Rectangle2D;
 import java.awt.image.BufferedImage;
 import java.awt.image.BufferedImageOp;
-import java.io.File;
 import java.io.IOException;
 import java.io.ObjectInputStream;
-import java.net.URL;
-import java.net.URLEncoder;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
-
-import javax.imageio.ImageIO;
+import java.util.Set;
 
 import edu.asu.jmars.Main;
 import edu.asu.jmars.ProjObj.Projection_OC;
-import edu.asu.jmars.layer.MultiProjection;
 import edu.asu.jmars.layer.stamp.StampLayer.StampTask;
 import edu.asu.jmars.layer.stamp.StampLayer.Status;
-import edu.asu.jmars.layer.stamp.chart.ChartView;
-import edu.asu.jmars.util.DebugLog;
+import edu.asu.jmars.layer.stamp.projection.EquiRectangular;
+import edu.asu.jmars.layer.stamp.projection.SimpleCylindrical;
+import edu.asu.jmars.layer.stamp.projection.PolarStereographic;
+import edu.asu.jmars.layer.stamp.projection.Projection;
+import edu.asu.jmars.layer.stamp.projection.Sinusoidal;
+import edu.asu.jmars.layer.stamp.projection.Unprojected;
 import edu.asu.jmars.util.HVector;
 import edu.asu.jmars.util.IgnoreComposite;
 import edu.asu.jmars.util.Util;
 
 public class StampImage 
 { 	
-	// Set of constants for tracking or manipulating the current rotation/flip state 
-    static final int IMAGE_ROTATED_180 = 0;
-    static final int IMAGE_HFLIPPED = 1;
-    static final int IMAGE_VFLIPPED = 2;
-    static final int IMAGE_NORMAL = 3;
-
-    /**
-     ** Mapping from current image state and operation being applied
-     ** to resulting image state.  Usage:
-     **
-     ** result_state = IMAGE_RESULT_MAP[state][operation]
-     **/
-    static final int[][] IMAGE_RESULT_MAP = new int[][] {
-	/* Operation:                   *IMAGE_ROTATED_180* *IMAGE_HFLIPPED*   *IMAGE_VFLIPPED*   */
-	/* Start: IMAGE_ROTATED_180 */ { IMAGE_NORMAL,       IMAGE_VFLIPPED,    IMAGE_HFLIPPED},
-	/* Start: IMAGE_HFLIPPED    */ { IMAGE_VFLIPPED,     IMAGE_NORMAL,      IMAGE_ROTATED_180},
-	/* Start: IMAGE_VFLIPPED    */ { IMAGE_HFLIPPED,     IMAGE_ROTATED_180, IMAGE_NORMAL},
-	/* Start: IMAGE_NORMAL      */ { IMAGE_ROTATED_180,  IMAGE_HFLIPPED,    IMAGE_VFLIPPED}
-    }; 
-
-    public static final String STAMP_CACHE = Main.getJMarsPath() + "stamps" + System.getProperty("file.separator");
-    
-    private static final DebugLog log = DebugLog.instance();
-    
-    static {
-    	File cache = new File(STAMP_CACHE);
-    	if (!cache.exists()) {
-    		if (!cache.mkdirs()) {
-    			throw new IllegalStateException("Unable to create stamp cache directory, check permissions in " + Main.getJMarsPath());
-    		}
-    	} else if (!cache.isDirectory()) {
-    		throw new IllegalStateException("Stamp cache cannot be created, found regular file at " + STAMP_CACHE);
-    	}
-    }
-    
+	// A value that will be used throughout the stamp layer to indicate numeric pixels that should be drawn transparently
+	// (For graphic images, 0 is frequently used to indicate transparent pixels)
+	public static final int IGNORE_VALUE = Short.MIN_VALUE;
+	
     protected String productID;
     protected String label;
     
     protected ImageFrame frames[];
     
-    protected double framePct;
-    protected double lastFramePct;
+    // These values represent how many lines, in the full resolution image, relate to each subFrame for the frames we generate ourselves.
+    // The goal is for the scaled image pieces we receive from the server to be as close to 500x500 pixels as is reasonably possible.
+    protected int linesPerFrame;
+    protected int linesLastFrame;
+    
+    protected int samplesPerFrame;
+    protected int samplesLastFrame;
     
     protected int projHash;
     protected int renderPPD;
         
-    protected int userRotateFlip = IMAGE_NORMAL;
-
     protected String imageType="";
      
+    // Numeric variables
+    protected double minValue=Double.NaN;
+    protected double maxValue=Double.NaN;
+    
+    protected double autoMin=Double.NaN;
+    protected double autoMax=Double.NaN;
+    protected boolean autoValuesChanged=false;
+    
+    protected boolean isNumeric = false;
+    protected String units = "";
+    protected String unitDesc = "";
+    
+    protected boolean isPDSImage = false;
+    protected boolean isTHEMISDCS = false;
+    protected boolean realFramePoints = false;
+    
     public String getImageType() {
     	return imageType;
     }
     
-    // Needed to keep PdsImage happy
-    public StampImage(StampShape shape, String productId, String instrument, String imageType) {
+    public StampImage(StampShape shape, String productId, String instrument, String imageType, BufferedImage image, HashMap<String,String> params) {
     	myStamp=shape;
-    	this.instrument = Instrument.valueOf(instrument.toUpperCase());
+    	this.instrument = instrument;
     	this.imageType = imageType;
         this.productID = productId;
         label = null;                
+        this.image = image;
+        
+        projectionParams = params;
+        parseProjectionParams();
+        	
+    	if (instrument.equalsIgnoreCase("davinci")) {
+    		fullImageLocal=true;
+    		pts=new Point2D.Double[4];
+    		pts[0]=new Point2D.Double(360-Double.parseDouble(params.get("lon0")), Double.parseDouble(params.get("lat0")));
+    		pts[1]=new Point2D.Double(360-Double.parseDouble(params.get("lon1")), Double.parseDouble(params.get("lat1")));
+    		pts[2]=new Point2D.Double(360-Double.parseDouble(params.get("lon3")), Double.parseDouble(params.get("lat3")));        	
+    		pts[3]=new Point2D.Double(360-Double.parseDouble(params.get("lon2")), Double.parseDouble(params.get("lat2")));
+    		
+    		if (image!=null) {
+    			numLines = image.getHeight();
+    			numSamplesPerLine = image.getWidth();
+    		}    		
+    	} else {
+    		// TODO: Do we need to call this for projected images?  Could we calculate points on our own?
+    		getPoints();
+    	}
+    	
+        if (map_projection_type.equalsIgnoreCase("EQUIRECTANGULAR")) {        	
+       		imageProjection = new EquiRectangular(line_proj_offset, sample_proj_offset, center_lon, center_lat, map_resolution);
+        } else if (map_projection_type.equalsIgnoreCase("POLAR_STEREO")) {
+        	imageProjection = new PolarStereographic(line_proj_offset, sample_proj_offset, center_lon, center_lat, map_scale, radius);
+        } else if (map_projection_type.equalsIgnoreCase("SINUSOIDAL")) { 
+        	imageProjection = new Sinusoidal(line_proj_offset, sample_proj_offset, center_lon, center_lat, map_resolution);
+        } else if (map_projection_type.equalsIgnoreCase("CYLINDRICAL")) {
+        	imageProjection = new SimpleCylindrical(numLines, numSamplesPerLine, pts[0], pts[1], pts[2], pts[3]);
+        } else {
+        	imageProjection = new Unprojected(numLines, numSamplesPerLine, pts[0], pts[1], pts[2], pts[3]);
+        }
     }
     
     BufferedImage image = null;
     
     StampShape myStamp = null;
     
-    public StampImage(StampShape shape, BufferedImage image, String productId, String instrument, String imageType)
-    {
-    	this(shape, productId, instrument, imageType);
-        this.image = image;    
-    }
+    Projection imageProjection = null;
+        
+    protected String instrument;
     
-    protected Instrument instrument;
-    
-    public Instrument getInstrument() {
+    public String getInstrument() {
     	return instrument;
     }
         
@@ -139,151 +135,23 @@ public class StampImage
         return  label;
     }
     
-    /**
-     ** Applies current image rotation/flipping state to specified
-     ** set of image or image frame coordinates.
-     **
-     ** IMPORTANT NOTE!! - This method must be called from any subclass 
-     ** implementation of {@link #getPoints} method that supports image rotation 
-     ** or flipping.
-     **
-     ** @param corners Four-element array of corner points in following
-     ** order: 
-     ** <ul>          
-     ** <li>   corners[0]   lower left corner coordinates (SW)
-     ** <li>   corners[1]   lower right corner coordinates (SE)
-     ** <li>   corners[2]   upper left corner coordinates (NW)
-     ** <li>   corners[3]   upper right corners coordinates (NE)
-     ** </ul>
-     **
-     ** @return Four-element array of corners points in same above
-     ** order but with elements swapped as needed to apply the current
-     ** image orientation.
-     **
-     ** @see #rotateFlip
-     ** @see #getPoints
-     **/
-    public Point2D[] getOrientedPoints(Point2D[] corners)
-    {
-        if (corners == null || corners.length % 4 != 0)
-            throw new IllegalArgumentException("null or improperly sized array of corner points");
-        
-        Point2D[] newCorners = new Point2D[corners.length];
-        
-        System.arraycopy(corners, 0, newCorners, 0, corners.length);
-        
-        int lastPtIdx = corners.length-1;
-        
-        switch (userRotateFlip) {
-        case IMAGE_NORMAL:
-            // No corner swaps
-            newCorners[lastPtIdx-3] = corners[lastPtIdx-3];
-            newCorners[lastPtIdx-2] = corners[lastPtIdx-2];
-            newCorners[lastPtIdx-1] = corners[lastPtIdx-1];
-            newCorners[lastPtIdx] = corners[lastPtIdx];
-            break;
-        case IMAGE_ROTATED_180:
-            // Swapping SW and NE, SE and NW
-            newCorners[lastPtIdx-3] = corners[lastPtIdx];
-            newCorners[lastPtIdx-2] = corners[lastPtIdx-1];
-            newCorners[lastPtIdx-1] = corners[lastPtIdx-2];
-            newCorners[lastPtIdx] = corners[lastPtIdx-3];
-            break;
-        case IMAGE_HFLIPPED:
-            // Swapping SW and SE, NW and NE
-            newCorners[lastPtIdx-3] = corners[lastPtIdx-2];
-            newCorners[lastPtIdx-2] = corners[lastPtIdx-3];
-            newCorners[lastPtIdx-1] = corners[lastPtIdx];
-            newCorners[lastPtIdx] = corners[lastPtIdx-1];
-            break;
-        case IMAGE_VFLIPPED:
-            // Swapping SW and NW, SE and NE
-            newCorners[lastPtIdx-3] = corners[lastPtIdx-1];
-            newCorners[lastPtIdx-2] = corners[lastPtIdx];
-            newCorners[lastPtIdx-1] = corners[lastPtIdx-3];
-            newCorners[lastPtIdx] = corners[lastPtIdx-2];
-            break;
-        default:
-            log.aprintln("bad internal image orientation state: " + userRotateFlip);
-        break;
-        }
-        
-        return newCorners;
-    }
-
-    
-    /** 
-     ** Rotates or flips image as specified relative to current 
-     ** stamp image orientation.  Actual result of rotation/flipping
-     ** is not realized until calls are made to #getImageFrame method.
-     **
-     ** @param operation legal operation values are {@link #IMAGE_ROTATED_180}, 
-     ** {@link #IMAGE_HFLIPPED}, {@link #IMAGE_VFLIPPED}.
-     **
-     ** @see #getPoints
-     ** @see #getOrientedPoints
-     **/
-    synchronized public void rotateFlip(int operation)
-    {
-        if (operation != IMAGE_ROTATED_180 &&
-                operation != IMAGE_HFLIPPED &&
-                operation != IMAGE_VFLIPPED) {
-            log.aprintln("illegal rotate/flip operation code: " + operation);
-            return;
-        }
-        
-        // Determine new image state
-        userRotateFlip = IMAGE_RESULT_MAP[userRotateFlip][operation];
-        pts=null;
-        recreateImageFrames(renderPPD);
+    public String getUnits() {
+    	return units;
     }
     
-    private String realFilename = null;
-
+    public String getUnitDesc() {
+    	return unitDesc;
+    }
+    
+    boolean fullImageLocal = false;
     /**
-     * Removes any non-legal filename characters that may appear in
-     * stamp image id's and returns result as a filename.
+     * Returns true if the entire image is stored locally at full resolution in a single file.
+     * Returns false by default, and if we are working with individual subsampled tiles of an image.
+     * @return
      */
-    public String getFilename()
-    {
-        if (realFilename != null)
-            return realFilename;
-        else
-            realFilename = StampImageFactory.getStrippedFilename(productID);
-        
-        return realFilename;
+    public boolean isFullImageLocal() {
+    	return fullImageLocal;
     }
-
-    
-    /** 
-     ** Returns rotation string for specified stamp image orientation
-     **/
-    protected String getImageFrameType(int imageState)
-    {
-        if (imageState != IMAGE_NORMAL &&
-            imageState != IMAGE_ROTATED_180 &&
-            imageState != IMAGE_HFLIPPED &&
-            imageState != IMAGE_VFLIPPED) {
-            log.aprintln("illegal rotate/flip image state: " + imageState);
-            return "";
-        }
-        
-        return imageTypeMap[imageState];
-    }
-    
-    private static final String IMAGE_TYPE_NORMAL = "";
-    private static final String IMAGE_TYPE_ROTATED = "_r180";
-    private static final String IMAGE_TYPE_HFLIPPED = "_hflip";
-    private static final String IMAGE_TYPE_VFLIPPED = "_vflip";
-    
-    // Mapping from image state to image type label.
-    private String[] imageTypeMap = new String[] {
-          IMAGE_TYPE_ROTATED,   // IMAGE_ROTATED_180
-          IMAGE_TYPE_HFLIPPED,  // IMAGE_HFLIPPED
-          IMAGE_TYPE_VFLIPPED,  // IMAGE_VLIPPED
-          IMAGE_TYPE_NORMAL     // IMAGE_NORMAL
-    };
-    
     
     boolean framePointsFaked=false;
     
@@ -307,159 +175,148 @@ public class StampImage
      ** <li>          points[3]   upper right corners coordinates
      ** </ul>
      **
-     ** @param frameSizeFactor  scaling factor for size of each frame along
-     **                         divided axis between 0 and 1; e.g., 0.5
-     **                         will divide image into two frames.
-     **
-     **                         If factor does not divide 1 evenly, last
-     **                         frame will be sized to the fractional residual.
-     **
      ** @return array of points organized as described for #getPoints(),
      **         whole image frame + subframes
      **
      **/
-    protected Point2D[] getFakeFramePoints(Point2D[] pts, double frameSizeFactor)
+    protected Point2D[] getNewFakeFramePoints(Point2D[] pts)
     {
         if (pts == null ||
-                pts.length != 4 ||
-                frameSizeFactor <= 0 ||
-                frameSizeFactor > 1)
-        {
-        	log.aprintln("frameSizeFactor = " + frameSizeFactor);
-            log.aprintln("bad parameters");
-            return null;
+                pts.length != 4) {
+        	// Nothing more we can do here.
+            return pts;
         }
+
+        double maxPPD = getMaxRenderPPD();
+
+    	if (renderPPD > maxPPD) {
+        	linesPerFrame = LINES_PER_FRAME;
+    	} else {
+        	linesPerFrame = (int)Math.ceil(LINES_PER_FRAME * (maxPPD/renderPPD));        		
+    	}
+    	
+    	if (linesPerFrame > getNumLines()) {
+    		linesPerFrame=getNumLines();
+    	}
+    	        	
+    	// This is only the number of frames per column, we'll determine 
+    	// how to split (or not split) horizontally later
+        int numFrames = (int)Math.ceil(1.0* getNumLines() / linesPerFrame);
         
-        int numFrames = (int)Math.ceil(1 / frameSizeFactor);
         Point2D[] newPoints = new Point2D[numFrames * 4];
-                
-        // Convert image frame geometry to vector form.
-        HVector ll = new HVector(pts[0]);
-        HVector lr = new HVector(pts[1]);
-        HVector ul = new HVector(pts[2]);
-        HVector ur = new HVector(pts[3]);
         
-        // Prepare uppper part of first subframe.
-        Point2D nextUL = pts[2];
-        Point2D nextUR = pts[3];
-        
-        // Create image subframe geometry points through
-        // interpolation from whole image.  Do this
-        // for all but the last subframe.  Frames start
-        // from upper part of image.
-        for (int i=0; i < numFrames-1; i++) {
-            // Find lower left/right corners for new subframe
-        	double val = frameSizeFactor * (i+1);
-//            HVector newLL = ul.interpolate(ll, frameSizeFactor * (i+1));
-//            HVector newLR = ur.interpolate(lr, frameSizeFactor * (i+1));
+        // If there's only 1 frame, this makes the linesLastFrame==linesPerFrame.
+    	linesLastFrame = getNumLines() - linesPerFrame*(numFrames-1);
 
-            HVector newLL = ul.interpolate(ll, val);
-            HVector newLR = ur.interpolate(lr, val);
-
-            // Store geometry for new subframe
-            newPoints[i*4]   = newLL.toLonLat(null);
-            newPoints[i*4+1] = newLR.toLonLat(null);
-            newPoints[i*4+2] = nextUL;
-            newPoints[i*4+3] = nextUR;
-            
-            // Prepare upper part of next subframe
-            nextUL = newPoints[i*4];
-            nextUR = newPoints[i*4+1];
-        }
-        
-        // Create last subframe using residual part of whole image frame
-        newPoints[(numFrames-1) * 4]   = pts[0];
-        newPoints[(numFrames-1) * 4+1] = pts[1];
-        newPoints[(numFrames-1) * 4+2] = nextUL;
-        newPoints[(numFrames-1) * 4+3] = nextUR;
-                
-        framePct = frameSizeFactor;
-        lastFramePct = 1 - (frameSizeFactor*(numFrames-1));
-        
-        framePointsFaked=true;
-        
-        for(int i=0; i<newPoints.length-4; i+=4) {
-            newPoints[i+0] = newPoints[i+6] = midpoint(newPoints[i+0], newPoints[i+6]);
-            newPoints[i+1] = newPoints[i+7] = midpoint(newPoints[i+1], newPoints[i+7]);
-        }    		
-        
-        return splitFrames(newPoints);
+    	if (realFramePoints || numFrames == 1) {
+    		newPoints = pts;
+    		// TODO: Just because we didn't fake frames, doesn't mean we couldn't
+    		// still act like we did.  THEMIS might be the only exception
+    		// And not necessarily all THEMIS?
+//    		framePointsFaked=false;
+    	} else {    	
+	        // Prepare uppper part of first subframe.
+	        Point2D nextUL = pts[2];
+	        Point2D nextUR = pts[3];
+	        
+	        // Create image subframe geometry points through
+	        // interpolation from whole image.  Do this
+	        // for all but the last subframe.  Frames start
+	        // from upper part of image.
+	        for (int i=0; i < numFrames-1; i++) {
+	            // Store geometry for new subframe
+	            newPoints[i*4]   = imageProjection.lonLat((int)(linesPerFrame * (i+1)), 1, new Point2D.Double());
+	            newPoints[i*4+1] = imageProjection.lonLat((int)(linesPerFrame * (i+1)), numSamplesPerLine, new Point2D.Double());
+	            newPoints[i*4+2] = nextUL;
+	            newPoints[i*4+3] = nextUR;
+	            
+	            // Prepare upper part of next subframe
+	            nextUL = newPoints[i*4];
+	            nextUR = newPoints[i*4+1];
+	        }
+	        
+	        // Create last subframe using residual part of whole image frame
+	        newPoints[(numFrames-1) * 4]   = pts[0];
+	        newPoints[(numFrames-1) * 4+1] = pts[1];
+	        newPoints[(numFrames-1) * 4+2] = nextUL;
+	        newPoints[(numFrames-1) * 4+3] = nextUR;
+	                
+	        framePointsFaked=true;
+	        
+	        for(int i=0; i<newPoints.length-4; i+=4) {
+	            newPoints[i+0] = newPoints[i+6] = midpoint(newPoints[i+0], newPoints[i+6]);
+	            newPoints[i+1] = newPoints[i+7] = midpoint(newPoints[i+1], newPoints[i+7]);
+	        }
+    	}
+    	       return splitFrames(newPoints);
     }
-          
+        
     int horizontalSplitCnt=1;
     
     private static final int LINES_PER_FRAME=500;
     
     private Point2D[] splitFrames(Point2D pts[]) {
-    	
-    	//
+    	// TODO: Maybe this should be always calculated and returned by the server
     	double maxPPD = getMaxRenderPPD();
-    	
-    	if (instrument==Instrument.HRSC) {
-    		maxPPD = Double.valueOf(myStamp.getProjectionParams().get("map_resolution"));
-    	}
-    	
-    	double linesPerFrame;
+    	    	
     	if (renderPPD > maxPPD) {
-        	linesPerFrame = LINES_PER_FRAME;
+        	samplesPerFrame = LINES_PER_FRAME;
     	} else {
-        	linesPerFrame = LINES_PER_FRAME * (maxPPD/renderPPD);        		
+        	samplesPerFrame = (int)Math.ceil(LINES_PER_FRAME * (maxPPD/renderPPD));        		
     	}
 
-    	if (linesPerFrame > getNumSamples()) {
-    		linesPerFrame=getNumSamples();
+    	if (samplesPerFrame > getNumSamples()) {
+    		samplesPerFrame=getNumSamples();
     	}    	
-    	//
-    	
-    	horizontalSplitCnt=(int)Math.ceil(getNumSamples()/linesPerFrame);
+
+    	horizontalSplitCnt=(int)Math.ceil(1.0*getNumSamples()/samplesPerFrame);
     	
     	if (horizontalSplitCnt<1) {
     		horizontalSplitCnt=1;
     	}
-    	
-    	log.println("Horizontal Split Cnt = " + horizontalSplitCnt);
+
+        // If there's only 1 frame, this makes the linesLastFrame==linesPerFrame.
+    	samplesLastFrame = getNumSamples() - samplesPerFrame*(horizontalSplitCnt-1);
+
+    	if (horizontalSplitCnt==1) {
+    		// No more work to do
+    		return pts;
+    	}
+    	    	
         int numFrames =pts.length/4;
         
-        // First set of 4 points is the entire image area
         Point2D[] newPoints = new Point2D[horizontalSplitCnt*numFrames * 4];
-        
-        double framePercent = 1.0 / horizontalSplitCnt;
+                
+//        double framePercent = 1.0 / horizontalSplitCnt;
         
         int total_samples=getNumSamples();
-        double total_lines=getNumLines();
-        
-        double linesPerNormFrame=(getFrameSize()*framePct);
-        double linesPerLastFrame=(getFrameSize()*lastFramePct);
         
         // Create image subframe geometry points through
         // interpolation from whole image.  Frames start
         // from upper part of image.
         for (int i=0; i < numFrames; i++) {        	
-            // Convert image frame geometry to vector form.
-            HVector ll = new HVector(pts[4*i]);
-            HVector lr = new HVector(pts[(4*i)+1]);
-            HVector ul = new HVector(pts[(4*i)+2]);
-            HVector ur = new HVector(pts[(4*i)+3]);
-
             Point2D[] topRow = new Point2D[horizontalSplitCnt+1];
             Point2D[] botRow = new Point2D[horizontalSplitCnt+1];
             
             for (int n=0; n<(horizontalSplitCnt+1); n++) {
-            	if (instrument==Instrument.HRSC) {
-            		if (i==numFrames-1) {
-                		topRow[n]=getHRSCPoint(i*linesPerNormFrame, (total_samples*framePercent*n));
-                		botRow[n]=getHRSCPoint(i*linesPerNormFrame+linesPerLastFrame, (total_samples*framePercent*n));
-            		} else {
-                		//rounding error on last point?
-                		topRow[n]=getHRSCPoint(i*linesPerNormFrame, (total_samples*framePercent*n));
-                		botRow[n]=getHRSCPoint((i+1)*linesPerNormFrame, (total_samples*framePercent*n));
-            		}
-        			
+            	if (n==horizontalSplitCnt) { // last column
+	        		if (i==numFrames-1) { // last row
+	            		topRow[n]=imageProjection.lonLat(i*linesPerFrame, total_samples, new Point2D.Double());
+	            		botRow[n]=imageProjection.lonLat(numLines, total_samples, new Point2D.Double());
+	        		} else {
+	            		topRow[n]=imageProjection.lonLat(i*linesPerFrame, total_samples, new Point2D.Double());
+	            		botRow[n]=imageProjection.lonLat((i+1)*linesPerFrame, total_samples, new Point2D.Double());
+	        		}            		
             	} else {
-            		topRow[n]=ul.interpolate(ur,n*framePercent).toLonLat(null);
-            		botRow[n]=ll.interpolate(lr,n*framePercent).toLonLat(null);
+	        		if (i==numFrames-1) { // last row
+	            		topRow[n]=imageProjection.lonLat(i*linesPerFrame, (samplesPerFrame*n), new Point2D.Double());
+	            		botRow[n]=imageProjection.lonLat(numLines, (samplesPerFrame*n), new Point2D.Double());
+	        		} else {
+	            		topRow[n]=imageProjection.lonLat(i*linesPerFrame, (samplesPerFrame*n), new Point2D.Double());
+	            		botRow[n]=imageProjection.lonLat((i+1)*linesPerFrame, (samplesPerFrame*n), new Point2D.Double());
+	        		}
             	}
-            }
+            }            
             
             int newFrameCnt = topRow.length-1;
             
@@ -471,29 +328,26 @@ public class StampImage
             	newPoints[(4*newFrameNum) +2]	= topRow[j];
             	newPoints[(4*newFrameNum) +3]	= topRow[j+1];
             }            
-    }
-
-//        for (int i=0; i< newPoints.length; i++) {
-//        	System.out.println("Point " + i + ") = " + newPoints[i]);
-//          }
+        }
 
         return newPoints;    	
     }    
+
+    
+    
     
     Point2D[] pts = null;
     
-    protected Point2D[] getPoints() {
+    public Point2D[] getPoints() { 
     	if (pts==null) {
     		try {
-    			String urlStr = StampLayer.stampURL+"PointFetcher?id="+productID+"&instrument="+getInstrument()+StampLayer.versionStr;
+    			String urlStr = "PointFetcher?id="+productID+"&instrument="+getInstrument();
     			
     			if (imageType!=null && imageType.length()>0) {
-    				urlStr+="&imageType="+URLEncoder.encode(imageType);
+    				urlStr+="&imageType="+imageType;
     			}
-    			log.println("Points URL: " + urlStr);
-    			URL url = new URL(urlStr);
             
-    			ObjectInputStream ois = new ObjectInputStream(url.openStream());
+    			ObjectInputStream ois = new ObjectInputStream(StampLayer.queryServer(urlStr));
         
     			double dpts[] = (double[])ois.readObject();
     		               		   
@@ -503,23 +357,25 @@ public class StampImage
 	    	    	pts[i]=new Point2D.Double(dpts[2*i], dpts[2*i+1]);
 	    	    }
 	    	    
-	    	    if (imageType!=null && imageType.length()>0 && pts.length>4) {
-		            for(int i=0; i<pts.length-4; i+=4) {
-		                pts[i+0] = pts[i+6] = midpoint(pts[i+0], pts[i+6]);
-		                pts[i+1] = pts[i+7] = midpoint(pts[i+1], pts[i+7]);
-		            }
+	    	    //skip this for loop if this is for a radar layer (SHARAD)
+	    	    if(!myStamp.stampLayer.lineShapes()){
+		    	    // This is used to try and blend real frame points for THEMIS images, 
+		    	    // so that there isn't a gap between frames.
+		    	    if (imageType!=null && imageType.length()>0 && pts.length>4) {
+			            for(int i=0; i<pts.length-4; i+=4) {
+			                pts[i+0] = pts[i+6] = midpoint(pts[i+0], pts[i+6]);
+			                pts[i+1] = pts[i+7] = midpoint(pts[i+1], pts[i+7]);
+			            }
+		    	    }
 	    	    }
-
+	    	    
+	    	    ois.close();
     		} catch (Exception e) {
     			e.printStackTrace();
     		}    		
     	}
-    	    	    	
-//    	for (int i=0; i<pts.length; i++) {
-//    		System.out.println("Point[]:" + pts[i]);
-//    	}
     	
-    	return getOrientedPoints(pts);
+    	return pts;
     }
     
     static Point2D midpoint(Point2D a, Point2D b)
@@ -527,83 +383,22 @@ public class StampImage
         return  new HVector(a).add(new HVector(b)).toLonLat(null);
     }
     
+    double maxPPD = -1;
+    
     protected double getMaxRenderPPD() {
-//    	boolean isMocWA=false;
+    	if (map_resolution!=0) return map_resolution;
     	
-//    	StampShape s = myStamp;
-    	
-//    	if (instrument==Instrument.MOC) {
-//	    	for(int i=0; i<s.stampLayer.columnNames.length; i++) {
-//	    		String label = s.stampLayer.columnNames[i];
-//	    		if (label.equalsIgnoreCase("instrument_name")) {
-//	    			try {
-//						String value = (String)myStamp.getStamp().getData()[i];
-//						if (value.equalsIgnoreCase("MOC-WA")) {
-//							isMocWA=true;
-//						}
-//	    			} catch (ClassCastException cce) {
-//	    				cce.printStackTrace();
-//	    			}
-//				}
-//	    	}
-//    	}
-//    	    	
-//    	double maxPPD=512;
-//    	switch(instrument) {
-//    	case THEMIS :
-//                if (productID.startsWith("V")) {
-//                	maxPPD=2048; // divide by spatialSumming;
-//                } else {
-//                	maxPPD=512;
-//                }
-//    		break;
-//    	case MOC :
-//    			if (isMocWA) {
-//    				maxPPD=128;  // being generous
-//    			} else {
-//    				maxPPD=8192;  // divide by downtrack summing
-//    			}
-//    		break;
-//    	case CTX :
-//    		maxPPD=8192;
-//    		break;
-//    	case HIRISE :
-//    		maxPPD=8192;
-//    		break;
-//    	case HRSC :
-//    		maxPPD=Double.parseDouble(myStamp.getProjectionParams().get("map_resolution"));
-//    		System.out.println("HRSC maxPPD = " + maxPPD);
-//
-////    		maxPPD=2048;
-//    		break;
-//    	case VIKING :
-//    		maxPPD=256;
-//    		break;
-//    	case MAP :
-//    		maxPPD=128;
-//    		break;
-//    	case APOLLO :
-//    		maxPPD=512;
-//    		break;
-//    	case CRISM :
-//    		maxPPD=2048;
-//    		break;
-//    	case ASTER :
-//    		maxPPD=2048;
-//    		break;
-//    	}
-    	
-    	
-		Point2D points[] = getPoints();
-		
-		double degrees = distance(points[0], 
-				                      points[1]);
+    	if (maxPPD==-1) {    	
+			Point2D points[] = getPoints();
 			
-		int pixels = getNumSamples();
-
-		double maxPPD = pixels / degrees;
-
-		log.println("MaxPPD is: " + maxPPD);
+			double degrees = distance(points[0], 
+					                      points[1]);
+				
+			int pixels = getNumSamples();
+			
+			maxPPD = pixels / degrees;
+    	}
+    	
     	return maxPPD;
     }
     
@@ -630,71 +425,95 @@ public class StampImage
     /**
      ** Renders the image onto the given (world-coordinate) graphics context.
      **/
-    public synchronized void renderImage(final Graphics2D wg2, final BufferedImageOp op,
-                            final MultiProjection proj, int renderPPD, StampTask task)
+    public synchronized void renderImage(final Graphics2D wg2, final FilledStampImageType fs,
+                            final StampLView.DrawFilledRequest request, StampTask task, Point2D offset, BufferedImage target)
     {
         task.updateStatus(Status.RED);
-        final Rectangle2D worldWin = proj.getWorldWindow();
-        
-        double maxRenderPPD=getMaxRenderPPD();
-        
-        if (renderPPD>maxRenderPPD) {
-        	renderPPD=(int)maxRenderPPD;
-        }
-        
-        if(frames == null || renderPPD != this.renderPPD || 
-                projHash != Main.PO.getProjectionSpecialParameters().hashCode()) {
-        	recreateImageFrames(renderPPD);
-        }
+        try {
+            final Rectangle2D worldWin = request.getExtent();
+            
+            // If stamps have been nudged, we need to make sure that we take the nudge into account when determining whether or not a
+            // particular imageframe intersects the visible part of the screen or not
+            final Rectangle2D offsetWorldWin=new Rectangle2D.Double();;
+            offsetWorldWin.setRect(worldWin.getX()-offset.getX(), worldWin.getY()-offset.getY(), worldWin.getWidth(), worldWin.getHeight());
+            
+            double maxRenderPPD=getMaxRenderPPD();
+            
+            int renderPPD = request.getPPD();
+            
+            // TODO: Revisit this
+//            if (!map_projection_type.equalsIgnoreCase("UNPROJECTED") && renderPPD>maxRenderPPD) {
+//            	renderPPD=(int)maxRenderPPD;
+//            }
+            
+            if(frames == null || renderPPD != this.renderPPD || 
+                    projHash != Main.PO.getProjectionSpecialParameters().hashCode()) {
+            	recreateImageFrames(renderPPD);
+            }
 
-//    	Runnable runme = new Runnable() {    		
-//			public void run() {
-		        List<ImageFrame> framesInView = new ArrayList<ImageFrame>();
-		        for(int i=0; i<frames.length; i++) {                              
-		            if (doesFrameIntersect(frames[i], worldWin)) {
-		            	framesInView.add(frames[i]);
-		            }
-		        }
-		        
-		        if (framePointsFaked) {	        	
-		        	ImageFrame frameSegmentsToFetch[][][] = FrameFetcher.segment(frames, horizontalSplitCnt, frames.length/horizontalSplitCnt, worldWin);
-		        	
-		        	for (int i=0; i<frameSegmentsToFetch.length; i++) {        	
-		        		FrameFetcher ff = new FrameFetcher(frameSegmentsToFetch[i]);
-		        		ff.fetchFrames();
-		        	}
-		        }
-		        		        
-		 //       System.out.println(imageType + " Frames in View = " + framesInView.size());
-		
-		        task.updateStatus(Status.YELLOW);
-		        
-		        for(ImageFrame f : framesInView) {     
-		        	if (proj.getWorldWindow().equals(worldWin)) {
-		        		drawFrame(f, worldWin, wg2, op);
-		        	} else {
-		        		log.println("Parameters changed, aborting frame draw");
-		        	}
-		        }
-//			}
-//    	};
-    	
-		        task.updateStatus(Status.DONE);
+            List<ImageFrame> framesInView = new ArrayList<ImageFrame>();
+            for(int i=0; i<frames.length; i++) {        
+            	if (doesFrameIntersect(frames[i], offsetWorldWin)) {
+            		framesInView.add(frames[i]);
+            	}
+            }
+
+//            if (framePointsFaked && !getInstrument().equalsIgnoreCase("davinci")) {
+//            	// Only expand if we're dealing with projected images
+//            	boolean expand = !map_projection_type.equalsIgnoreCase("UNPROJECTED");
+//
+//            	// TODO: Review this code very closely.  It becomes very expensive for high resolution images zoomed way in, such as 
+//            	// HiRISE at 262144 ppd.  Ends up being 14000 frames it works on, in an attempt to optimize network retrieval that may not even
+//            	// be necessary.  Maybe check frames in view, then check if they have data locally, and then segment anything that remains somehow?
+//            	ImageFrame frameSegmentsToFetch[][][] = FrameFetcher.segment(frames, horizontalSplitCnt, frames.length/horizontalSplitCnt, offsetWorldWin, expand);
+//
+//            	for (int i=0; i<frameSegmentsToFetch.length; i++) {        	
+//            		FrameFetcher ff = new FrameFetcher(frameSegmentsToFetch[i]);
+//            		ff.fetchFrames();
+//            	}
+//            }
+
+            task.updateStatus(Status.YELLOW);
+
+            int loopCnt=0;
+            restart: while(true) {
+            	loopCnt++;
+            	if (loopCnt>framesInView.size()+1) {
+            		System.out.println("Autoscale values didn't converge");
+            		break;
+            	}
+	            for(ImageFrame f : framesInView) {
+	            	if (!request.changed()) {
+	            		autoValuesChanged=false;
+	           			drawFrame(f, offsetWorldWin, wg2, fs, target, request);
+	           			if (autoValuesChanged) {
+	           				// Abort and restart this loop
+	           				continue restart;
+	           			}
+	            	} else {
+	            		// Parameters changed, abort frame draw
+	            		return;
+	            	}
+	            }
+	            break;
+            }
+        } finally {
+            task.updateStatus(Status.DONE);
+        }
     }
     
     // Draw this frame onto the specified g2.  Draw it multiple times if
     // necessary due to worldwrap.  (How often are we really going to be
     // zoomed out enough to actually worry about this for stamps?)
-    private void drawFrame(ImageFrame frame, Rectangle2D worldWin, Graphics2D wg2, BufferedImageOp op) {
+    private void drawFrame(ImageFrame frame, Rectangle2D worldWin, Graphics2D wg2, FilledStampImageType fs, BufferedImage target, final StampLView.DrawFilledRequest request) {
         final double base = Math.floor(worldWin.getMinX() / 360.0) * 360.0;
         
-        final int numWorldSegments =
-            (int) Math.ceil (worldWin.getMaxX() / 360.0) -
-            (int) Math.floor(worldWin.getMinX() / 360.0);
+        final int numWorldSegments = (int) Math.ceil (worldWin.getMaxX() / 360.0) - (int) Math.floor(worldWin.getMinX() / 360.0);
         
         Rectangle2D.Double where = new Rectangle2D.Double();
         
         where.setRect(frame.cell.getWorldBounds());
+        
         double origX = where.x;
         
         int start = where.getMaxX() < 360.0 ? 0 : -1;
@@ -703,14 +522,134 @@ public class StampImage
             where.x = origX + base + 360.0*m;
             if(worldWin.intersects(where)) {
             	Graphics2D g2 = getFrameG2(wg2);
-            	BufferedImage image = frame.getImage();
-                g2.transform(Util.image2world(image.getWidth(), image.getHeight(), where));
-                g2.drawImage(image, op, 0, 0);
+            	
+        		int screenWidth = (int)(worldWin.getWidth()*renderPPD);
+        		int screenHeight = (int)(worldWin.getHeight()*renderPPD);
+        		
+        		int dstW = (int) Math.ceil(where.getWidth()  * renderPPD);
+        		int dstH = (int) Math.ceil(where.getHeight() * renderPPD);
+        		
+        		Rectangle2D regionToProject = null;
+        		
+        		// TODO: The current stamp projection mechanism is inefficient in that cell bounds get expanded to rectangles, which ultimately overlap
+        		// with each other.  These overlapping areas then get processed for each frame, resulting in unnecessary work.  In some cases this excess
+        		// work is trivial, in others is can be substantial.  Map layer style tiling may be appropriate, but it still has to be done on an image
+        		// by image basis, taking individual image offsets into consideration, as the entire stamp layer is very dynamic in nature.
+        		
+        		int frame_limit = (int) Math.max(screenWidth, screenHeight)*4;   // This is completely arbitrary and should probably be tuned. 
+        		
+        		BufferedImage image;
+        		        		
+        		if (dstW > frame_limit || dstH > frame_limit) {
+        			// When we're zoomed really far into a low resolution image (which can happen intentionally or inadvertently when multiple datasets 
+        			// are in use), the buffered image for the frame can become gigantic, even though the user only sees a tiny fraction of it.
+        			// Just project the bounds of the screen, as it's going to be significantly smaller than a frame
+        			regionToProject = worldWin;  
+        			image = frame.getProjectedImage(worldWin);
+        		} else {
+        			image = frame.getProjectedImage();
+        			regionToProject = where;
+        		}
+        		
+        		if (request.changed()) return;
+        		
+        		g2.transform(Util.image2world(image.getWidth(), image.getHeight(), regionToProject));
+            	
+				if (target!=null) {
+					Point2D src = new Point2D.Float();
+					Point2D dst = new Point2D.Float();
+					
+					AffineTransform at=null;
+					
+					try {
+						at = g2.getTransform().createInverse();
+					} catch (NoninvertibleTransformException e) {
+						e.printStackTrace();
+					}
+					
+					int width=target.getWidth();
+					int height=target.getHeight();
+					
+					for (int i=0; i<width;i++) {
+						for (int j=0; j<height;j++) {
+							dst.setLocation(i, j);
+							at.transform(dst, src);
+														
+							double srcX = src.getX();
+							double srcY = src.getY();
+							
+							if (srcX<0 && srcX>-0.5) srcX=0;
+							if (srcY<0 && srcY>-0.5) srcY=0;
+							
+							if (srcX>=image.getWidth() && srcX<image.getWidth()+0.5) srcX=image.getWidth()-1;
+							if (srcY>=image.getHeight() && srcY<image.getHeight()+0.5) srcY=image.getHeight();
+							
+							if (srcX>=image.getWidth()) continue;
+							if (srcY>=image.getHeight()) continue;
+							if (srcX<0) continue;
+							if (srcY<0) continue;
+
+							try {
+								double sample = image.getRaster().getSampleFloat((int)Math.floor(srcX), (int)Math.floor(srcY), 0);
+									
+								if (sample<-100000) sample=IGNORE_VALUE;
+									
+								if (Double.isNaN(sample)) sample=IGNORE_VALUE;
+
+								if (sample==IGNORE_VALUE) {
+									// In the case where we're drawing overlapping stamps, do NOT replace actual data from a previous stamp 
+									// with transparent pixels from this one
+									if (target.getRaster().getSample(i, j, 0)!=0) continue;
+								}
+								target.getRaster().setSample(i, j, 0, sample);
+							} catch (Exception e3) {
+								System.out.println("OUT OF BOUNDS: src.getX() " + src.getX() + " : " + src.getY());
+								continue;
+							}
+						}
+					}
+				} else {
+					if (request.changed()) return;
+					
+					if (isNumeric) {
+						try {
+							BufferedImage image3 = new BufferedImage(image.getWidth(), image.getHeight(), BufferedImage.TYPE_INT_ARGB);
+
+							// Ignore all black pixels for numeric stamp data
+							Graphics2D g3 = image3.createGraphics();
+							g3.setComposite(new IgnoreComposite(Color.black));
+							
+							// Filter using the FloatingPointOp first
+			                FloatingPointImageOp op2 = new FloatingPointImageOp(this);														
+							g3.drawImage(image, op2, 0, 0);
+							
+							BufferedImageOp op = fs.getColorMapOp(image3).forAlpha(1);
+							// Then apply the ColorOp to give the user the normal controls
+							g2.drawImage(image3, op, 0, 0);
+						} catch (Exception e) {
+							e.printStackTrace();
+						}
+					} else {
+				    	if (ignore_value!=-1) {
+							BufferedImage image2 = Util.createCompatibleImage(image, image.getWidth(), image.getHeight());
+							
+							Graphics2D g3 = image2.createGraphics();
+							g3.setComposite(new IgnoreComposite(Color.black));
+							g3.drawImage(image, null, 0, 0);
+							image = image2;
+				    	}
+				    	
+						BufferedImageOp op = fs.getColorMapOp(image).forAlpha(1);
+						g2.drawImage(image, op, 0, 0);
+					}					
+				}
             }
         }                    	
     }
     
     public static boolean doesFrameIntersect(ImageFrame frame, Rectangle2D worldWin) {
+    	if (frame==null) return false;  // Can occur when testing whether to expand tile requests
+    	
         final double base = Math.floor(worldWin.getMinX() / 360.0) * 360.0;
         
         final int numWorldSegments =
@@ -827,16 +766,20 @@ public class StampImage
     /**
 	 * Creates a copy of the given Graphics2D and prepares it for rendering
 	 * frames of this image type.
-	 * 
-	 * TODO: Some images may not want all black to be made transparent.  Need a flag
-	 * to indicate this somehow.
 	 */    
     protected final java.awt.Graphics2D getFrameG2(Graphics2D g2) {
     	g2 = (Graphics2D) g2.create();
-    	if (instrument==Instrument.THEMIS && imageType.startsWith("D")) {
-    		g2.setComposite(new IgnoreComposite(Color.black));
-    	} else if (instrument==Instrument.HRSC || instrument==Instrument.CRISM) {
-    		g2.setClip(myStamp.getNormalPath());
+    	
+    	// This functionality is now implemetned slightly differently to avoid making data transparent when the grayscale slider is adjusted
+//    	if (ignore_value!=-1) {
+//    		g2.setComposite(new IgnoreComposite(Color.black));
+//    	} else 
+    	if (clip_to_path) {
+    		Shape path=myStamp.getNormalPath();
+    		
+    		path=getAdjustedClipArea(new Area(path));
+    		
+    		g2.setClip(path);
     	}
     	
     	// Something like this is needed for multi-threaded rendering support.
@@ -844,6 +787,7 @@ public class StampImage
     	
     	return g2;
     }
+    
     /**
      ** Not quite sure what this does: see implementation in
      ** PdsImage. -- Joel Hoff
@@ -852,13 +796,13 @@ public class StampImage
     {
         return null;
     }
-                       
+                           
     public int getHeight()
     {
     	if (image!=null) {
             return image.getHeight();    		
     	} else {
-    		return (int)getNumLines();
+    		return getNumLines();
     	}
     }
     
@@ -873,11 +817,11 @@ public class StampImage
     
     // This block moved over from StampShape - it's tied to imageType,
     // not generic by Shape...
-    private long numLines=Long.MIN_VALUE;
+    private int numLines=Integer.MIN_VALUE;
     private int numSamplesPerLine=Integer.MIN_VALUE;
     
-    public long getNumLines() {
-    	if (numLines==Long.MIN_VALUE) {
+    public int getNumLines() {
+    	if (numLines==Integer.MIN_VALUE) {
     		getFullImageSize();
     	}
     	return numLines;
@@ -892,15 +836,20 @@ public class StampImage
     
     private void getFullImageSize() {
 		try {
-			String sizeLookupStr = StampLayer.stampURL+"ImageSizeLookup?id="+productID+"&instrument="+getInstrument()+"&imageType="+URLEncoder.encode(imageType)+"&format=JAVA"+StampLayer.getAuthString();
+            String sizeLookupStr = "ImageSizeLookup?id="+productID+"&instrument="+getInstrument()+"&imageType="+imageType+"&format=JAVA";
 					
-			ObjectInputStream ois = new ObjectInputStream(new URL(sizeLookupStr).openStream());
+			ObjectInputStream ois = new ObjectInputStream(StampLayer.queryServer(sizeLookupStr));
 			
 			Integer samples = (Integer)ois.readObject();
 			Long lines = (Long)ois.readObject();
-			numLines = lines.longValue();
+			
+			// Not sure why I ever thought lines needed to be a Long.  An image that's 2 BILLION lines long is... big.
+			numLines = lines.intValue();
 			numSamplesPerLine = samples.intValue();
+			
+			ois.close();
 		} catch (Exception e) {
+			e.printStackTrace();
 			numLines=0;
 			numSamplesPerLine=0;
 			e.printStackTrace();
@@ -912,257 +861,256 @@ public class StampImage
     // include alpha component.
     synchronized public int getRGB(int x, int y) throws Exception 
     {
+        // TODO: THEMIS VIS image products, particularly BWS and RGB, don't
+        // follow the normal rules for how long the last frame is, causing us to
+        // throw an exception while rendering, but still display all of the data
+        // correctly.  This check prevents that exception.  This should be
+        // properly fixed at some point - probably when THEMIS images are
+        // rendered via normal projection logic.
+    	if (x>image.getWidth() || y>image.getHeight()) {
+    		return 0;
+    	}
         return image.getRGB(x, y);
     }
     
-    protected String getCachedImageFrameName(int frame)
+    synchronized public float getFloatVal(HVector ptVect)
     {
-        if (getFilename() != null &&
-                StampImage.STAMP_CACHE != null)
-            return StampImage.STAMP_CACHE + getFilename() + "_" + projHash + "_" + frame + 
-            "_" + imageType + "_" + renderPPD + getImageFrameType(userRotateFlip) + ".png";
-        else
-            return null;
-    }
-    
-    protected static void savePngImage(String fname, BufferedImage image)
-    {
-        if (fname != null &&
-                image != null) {
-            try {
-                File outputFile = new File(fname);
-                
-                if (outputFile != null) {
-                    if (outputFile.exists() &&
-                            outputFile.isDirectory()) {
-                        log.aprintln("Could not store image: " + fname + " is a directory");                        
-                    }
-                    
-                    ImageIO.write(image, "PNG", outputFile);
-                }
+        if (frames==null) {
+        	recreateImageFrames();
+        }
+        
+        for (ImageFrame frame : frames) {
+            Point2D.Double unitPt = new Point2D.Double();
+            
+            if (frame==null || frame.cell==null) {
+            	continue; 
             }
-            catch (Throwable e) {
-                log.aprintln(e);
+            
+            frame.cell.uninterpolate(ptVect, unitPt);
+            
+            // Check whether point falls within cell.
+            if (unitPt.x >= 0  &&  unitPt.x <= 1  &&
+                unitPt.y >= 0  &&  unitPt.y <= 1  )
+            {
+            	
+            	Point2D worldPoint = new Point2D.Double(ptVect.toWorld().getX(), ptVect.toWorld().getY());
+				int ppd = renderPPD;
+								
+				double pixelWidth = 1.0 / ppd;
+				
+				double x = worldPoint.getX();
+				double y = worldPoint.getY();
+				
+				// get tile range of this wrapped piece				
+				double xstart = Math.floor(x / pixelWidth) * pixelWidth;
+				double ystart = Math.floor(y / pixelWidth) * pixelWidth;
+					
+				Rectangle2D tileExtent = new Rectangle2D.Double(xstart, ystart, 1d/ppd, 1d/ppd);
+				
+				BufferedImage image2 = frame.getProjectedImage(tileExtent);
+				
+				float v2 = image2.getRaster().getSampleFloat(0, 0,  0);
+				return v2;            	
             }
         }
         
-    } 
-            
-    /**
-     * Returns the default height of the image frames.
-     */ 
-    protected int getFrameSize()
-    {     
-        if (instrument==Instrument.THEMIS && productID.startsWith("I")) {
-        	return 256;
-        }
-
-    	return getHeight(); 
+        return Float.NaN;
     }
-
-    /**
-     * Returns the exact height of the image frame for the specified
-     * frame of the specified image.  Subclasses may need to override;
-     * the default implementation calls {@link #getFrameSize()}.
-     * 
-     * @param frame frame number, starting from 0.
-     * 
-     * @return Returns the exact height of the specified image frame;
-     * returns 0 if there is an error.
-     */ 
-
-    protected int getFrameSize(int frame)
-    {
-    	if (!framePointsFaked) {
-	        int size = getFrameSize();
-	        int realSize = size;
-	        
-	        if (frames.length > 0 &&
-	            frame == frames.length - 1 &&
-	            size > 0)
-	        {
-	            int remainder = getHeight() % size;
-	            if (remainder > 0)
-	                realSize = remainder;
-	        }
-	        
-	        return realSize;
-    	} else {    		
-        	if (frame!=0 && frame>=frames.length-horizontalSplitCnt) {
-    			return (int)(getFrameSize()*lastFramePct);
-    		} else {
-    			return (int)(getFrameSize()*framePct);
-    		}
-    	}
+                                           
+    // Convenience method, to avoid scattering this silly string of object references all over the code just to get the current zoomPPD
+    protected synchronized void recreateImageFrames() {
+    	int zoomPPD = myStamp.stampLayer.viewToUpdate.viewman.getZoomManager().getZoomPPD();
+    	recreateImageFrames(zoomPPD);
+    	
     }
-                        
+    
     protected synchronized void recreateImageFrames(int renderPPD)
     {
         projHash = Main.PO.getProjectionSpecialParameters().hashCode();
         this.renderPPD = renderPPD;
+        autoMin=Double.NaN;
+        autoMax=Double.NaN;
+        autoValuesChanged=false;
 
         Point2D[] pts = getPoints();
                 
-        double maxPPD = getMaxRenderPPD();
-
-    	double linesPerFrame;
-    	if (renderPPD > maxPPD) {
-        	linesPerFrame = LINES_PER_FRAME;
-    	} else {
-        	linesPerFrame = LINES_PER_FRAME * (maxPPD/renderPPD);        		
-    	}
-    	
-    	double linesAtThisPPD=((renderPPD/maxPPD)*numLines);
-    	
-    	if (instrument == Instrument.THEMIS ||
-    			linesAtThisPPD < LINES_PER_FRAME) {
-    		
-    		framePointsFaked=false;
-    		horizontalSplitCnt=1;
-    		
-    	} else {        	        	
-        	if (linesPerFrame > getNumLines()) {
-        		linesPerFrame=getNumLines();
-        	}
-        	        	
-        	linesPerFrame = Math.ceil(linesPerFrame);
-        	
-    		pts = getFakeFramePoints(pts, (linesPerFrame/getNumLines()));
-    	} 
-        
+   		if (pts.length>4 && realFramePoints) {
+   			// TODO: Maybe these should also be server side paramters?
+			if (myStamp.getId().startsWith("I")) {
+				// Native resolution, IR images are all 256 pixels per frame.  Frame points are provided for us though
+				linesPerFrame=256;
+				linesLastFrame=getHeight()%256;
+				if (linesLastFrame==0) linesLastFrame=256;
+			} else {
+				// VIS is 192 lines per frame, adjusted for summing mode 
+				linesPerFrame=192/summing;
+				linesLastFrame=linesPerFrame;
+			}
+			
+			samplesPerFrame=getWidth();
+			samplesLastFrame=getWidth();
+   		} else {
+   			pts = getNewFakeFramePoints(pts);   			
+   		}
+   		
         int frameCount = pts.length / 4;
         frames = new ImageFrame[frameCount];
                 
-    	for (int i=0; i<frameCount; i++) {	    		        
-	        int thisFrameSize = getFrameSize(i);
-	        
+    	for (int i=0; i<frameCount; i++) {	    		      
+    		
+    		// The last horizonalSplitCnt frames are the last row
+    		boolean lastRow= i>=frames.length-horizontalSplitCnt;
+    		
+    		int frameHeight;
+    		if (lastRow) {
+    			frameHeight=(int)linesLastFrame;
+    		} else {
+    			frameHeight=(int)linesPerFrame;
+    		}
+    		
 	        Rectangle srcRange;
 	        
+	        boolean lastCol= (i%horizontalSplitCnt)==horizontalSplitCnt-1;
+	        
 	        int frameWidth;
-	        if (frameCount==1) {
-	        	frameWidth = getWidth();
+	        if (lastCol) {
+	        	frameWidth = samplesLastFrame;
 	        } else {
-	        	frameWidth=getWidth()/horizontalSplitCnt;
-	        }
-	        int startx;
-	        if (i%horizontalSplitCnt==0) {
-	        	startx=0;
-	        } else {
-	        	startx=(i%horizontalSplitCnt)*getWidth()/horizontalSplitCnt;
-	        }
-
-	        if (i==frameCount-1) {
-	        	srcRange = new Rectangle(startx, i/horizontalSplitCnt * getFrameSize(i-1),
-                    frameWidth, thisFrameSize);	        	
-	        } else {
-	        	srcRange = new Rectangle(startx, i/horizontalSplitCnt * getFrameSize(i),
-	                    frameWidth, thisFrameSize);
+	        	frameWidth = samplesPerFrame;
 	        }
 	        
-//        	for (int x=0; x<pts.length; x++) {
-//        		System.out.println("Cell points: " + pts[x]);
-//        	}
-        	
+	        int startx = (i%horizontalSplitCnt) * samplesPerFrame;
+
+	        int starty = (i/horizontalSplitCnt) * linesPerFrame;
+	        
+        	srcRange = new Rectangle(startx, starty, frameWidth, frameHeight);	        	
+	        
 	        Cell frameCell = new Cell(
 	                 new HVector(pts[i*4]),
 	                 new HVector(pts[i*4+1]),
 	                 new HVector(pts[i*4+3]),
 	                 new HVector(pts[i*4+2]), (Projection_OC)Main.PO);
 	                
-	        frames[i] = new ImageFrame(this, frameCell, srcRange, i);	                             
+	        frames[i] = new ImageFrame(this, productID, imageType, frameCell, srcRange, i, renderPPD, projHash);	                             
     	}
     }
-    
-    public boolean isIntersected(HVector ptVect)
-    {
-        Point2D pt = null;
         
-        pt = getImagePt(ptVect);
-        
-        log.println("returned image pt is " + pt);
-        if ( pt != null)
-            return true;
-        else
-            return false;
-    }
-    
-    /**
-     * Returns image point corresponding to point specified in
-     * HVector coordinate space based on cell coordinate data
-     * stored in frameCells array (generated by createImageFrame()
-     * using getPoints() ).
-     *
-     * If point does not lie within the image, null is returned.
-     */ 
-    public Point2D getImagePt(HVector ptVect)
-    {
-        Point2D.Double pt = null;
-        
-        if (frames==null) {
-        	recreateImageFrames(myStamp.stampLayer.viewToUpdate.viewman2.getMagnification());
-        }
-        
-        if (ptVect != null)
-        {
-            for (int i = 0; i < frames.length; i++)
-            {
-                Point2D.Double unitPt = new Point2D.Double();
-                
-                frames[i].cell.uninterpolate(ptVect, unitPt);
-                
-                // Check whether point falls within cell.
-                if (unitPt.x >= 0  &&  unitPt.x <= 1  &&
-                    unitPt.y >= 0  &&  unitPt.y <= 1  )
-                {
-                    pt = new Point2D.Double();
-                    pt.x = unitPt.x * getWidth();
-                    
-                    if (i == frames.length-1)
-                        pt.y = (1 - unitPt.y) * getFrameSize(i) + i * getFrameSize(0);
-                    else
-                        pt.y = ((1 - unitPt.y) + i) * getFrameSize(i);
-                    
-                    log.println("found point, frame #" + i);
-                    log.println("image coords: x=" + pt.x + " y=" + pt.y);
-                    log.println("unit coords: x=" + unitPt.x + " y=" + unitPt.y);
-                    break;
-                }
-            }
-        }
-        else
-            log.println("ptVect parameter passed in as null");
-        
-        if (pt == null)
-            log.println("returning null image point");
-        else
-            log.println("returning image point: x=" + pt.x + " y=" + pt.y);
-        
-        return pt;
-    }
-
-
     double line_proj_offset = 0;
     double map_resolution = 0;
+    double map_scale = 0;
     double sample_proj_offset = 0;
     double center_lon = 0;
+    double center_lat = 0;
+    double radius = 0;  // TODO Set this to an appropriate default
+    String map_projection_type = "UNPROJECTED";
 
-    HashMap<String,String> projParams=null;
+    boolean clip_to_path = false;
+    long ignore_value = -1;
     
-    public Point2D getHRSCPoint(double line, double sample) {
-    	if (projParams==null) {
-    		projParams=myStamp.getProjectionParams();
+    // Used by THEMIS VIS for BWS images
+    int summing=1;
+    
+    HashMap<String,String> projectionParams=null;
+        
+    /**
+     * Return a copy of the projection params, for display to the user or other purposes
+     * @return
+     */
+    public HashMap<String,String> getProjectionParams() {
+    	return (HashMap<String,String>)projectionParams.clone();
+    }
+    
+    public void parseProjectionParams() {
+		// TODO: Make this not break if any of these parameters aren't present
+    	   map_projection_type = "UNPROJECTED";
+    	   
+    	   if (projectionParams.containsKey("map_projection_type")) {
+    		   map_projection_type = projectionParams.get("map_projection_type");
+    	   }
 
-		   line_proj_offset = Double.parseDouble(projParams.get("line_projection_offset"));
-		   map_resolution = Double.parseDouble(projParams.get("map_resolution"));
-		   sample_proj_offset = Double.parseDouble(projParams.get("sample_projection_offset"));
-		   center_lon = Double.parseDouble(projParams.get("center_longitude"));
-    	}
-    	
-		double lat =  (line_proj_offset - line ) / map_resolution;
-		double lon = 360 - ((sample - sample_proj_offset) / 
-		             ( map_resolution *  Math.cos(Math.toRadians(lat))) + center_lon) ;
-    		        	
-    	return new Point2D.Double(lon,lat);	
+    	   if (projectionParams.containsKey("clip_to_path")) {
+    		   String ctp=projectionParams.get("clip_to_path");
+    		   if (ctp.equalsIgnoreCase("true")) {
+    			   clip_to_path=true;
+    		   }
+    	   }
+
+    	   if (projectionParams.containsKey("ignore_value")) {
+    		   String ignore_str=projectionParams.get("ignore_value");
+    		   ignore_value = Long.parseLong(ignore_str);
+    	   }
+    	   
+    	   if (projectionParams.containsKey("lines")) {
+    		   numLines = Integer.parseInt(projectionParams.get("lines"));
+    	   }
+    	   
+    	   if (projectionParams.containsKey("samples")) {
+    		   numSamplesPerLine = Integer.parseInt(projectionParams.get("samples"));
+    	   }
+    	   
+    	   if (projectionParams.containsKey("summing")) {
+    		   summing = Integer.parseInt(projectionParams.get("summing"));
+    	   }
+    	   
+    	   if (projectionParams.containsKey("numeric")) {
+    		   isNumeric = true;
+    	   }
+    	   
+    	   // New options, to avoid hardcoding things like 'THEMIS' - ABR, BTR, PBT
+    	   if (projectionParams.containsKey("pdsImage")) {
+    		   isPDSImage = true;
+    	   }
+    	   
+    	   // Older THEMIS DCS images.  New images are properly projected... I think.
+    	   if (projectionParams.containsKey("themisDCS")) {
+    		   isTHEMISDCS = true;
+    	   }    	   
+    	   
+    	   // Did we download the entire image, or just a subset
+    	   // True for old THEMIS BWS images, and possibly others
+    	   if (projectionParams.containsKey("fullImageLocal")) {
+    		   fullImageLocal = true;
+    	   }
+    	   
+    	   // We have tie points for every frame, so don't need to interpolate fake ones (usually means THEMIS VIS)
+    	   if (projectionParams.containsKey("realFramePoints")) {
+    		   realFramePoints = true;
+    	   }
+
+    	   if (projectionParams.containsKey("units")) {
+    		   units = projectionParams.get("units");
+    	   }
+
+    	   if (projectionParams.containsKey("unit_desc")) {
+    		   unitDesc = projectionParams.get("unit_desc");
+    	   }
+
+    	   if (projectionParams.containsKey("minValue")) {
+    		   minValue = Double.parseDouble(projectionParams.get("minValue"));
+    	   }
+
+    	   if (projectionParams.containsKey("maxValue")) {
+    		   maxValue = Double.parseDouble(projectionParams.get("maxValue"));
+    	   }
+
+    	   if (map_projection_type.equalsIgnoreCase("CYLINDRICAL")) {
+    		   return;
+    	   }
+
+    	   if (map_projection_type.equalsIgnoreCase("UNPROJECTED")) {
+    		   return;
+    	   }
+    	   
+    	   // TODO: Add logic to behave gracefully if all of these parameters aren't present
+    	   line_proj_offset = Double.parseDouble(projectionParams.get("line_projection_offset"));
+    	   map_resolution = Double.parseDouble(projectionParams.get("map_resolution"));
+    	   sample_proj_offset = Double.parseDouble(projectionParams.get("sample_projection_offset"));
+    	   center_lon = Double.parseDouble(projectionParams.get("center_longitude"));
+    	   map_scale = Double.parseDouble(projectionParams.get("map_scale"));
+    	   center_lat = Double.parseDouble(projectionParams.get("center_latitude"));
+    	   
+    	   // TODO: If we get here and don't have a radius, should be abort somehow?
+    	   radius = Double.parseDouble(projectionParams.get("radius"));
     }
 
     /**
@@ -1229,23 +1177,5 @@ public class StampImage
 	        path.closePath();
 	    } 
 	    return  path;
-	}
-    
-    
+	}	
 }
-
-
-enum Instrument {
-	THEMIS,
-	MOC,
-	VIKING,
-	CTX,
-	HIRISE,
-	HRSC,
-	MOSAIC,
-	MAP,
-	CRISM,
-	ASTER,
-	APOLLO;
-}
-

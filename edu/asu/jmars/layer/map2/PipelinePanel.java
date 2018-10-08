@@ -1,67 +1,82 @@
-// Copyright 2008, Arizona Board of Regents
-// on behalf of Arizona State University
-// 
-// Prepared by the Mars Space Flight Facility, Arizona State University,
-// Tempe, AZ.
-// 
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-// 
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU General Public License for more details.
-// 
-// You should have received a copy of the GNU General Public License
-// along with this program.  If not, see <http://www.gnu.org/licenses/>.
-
-
 package edu.asu.jmars.layer.map2;
 
 import java.awt.BorderLayout;
+import java.awt.Dimension;
+import java.awt.GridBagConstraints;
+import java.awt.GridBagLayout;
 import java.awt.GridLayout;
+import java.awt.Insets;
 import java.awt.event.ActionEvent;
 import java.awt.event.ActionListener;
+import java.awt.event.FocusAdapter;
+import java.awt.event.FocusEvent;
 import java.awt.geom.Point2D;
+import java.awt.geom.Rectangle2D;
+import java.beans.PropertyChangeEvent;
+import java.beans.PropertyChangeListener;
+import java.text.MessageFormat;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
-import java.util.Iterator;
 import java.util.List;
 
+import javax.swing.AbstractAction;
 import javax.swing.BorderFactory;
 import javax.swing.Box;
 import javax.swing.BoxLayout;
 import javax.swing.ImageIcon;
 import javax.swing.JButton;
+import javax.swing.JComboBox;
 import javax.swing.JLabel;
 import javax.swing.JOptionPane;
 import javax.swing.JPanel;
+import javax.swing.JScrollPane;
+import javax.swing.JTextArea;
+import javax.swing.JTextField;
+import javax.swing.event.AncestorEvent;
 
 import edu.asu.jmars.Main;
+import edu.asu.jmars.layer.LManager;
+import edu.asu.jmars.layer.ProjectionListener;
 import edu.asu.jmars.layer.map2.msd.PipelineLegModel;
 import edu.asu.jmars.layer.map2.msd.PipelineLegModelEvent;
 import edu.asu.jmars.layer.map2.msd.PipelineLegModelListener;
-import edu.asu.jmars.util.DebugLog;
+import edu.asu.jmars.layer.map2.stages.ColorStretcherStage;
+import edu.asu.jmars.layer.map2.stages.ColorStretcherStageSettings;
+import edu.asu.jmars.layer.map2.stages.GrayscaleStage;
+import edu.asu.jmars.layer.map2.stages.GrayscaleStageSettings;
+import edu.asu.jmars.swing.AncestorAdapter;
+import edu.asu.jmars.util.Util;
 
-public class PipelinePanel extends JPanel implements PipelineLegModelListener {
+public class PipelinePanel extends JPanel implements PipelineLegModelListener, ProjectionListener {
 	private static final long serialVersionUID = 1L;
-	private DebugLog log = DebugLog.instance();
 	
 	public static final String insertButtonLabel = "+";
 	public static final String removeButtonLabel = "-";
+	public static final int    offsetDecimalDigits = 4;
 	
 	JPanel innerPanel;
 	PipelineLegModel legModel;
+	
+	// set an instance variable which will contain the map source.
+	private final MapSource mapSource;
+	
+	// Used to display the nudge offset if the nudge panel is present.
+	private final JLabel offsetXLabel = new JLabel();
+	private final JLabel offsetYLabel = new JLabel();
+	
+	private JTextField maxPPDField;
+	private JTextField ignoreValueField;
 	
 	public PipelinePanel(PipelineLegModel legModel){
 		super();
 		this.legModel = legModel;
 		this.legModel.addPipelineLegModelListener(this);
-		
+		this.mapSource = getMapSource();
 		initialize();
+		
+		// add this PipelinePanel as a projection listener so it can react to projection changes.
+		Main.addProjectionListener(this);
 	}
 	
 	public PipelineLegModel getModel(){
@@ -78,9 +93,9 @@ public class PipelinePanel extends JPanel implements PipelineLegModelListener {
 	 * @return Filtered, possibly empty list of StageViews that can go at the 
 	 *         specified index.
 	 */
-	private List filterForInsertByStagePosition(List possibleStages, int index){
+	private List<Stage> filterForInsertByStagePosition(List<Stage> possibleStages, int index){
 		if (index < 0)
-			return Collections.EMPTY_LIST;
+			return Collections.emptyList();
 		
 		// get input MapAttr from MapSource or previous stage
 		MapAttr prevType;
@@ -94,9 +109,8 @@ public class PipelinePanel extends JPanel implements PipelineLegModelListener {
 		Stage nextStage = legModel.getStage(index);
 		int   nextStageInputIndex = index == legModel.getInnerStageCount()? legModel.getAggStageInputNumber(): 0;
 		
-		List stages = new ArrayList();
-		for (Iterator it=possibleStages.iterator(); it.hasNext(); ) {
-			Stage stage = (Stage)it.next();
+		List<Stage> stages = new ArrayList<Stage>();
+		for (Stage stage: possibleStages) {
 			if (stage.canTake(0, prevType) && nextStage.canTake(nextStageInputIndex, stage.produces())) {
 				stages.add(stage);
 			}
@@ -154,9 +168,10 @@ public class PipelinePanel extends JPanel implements PipelineLegModelListener {
 	}
 	
 	private void initialize(){
+		
 		// Inner panel holds the source panel and stage panels
 		innerPanel = new JPanel();
-		innerPanel.setLayout(new BoxLayout(innerPanel, BoxLayout.Y_AXIS));
+		innerPanel.setLayout(new BoxLayout(innerPanel, BoxLayout.PAGE_AXIS));
 		innerPanel.add(createSourcePanel());
 		
 		// Insert the stages that we inherited from the pipeline
@@ -172,143 +187,455 @@ public class PipelinePanel extends JPanel implements PipelineLegModelListener {
 		
 	}
 	
+	private class ViewCitationAction extends AbstractAction {
+		public ViewCitationAction(){
+			super("View Citation");
+		}
+		
+		public void actionPerformed(ActionEvent e) {
+			JTextArea ta = new JTextArea(mapSource.getAbstract(), 5, 40);
+			ta.setEditable(false);
+			ta.setLineWrap(true);
+			ta.setWrapStyleWord(true);
+			
+			JScrollPane areaScrollPane = new JScrollPane(ta);
+			areaScrollPane.setVerticalScrollBarPolicy(JScrollPane.VERTICAL_SCROLLBAR_AS_NEEDED);
+			
+			JOptionPane.showMessageDialog(LManager.getDisplayFrame(), areaScrollPane,
+					"Citation for "+mapSource.getTitle(), JOptionPane.INFORMATION_MESSAGE);
+			
+		}
+	}
+	
 	private JPanel createSourcePanel(){
-		final MapSource source = getMapSource();
 		
-		JLabel srcLbl = new JLabel(source.getTitle());
-		JPanel srcLblPanel = new JPanel(new BorderLayout());
-		srcLblPanel.add(srcLbl, BorderLayout.NORTH);
+		// create the panel to hold the source label and nudge options
+		JPanel sourcePipelinePanel = new JPanel();
+		sourcePipelinePanel.setLayout(new BoxLayout(sourcePipelinePanel, BoxLayout.PAGE_AXIS));
+		sourcePipelinePanel.setBorder(BorderFactory.createTitledBorder("Source"));	
 		
-		JPanel sourcePipelinePanel = new JPanel(new BorderLayout());
-		sourcePipelinePanel.setBorder(BorderFactory.createTitledBorder("Source"));
+		// create a JPanel to hold the title and expand button
+		JPanel sourceTitlePanel = new JPanel();
+		sourceTitlePanel.setLayout(new BoxLayout(sourceTitlePanel, BoxLayout.LINE_AXIS));
 		
+		// create the source options button and add it to the panel
 		JButton insertButton = new JButton(insertButtonLabel);
 		insertButton.addActionListener(new ActionListener(){
 			public void actionPerformed(ActionEvent e){
 				dialogInsertStageAt(0);
 			}
 		});
+		sourceTitlePanel.add(insertButton);
+
+		JButton viewCitationButton = new JButton(new ViewCitationAction());
+		sourceTitlePanel.add(viewCitationButton);
 		
-		JPanel buttonInnerPanel = new JPanel(new GridLayout(1,1));
-		buttonInnerPanel.add(insertButton);
-		JPanel buttonPanel = new JPanel(new BorderLayout());
-		buttonPanel.add(buttonInnerPanel, BorderLayout.NORTH);
+		// add the source label to the panel.
+		// append a space to the front of the label to space away from the options button.
+		JLabel srcLbl = new JLabel(" " + mapSource.getTitle());
+		sourceTitlePanel.add(srcLbl);
+		// add a filler to fill in to the right
+		sourceTitlePanel.add(Box.createHorizontalGlue());
 		
-		// If the source is movable, display a nudge panel, otherwise leave the space empty
-		if (source.isMovable()) {
-			JPanel nudgeCursorPanel = new JPanel();
-			nudgeCursorPanel.setLayout(new GridLayout(3,3));
+		sourcePipelinePanel.add(sourceTitlePanel);
+		
+		// check mapsource bounding size to determine if it needs to
+		// have the recenter button.  Only add recenter if the source
+		// is smaller then 180 x 360
+		Rectangle2D mapDim = mapSource.getLatLonBoundingBox();
+		if (!(mapDim.getHeight()==180 && mapDim.getWidth()==360)){
+			sourcePipelinePanel.add(createRecenterButton());
+		}
+		
+		// add the nudge panel if this mapSource is movable.
+		if(mapSource.isMovable()){
+			JPanel formatPanel = new JPanel();
+			formatPanel.setLayout(new BoxLayout(formatPanel, BoxLayout.LINE_AXIS));
+			formatPanel.add(createNudgePanel());
 			
-			JButton left = new JButton(new ImageIcon(Main.getResource("resources/pan_w.gif")));
-			JButton right = new JButton(new ImageIcon(Main.getResource("resources/pan_e.gif")));
-			JButton up = new JButton(new ImageIcon(Main.getResource("resources/pan_n.gif")));
-			JButton down = new JButton(new ImageIcon(Main.getResource("resources/pan_s.gif")));			
-			final JButton stepToggle = new JButton("1");
+			// add some space
+			formatPanel.add(Box.createRigidArea(new Dimension(5,0)));
 			
-			left.setFocusable(false);
-			right.setFocusable(false);
-			up.setFocusable(false);
-			down.setFocusable(false);
-			stepToggle.setFocusable(false);
+			// add the properties panel
+			formatPanel.add(createMapPropertiesPanel());
 			
-			// Allow for moving by various pixel increments.  Patterned after the behavior in the Stamp layer
-			stepToggle.addActionListener(new ActionListener(){			
-				public void actionPerformed(ActionEvent e) {
-					int stepSize = 1;
-					
-					try {
-						stepSize=Integer.parseInt(stepToggle.getText());
-					} catch (NumberFormatException nfe) {
-						log.print("NumberFormatException caught in stepToggle: " + nfe.getMessage());
-					}
-					
-					if (stepSize==1) {
-						stepSize=2;
-					} else if (stepSize==2) {
-						stepSize=5;
-					} else if (stepSize==5) {
-						stepSize=10;
-					} else {
-						stepSize=1;
-					}
-					
-					stepToggle.setText(""+stepSize);
-				}			
-			});
-			
-			left.addActionListener(new ActionListener() {				
-				public void actionPerformed(ActionEvent e) {
-					double dx = Double.parseDouble(stepToggle.getText()) / Main.testDriver.mainWindow.getMagnify();
-					Point2D p = source.getOffset();
-					source.setOffset(new Point2D.Double(p.getX()+dx, p.getY()));
-					Main.testDriver.mainWindow.viewChanged();
-					Main.testDriver.mainWindow.getChild().viewChanged();
-				}
-			});
-			
-			right.addActionListener(new ActionListener() {				
-				public void actionPerformed(ActionEvent e) {
-					double dx = -Double.parseDouble(stepToggle.getText()) / Main.testDriver.mainWindow.getMagnify();
-					Point2D p = source.getOffset();
-					source.setOffset(new Point2D.Double(p.getX()+dx, p.getY()));
-					Main.testDriver.mainWindow.viewChanged();
-					Main.testDriver.mainWindow.getChild().viewChanged();
-				}
-			});
-			
-			up.addActionListener(new ActionListener() {				
-				public void actionPerformed(ActionEvent e) {
-					double dy = -Double.parseDouble(stepToggle.getText()) / Main.testDriver.mainWindow.getMagnify();
-					Point2D p = source.getOffset();
-					source.setOffset(new Point2D.Double(p.getX(), p.getY()+dy));
-					Main.testDriver.mainWindow.viewChanged();
-					Main.testDriver.mainWindow.getChild().viewChanged();
-				}
-			});
-			
-			down.addActionListener(new ActionListener() {
-				public void actionPerformed(ActionEvent e) {
-					double dy = Double.parseDouble(stepToggle.getText()) / Main.testDriver.mainWindow.getMagnify();
-					Point2D p = source.getOffset();
-					source.setOffset(new Point2D.Double(p.getX(), p.getY()+dy));
-					Main.testDriver.mainWindow.viewChanged();
-					Main.testDriver.mainWindow.getChild().viewChanged();
-				}
-			});
-			
-			nudgeCursorPanel.add(new JLabel());
-			nudgeCursorPanel.add(up);
-			nudgeCursorPanel.add(new JLabel());
-			nudgeCursorPanel.add(left);
-			nudgeCursorPanel.add(stepToggle);
-			nudgeCursorPanel.add(right);
-			nudgeCursorPanel.add(new JLabel());
-			nudgeCursorPanel.add(down);
-			nudgeCursorPanel.add(new JLabel());
-			
-			JButton reset = new JButton("Reset");
-			reset.addActionListener(new ActionListener(){			
-				public void actionPerformed(ActionEvent e) {
-					source.setOffset(new Point2D.Double(0,0));
-					Main.testDriver.mainWindow.viewChanged();
-					Main.testDriver.mainWindow.getChild().viewChanged();
-				}			
-			});
-			
-			JPanel nudgePanel = new JPanel();
-			nudgePanel.setLayout(new BoxLayout(nudgePanel, BoxLayout.X_AXIS));
-			nudgePanel.setBorder(BorderFactory.createTitledBorder("Nudge Map"));
-			nudgePanel.add(nudgeCursorPanel);
-			nudgePanel.add(Box.createHorizontalStrut(2));
-			nudgePanel.add(reset);
-			
-			sourcePipelinePanel.add(nudgePanel, BorderLayout.WEST);
+			sourcePipelinePanel.add(formatPanel);
+		}else{
+			// add the properties panel
+			sourcePipelinePanel.add(createMapPropertiesPanel());
 		}
 
-		sourcePipelinePanel.add(srcLblPanel, BorderLayout.CENTER);
-		sourcePipelinePanel.add(buttonPanel, BorderLayout.EAST);
-
 		return sourcePipelinePanel;
+	}
+	
+	/**
+	 * Creates a button to recenter the JMARS view over this mapSource
+	 * @return a JPanel
+	 */
+	private JPanel createRecenterButton(){
+		JPanel buttonPanel = new JPanel();
+		buttonPanel.setLayout(new BoxLayout(buttonPanel, BoxLayout.LINE_AXIS));
+		buttonPanel.setBorder(BorderFactory.createTitledBorder("View"));
+		
+		JButton recenterButton = new JButton("Center");
+		recenterButton.addActionListener(new ActionListener() {				
+			public void actionPerformed(ActionEvent e) {
+				// recenter the location manager (JMARS View) over this map source
+				Rectangle2D mapDim = mapSource.getLatLonBoundingBox();
+				double centerX = mapDim.getCenterX();
+				double centerY = mapDim.getCenterY();
+				Main.testDriver.locMgr.setLocation(Main.PO.convSpatialToWorld(360-centerX,centerY),true);
+			}
+		});
+		buttonPanel.add(recenterButton);
+		
+		// add a small spacer 
+		buttonPanel.add(Box.createRigidArea(new Dimension(5,0)));
+		
+		// add an information label
+		JLabel infoLabel = new JLabel("Center the view over this source.");
+		buttonPanel.add(infoLabel);
+		
+		// add glue so horizontal stretch will occur here.
+		buttonPanel.add(Box.createHorizontalGlue());
+		
+		return buttonPanel;
+	}
+	
+	/** Sets the ignoreValue field equal to the ignore value on the mapSource. */
+	private void sourceToIgnoreField() {
+		double[] ignore = mapSource.getIgnoreValue();
+		if (ignore == null) {
+			ignoreValueField.setText("");
+		} else {
+			String[] strings = new String[ignore.length];
+			for (int i = 0; i < ignore.length; i++) {
+				if (Double.isNaN(ignore[i])) {
+					strings[i] = "-";
+				} else {
+					strings[i] = MessageFormat.format("{0,number,#.##########}", ignore[i]);
+				}
+			}
+			ignoreValueField.setText(Util.join(", ", strings));
+		}
+	}
+	
+	private MapSourceListener sourceListener = new MapSourceListener() {
+		public void changed(MapSource source) {
+			if (source == mapSource) {
+				sourceToMaxPPDField();
+				sourceToIgnoreField();
+				resetOffsetLabels();
+			}
+		}
+	};
+	
+	private void sourceToMaxPPDField() {
+		maxPPDField.setText("" + mapSource.getMaxPPD());
+	}
+	
+	/**
+	 * Creates a JPanel that holds map properties options 
+	 * @return the JPanel containing the map properties inputs.
+	 */
+	private JPanel createMapPropertiesPanel(){
+		JPanel propertiesPanel = new JPanel();
+		
+		propertiesPanel.setBorder(BorderFactory.createTitledBorder("Map Properties"));
+		//propertiesPanel.setLayout(new BoxLayout(propertiesPanel,BoxLayout.LINE_AXIS));
+		propertiesPanel.setLayout(new BorderLayout());
+		
+		propertiesPanel.addAncestorListener(new AncestorAdapter() {
+			public void ancestorAdded(AncestorEvent event) {
+				mapSource.addListener(sourceListener);
+				sourceListener.changed(mapSource);
+			}
+			public void ancestorRemoved(AncestorEvent event) {
+				mapSource.removeListener(sourceListener);
+			}
+		});
+		
+		// define the labels and fields to be used.
+		final JLabel maxPPDLabel = new JLabel("Max PPD");
+		maxPPDField = new JTextField(""+mapSource.getMaxPPD(), 8);
+		maxPPDField.setToolTipText("Set the maxPPD value.  Accepts values " + MapSource.MAXPPD_MIN + " to " + MapSource.MAXPPD_MAX + ".");
+		maxPPDField.addActionListener(new ActionListener(){
+			public void actionPerformed(ActionEvent e){
+				updateMaxPPDFromField();
+			}
+		});
+		maxPPDField.addFocusListener(new FocusAdapter(){
+			public void focusLost(FocusEvent e) {
+				updateMaxPPDFromField();
+			}
+		});
+		
+		final JLabel ignoreValueLabel = new JLabel("Ignore Value");
+		ignoreValueField = new JTextField(7);
+		ignoreValueField.setToolTipText("NODATA pixel value, e.g. '0' for black, '255,255,0' for yellow, or '0,-,-' for red=0.");
+		sourceToIgnoreField();
+		ignoreValueField.addActionListener(new ActionListener(){
+			public void actionPerformed(ActionEvent e){
+				updateIgnoreValueFromField();
+			}
+		});
+		ignoreValueField.addFocusListener(new FocusAdapter(){
+			public void focusLost(FocusEvent e) {
+				updateIgnoreValueFromField();
+			}
+		});
+		
+		final int gap = 2;
+		JPanel out = new JPanel(new GridBagLayout());
+		Insets in = new Insets(gap,gap,gap,gap);
+		out.add(maxPPDLabel, new GridBagConstraints(0,0,1,1,0,0,GridBagConstraints.LINE_START,GridBagConstraints.HORIZONTAL,in,gap,gap));
+		out.add(maxPPDField, new GridBagConstraints(1,0,1,1,0,0,GridBagConstraints.LINE_START,GridBagConstraints.HORIZONTAL,in,gap,gap));
+		out.add(ignoreValueLabel, new GridBagConstraints(0,1,1,1,0,0,GridBagConstraints.LINE_START,GridBagConstraints.HORIZONTAL,in,gap,gap));
+		out.add(ignoreValueField, new GridBagConstraints(1,1,1,1,0,0,GridBagConstraints.LINE_START,GridBagConstraints.HORIZONTAL,in,gap,gap));
+		
+		propertiesPanel.add(out, BorderLayout.LINE_START);
+		
+		return propertiesPanel;
+	}
+	
+	/**
+	 * Validates and pulls the value from the MaxPPD field then refreshes the map.
+	 */
+	private void updateMaxPPDFromField(){
+		// Set the mapSource maxPPD to what is set in the maxPPD text field
+		try {
+			double newMaxPPDValue = Double.parseDouble(maxPPDField.getText());
+			
+			// only refresh if the maxPPD value was changed
+			if(newMaxPPDValue!=mapSource.getMaxPPD()) {
+				mapSource.setMaxPPD(newMaxPPDValue);
+			}
+		} catch (Exception paramEx) {
+			sourceToMaxPPDField();
+			JOptionPane.showMessageDialog(null, "MaxPPD must be between " + MapSource.MAXPPD_MIN + " and " + MapSource.MAXPPD_MAX + ".","Input Error",JOptionPane.ERROR_MESSAGE);
+		}
+	}
+	
+	/**
+	 * Validates and pulls the value from the ignore value field then refreshes the map.
+	 */
+	private void updateIgnoreValueFromField(){
+		double[] newIgnoreArray;
+		String newValue = ignoreValueField.getText().trim();
+		if (newValue.equals("")) {
+			// set the ignore value to null
+			newIgnoreArray = null;
+		} else {
+			// This field is setup to support multiple bands separated by spaces or commas.
+			String[] newValuesArray = newValue.split("[, ]+");
+			int bandCount = newValuesArray.length;
+			Integer numColors = mapSource.getMapAttr().getNumColorComp();
+			try {
+				if (bandCount != 1 && !new Integer(bandCount).equals(numColors)) {
+					sourceToIgnoreField();
+					throw new IllegalArgumentException("Wrong number of ignore values entered\n\n" +
+						"Must enter 1 " + (numColors != null ? "or " + numColors + " values" : "value"));
+				} else {
+					newIgnoreArray = new double[bandCount];
+					for(int i=0; i<bandCount; i++) {
+						try {
+							newIgnoreArray[i] = Double.parseDouble(newValuesArray[i]);
+						} catch (Exception e) {
+							newIgnoreArray[i] = Double.NaN;
+						}
+					}
+				}
+			} catch (Exception ex) {
+				JOptionPane.showMessageDialog(null, ex.getMessage(), "Ignore Value Error", JOptionPane.ERROR_MESSAGE);
+				newIgnoreArray = mapSource.getIgnoreValue();
+			}
+		}
+		
+		if (!Arrays.equals(mapSource.getIgnoreValue(), newIgnoreArray)) {
+			mapSource.setIgnoreValue(newIgnoreArray);
+			// redisplay the user-entered values so formatting takes affect
+			sourceToIgnoreField();
+		}
+	}
+	
+	/**
+	 * Creates the nudge panel to be added to the PipelinePanel
+	 * @param source the MapSource
+	 * @return a JPanel containing the nudge interface.
+	 */
+	private JPanel createNudgePanel(){
+
+		JPanel nudgeCursorPanel = new JPanel();
+		nudgeCursorPanel.setLayout(new GridLayout(3,3));
+		nudgeCursorPanel.setMaximumSize(new Dimension(60,60));
+		
+		// --------------------------------------
+		// Step up the step selection box
+		// This is used to allow for moving by various pixel increments.
+		// --------------------------------------
+			
+		// create a JPanel to hold the label and the selection box so they can be stacked
+		JPanel stepPanel = new JPanel();
+		stepPanel.setLayout(new BoxLayout(stepPanel, BoxLayout.PAGE_AXIS));
+		stepPanel.setMaximumSize(new Dimension(100,50));
+			
+		// add the step label
+		JLabel stepLabel = new JLabel("Step:");
+		stepLabel.setAlignmentX(LEFT_ALIGNMENT);
+		stepPanel.add(stepLabel);
+		
+		// define and add the selection box
+		final String[] stepOptions = {"1","2","5","10"};
+		final JComboBox stepSelect = new JComboBox(stepOptions);
+		stepSelect.setAlignmentX(LEFT_ALIGNMENT);
+		stepSelect.setSelectedIndex(0);
+		stepPanel.add(stepSelect);
+		
+		// add glue to the bottom so the selection box won't grow abnormally huge
+		stepPanel.add(Box.createVerticalGlue());
+		
+		// -------------------------------------------
+		// Step up the nudge buttons
+		// -------------------------------------------
+		
+		// define the button dimensions
+		Dimension buttonDim = new Dimension(20,20);
+		
+		JButton left = new JButton(new ImageIcon(Main.getResource("resources/pan_w.gif")));
+		left.setPreferredSize(buttonDim);
+		JButton right = new JButton(new ImageIcon(Main.getResource("resources/pan_e.gif")));
+		right.setPreferredSize(buttonDim);
+		JButton up = new JButton(new ImageIcon(Main.getResource("resources/pan_n.gif")));
+		up.setPreferredSize(buttonDim);
+		JButton down = new JButton(new ImageIcon(Main.getResource("resources/pan_s.gif")));
+		down.setPreferredSize(buttonDim);
+		final JButton stepToggle = new JButton(new ImageIcon(Main.getResource("resources/dot.gif")));
+		stepToggle.setPreferredSize(buttonDim);
+		
+		left.setFocusable(false);
+		right.setFocusable(false);
+		up.setFocusable(false);
+		down.setFocusable(false);
+		stepToggle.setFocusable(false);
+		
+		// Add an action listener so that clicking the center button will rotate through 
+		// the step selection elements.  
+		stepToggle.addActionListener(new ActionListener(){			
+			public void actionPerformed(ActionEvent e) {
+			
+				int selected = stepSelect.getSelectedIndex();
+				int max = stepOptions.length-1;
+			
+				// increment the selected item
+				int next = selected+1;
+				if (next>max) next = 0;
+				
+				// reset the selected item in the step selection box to the next index.
+				stepSelect.setSelectedIndex(next);
+			}			
+		});
+		
+		left.addActionListener(new ActionListener() {
+			public void actionPerformed(ActionEvent e) {
+				double step = Double.parseDouble((String) stepSelect.getSelectedItem());
+				double dx = step / Main.testDriver.mainWindow.getZoomManager().getZoomPPD();
+				Point2D p = mapSource.getOffset();
+				mapSource.setOffset(new Point2D.Double(p.getX()+dx, p.getY()));
+				resetOffsetLabels();
+			}
+		});
+		
+		right.addActionListener(new ActionListener() {				
+			public void actionPerformed(ActionEvent e) {
+				double step = -Double.parseDouble((String) stepSelect.getSelectedItem());
+				double dx = step / Main.testDriver.mainWindow.getZoomManager().getZoomPPD();
+				Point2D p = mapSource.getOffset();
+				mapSource.setOffset(new Point2D.Double(p.getX()+dx, p.getY()));
+				resetOffsetLabels();
+			}
+		});
+		
+		up.addActionListener(new ActionListener() {				
+			public void actionPerformed(ActionEvent e) {
+				double step = -Double.parseDouble((String) stepSelect.getSelectedItem());
+				double dy = step / Main.testDriver.mainWindow.getZoomManager().getZoomPPD();
+				Point2D p = mapSource.getOffset();
+				mapSource.setOffset(new Point2D.Double(p.getX(), p.getY()+dy));
+				resetOffsetLabels();
+			}
+		});
+		
+		down.addActionListener(new ActionListener() {
+			public void actionPerformed(ActionEvent e) {
+				double step = Double.parseDouble((String) stepSelect.getSelectedItem());
+				double dy = step / Main.testDriver.mainWindow.getZoomManager().getZoomPPD();
+				Point2D p = mapSource.getOffset();
+				mapSource.setOffset(new Point2D.Double(p.getX(), p.getY()+dy));
+				resetOffsetLabels();
+			}
+		});
+		
+		nudgeCursorPanel.add(new JLabel());
+		nudgeCursorPanel.add(up);
+		nudgeCursorPanel.add(new JLabel());
+		nudgeCursorPanel.add(left);
+		nudgeCursorPanel.add(stepToggle);
+		nudgeCursorPanel.add(right);
+		nudgeCursorPanel.add(new JLabel());
+		nudgeCursorPanel.add(down);
+		nudgeCursorPanel.add(new JLabel());
+		
+		// ---------------------------------------------
+		// create a panel to hold the nudge information
+		// ---------------------------------------------
+		JPanel nudgeInfoPanel = new JPanel();
+		nudgeInfoPanel.setLayout(new BoxLayout(nudgeInfoPanel, BoxLayout.PAGE_AXIS));
+		
+		// set the labels to either initial values.  This is called in a method 
+		// because it could be called again during user interaction. 
+		initOffsetLabels();
+		
+		// format and add the X offset label
+		offsetXLabel.setAlignmentX(LEFT_ALIGNMENT);
+		nudgeInfoPanel.add(offsetXLabel);
+		
+		// format and add the Y offset label
+		offsetXLabel.setAlignmentX(LEFT_ALIGNMENT);
+		nudgeInfoPanel.add(offsetYLabel);		
+					
+		// add the reset button
+		JButton reset = new JButton("Reset");
+		reset.addActionListener(new ActionListener(){			
+			public void actionPerformed(ActionEvent e) {
+				mapSource.setOffset(new Point2D.Double(0,0));
+				resetOffsetLabels();
+			}			
+		});
+		reset.setAlignmentX(LEFT_ALIGNMENT);
+		nudgeInfoPanel.add(reset);
+		
+		// ---------------------------------------------------
+		// create the master nudge panel and add the elements to it.
+		// ---------------------------------------------------
+		JPanel nudgePanel = new JPanel();
+		nudgePanel.setLayout(new BoxLayout(nudgePanel, BoxLayout.LINE_AXIS));
+		nudgePanel.setBorder(BorderFactory.createTitledBorder("Nudge Map"));
+		nudgePanel.add(nudgeCursorPanel);
+		
+		// add a small spacer 
+		nudgePanel.add(Box.createRigidArea(new Dimension(10,0)));
+		
+		nudgePanel.add(stepPanel);
+		
+		// add a small spacer 
+		nudgePanel.add(Box.createRigidArea(new Dimension(10,0)));
+		
+		nudgePanel.add(nudgeInfoPanel);
+		
+		// add a filler to fill in to the right
+		nudgePanel.add(Box.createHorizontalGlue());
+		
+		return nudgePanel;
 	}
 
 	/**
@@ -320,6 +647,7 @@ public class PipelinePanel extends JPanel implements PipelineLegModelListener {
 	 */
 	public void insertStage(Stage stage, int index){
 		StagePipelinePanel spp = new StagePipelinePanel(stage);
+		//innerPanel.setAlignmentX(LEFT_ALIGNMENT);
 		innerPanel.add(spp, index+1); // panel is an additional source panel at the top, hence +1
 	}
 	
@@ -332,13 +660,54 @@ public class PipelinePanel extends JPanel implements PipelineLegModelListener {
 	 * @param stageIndex Pipeline index of the stage at whose location an insert is to be done.
 	 */
 	public void dialogInsertStageAt(int index){
-		List allStages = StageFactory.instance().getAllSingleIOStages();
-		Stage[] filteredStages = (Stage[])filterForInsertByStagePosition(allStages, index).toArray(new Stage[0]);
+		StageFactory stageFactory = new StageFactory();		
+		List<Stage> allStages = stageFactory.getAllSingleIOStages();
+		
+		Stage[] filteredStages = (Stage[]) filterForInsertByStagePosition(allStages, index).toArray(new Stage[0]);
 		Stage selected = (Stage)JOptionPane.showInputDialog(this, "Select Stage", "Select Stage",
 				JOptionPane.QUESTION_MESSAGE, null, filteredStages, filteredStages.length > 0? filteredStages[0]: null);
 		
 		if (selected != null){
-			Stage stage = StageFactory.getStageInstance(selected.getStageName());
+			Stage stage = stageFactory.getStageInstance(selected.getStageName());
+			if (stage instanceof ColorStretcherStage) {
+				//if we are adding a ColorStretcherStage, we need to set the min and max values in the ColorStretcherStageSettings
+				//object in order to pass these values down to the ColorScale so that the Fancy Color Mapper min and max
+				//values can be set. 
+				final ColorStretcherStageSettings csStageSettings = (ColorStretcherStageSettings) stage.getSettings();
+				csStageSettings.setMapSource(this.mapSource);
+				csStageSettings.setStages(this.legModel.getInnerStages());
+				
+				//loop through the inner stages of the legModel to get the last GrayScaleStage in the list
+				Stage[] tmpStg = legModel.getInnerStages();
+				for (Stage myStage : tmpStg) {
+					if (myStage instanceof GrayscaleStage) {
+						//get the min and max values from the GrayScaleStageSettings object (set by property change listeners on the GrayScaleStageSettings object)
+						final GrayscaleStageSettings gss = (GrayscaleStageSettings) myStage.getSettings();
+						double min = gss.getMinValue();
+						double max = gss.getMaxValue();
+						//set those min and max values on our stage settings object
+						csStageSettings.setMinValue(min);
+						csStageSettings.setMaxValue(max);
+						
+						//setup a property change listener on the GrayscaleStageSettings object to update the 
+						//ColorStageSettings object any time the min and max values changed.
+						gss.addPropertyChangeListener(new PropertyChangeListener() {
+							
+							@Override
+							public void propertyChange(PropertyChangeEvent evt) {
+								//update the min and max values on ColorStretcherStageSettings with the new 
+								//min max values from the updated GrayscaleStageSettings
+								csStageSettings.setMinValue(gss.getMinValue());
+								csStageSettings.setMaxValue(gss.getMaxValue());	
+							}
+						});
+					}
+				}
+				//Need to figure out how to set the list of stages on the existing stages in case a stage was added
+				//and it is not the latest. Somehow we have to know that threshold was added
+				//in the settings for the Color stretcher stage so that we can refresh and see an updated list.
+				//A fallback plan is to just make them re add the color stretcher stage, but that is not ideal.
+			}
 			legModel.insertStage(index, stage);
 		}
 	}
@@ -364,6 +733,7 @@ public class PipelinePanel extends JPanel implements PipelineLegModelListener {
 			insertButton.addActionListener(new ActionListener(){
 				public void actionPerformed(ActionEvent e){
 					dialogInsertStageAfter(StagePipelinePanel.this);
+					LManager.repaintAll();
 				}
 			});
 			removeButton.addActionListener(new ActionListener(){
@@ -377,18 +747,18 @@ public class PipelinePanel extends JPanel implements PipelineLegModelListener {
 								"Error!", JOptionPane.ERROR_MESSAGE);
 				}
 			});
-			
+					
 			JPanel buttonInnerPanel = new JPanel(new GridLayout(2,1));
 			buttonInnerPanel.add(removeButton);
 			buttonInnerPanel.add(insertButton);
+			
 			JPanel buttonPanel = new JPanel(new BorderLayout());
-			buttonPanel.add(buttonInnerPanel, BorderLayout.NORTH);
-			
+			buttonPanel.add(buttonInnerPanel,BorderLayout.NORTH);
 			setBorder(BorderFactory.createTitledBorder(getStage().getStageName()));
-			
 			setLayout(new BorderLayout());
-			add(getStageView().getStagePanel(), BorderLayout.CENTER);
-			add(buttonPanel, BorderLayout.EAST);
+			
+			add(buttonPanel,BorderLayout.WEST);
+			add(getStageView().getStagePanel(),BorderLayout.CENTER);
 		}
 		
 		public StageView getStageView(){
@@ -433,6 +803,40 @@ public class PipelinePanel extends JPanel implements PipelineLegModelListener {
 		for(int i=0; i<stages.length; i++){
 			insertStage(stages[i], i);
 		}
+	}
+	
+	/**
+	 * Set the initial value in the nudge offset labels.
+	 */
+	private void initOffsetLabels(){
+		offsetXLabel.setText("X offset: " + Util.formatDouble(0,offsetDecimalDigits));
+		offsetYLabel.setText("Y offset: " + Util.formatDouble(0,offsetDecimalDigits));
+	}
+
+	/**
+	 * Resets the x and y nudge offset labels 
+	 */
+	private void resetOffsetLabels(){
+		Point2D p = mapSource.getOffset();
+		double x = p.getX();
+		double y = p.getY();
+		// reverse the sign to make sense with the display
+		x = (x==0 ? 0 : -x);
+		y = (y==0 ? 0 : -y);
+		offsetXLabel.setText("X offset: " + Util.formatDouble(x,offsetDecimalDigits));
+		offsetYLabel.setText("Y offset: " + Util.formatDouble(y,offsetDecimalDigits));
+	}
+	
+
+	/**
+	 * If the map projection is changed then redraw the offset labels.
+	 */
+	public void projectionChanged(edu.asu.jmars.layer.ProjectionEvent e) {
+		initOffsetLabels();
+		
+		// can't call resetOffsetLabels here because when this method is called
+		// the mapSource offset have not been rest yet.  So, if you just call
+		// resetOffsetLabels the screen values won't change.  
 	}
 
 }

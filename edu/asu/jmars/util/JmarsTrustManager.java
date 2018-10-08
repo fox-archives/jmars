@@ -1,29 +1,11 @@
-// Copyright 2008, Arizona Board of Regents
-// on behalf of Arizona State University
-// 
-// Prepared by the Mars Space Flight Facility, Arizona State University,
-// Tempe, AZ.
-// 
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-// 
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU General Public License for more details.
-// 
-// You should have received a copy of the GNU General Public License
-// along with this program.  If not, see <http://www.gnu.org/licenses/>.
-
-
 package edu.asu.jmars.util;
 
 import java.io.BufferedReader;
 import java.io.IOException;
+import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.net.MalformedURLException;
+import java.net.URISyntaxException;
 import java.net.URL;
 import java.security.cert.CertificateException;
 import java.security.cert.X509Certificate;
@@ -43,15 +25,27 @@ public class JmarsTrustManager implements X509TrustManager {
 	/**
 	 * Test code to prove we can establish an https connection to a server that
 	 * does not participate in a chain of trust
+	 * @throws URISyntaxException 
 	 */
-	public static void main(String[] args) throws MalformedURLException, IOException {
+	public static void main(String[] args) throws MalformedURLException, IOException, URISyntaxException {
 		install();
-		BufferedReader br = new BufferedReader(new InputStreamReader(
-			new URL("https://ms-test.mars.asu.edu").openStream()));
+//		BufferedReader br = new BufferedReader(new InputStreamReader(
+//			new URL("https://ms-test.mars.asu.edu").openStream()));
+//		String line;
+//		while ((line = br.readLine()) != null)
+//			System.out.println(line);
+//		br.close();
+		
 		String line;
-		while ((line = br.readLine()) != null)
-			System.out.println(line);
-		br.close();
+		JmarsHttpRequest request = new JmarsHttpRequest("https://ms-test.mars.asu.edu", HttpRequestType.GET);
+		boolean success = request.send();
+		if (success) {
+			BufferedReader read = new BufferedReader(new InputStreamReader(request.getResponseAsStream()));
+			while ((line = read.readLine()) != null)
+				System.out.println(line);
+			read.close();
+		}
+		request.close();
 	}
 	
 	/** Configures HttpUrlConnection and HttpClient over SSL/TLS to use JmarsTrustManager */

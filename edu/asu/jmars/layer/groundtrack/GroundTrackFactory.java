@@ -1,30 +1,13 @@
-// Copyright 2008, Arizona Board of Regents
-// on behalf of Arizona State University
-// 
-// Prepared by the Mars Space Flight Facility, Arizona State University,
-// Tempe, AZ.
-// 
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-// 
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU General Public License for more details.
-// 
-// You should have received a copy of the GNU General Public License
-// along with this program.  If not, see <http://www.gnu.org/licenses/>.
-
-
 package edu.asu.jmars.layer.groundtrack;
 
 import java.util.HashMap;
 import java.util.Map;
 
+import edu.asu.jmars.layer.LManager;
 import edu.asu.jmars.layer.LViewFactory;
 import edu.asu.jmars.layer.Layer;
+import edu.asu.jmars.layer.Layer.LView;
+import edu.asu.jmars.layer.LayerParameters;
 import edu.asu.jmars.layer.SerializedParameters;
 
 public class GroundTrackFactory extends LViewFactory {
@@ -35,6 +18,7 @@ public class GroundTrackFactory extends LViewFactory {
 
 	public GroundTrackFactory() {
 		super("Groundtracks", "Orbital tracks showing the sub-spacecraft path");
+		type = "groundtrack";
 	}
 
 	/**
@@ -46,8 +30,10 @@ public class GroundTrackFactory extends LViewFactory {
 		return null;
 	}
 
-	public void createLView(LViewFactory.Callback callback) {
-		callback.receiveNewLView(recreateLView(SPACECRAFT[0]));
+	public void createLView(boolean async, LayerParameters l) {
+		LView view = recreateLView(SPACECRAFT[0]);
+		view.setLayerParameters(l);
+		LManager.receiveNewLView(view);
 	}
 
 	public Layer.LView recreateLView(SerializedParameters sp) {

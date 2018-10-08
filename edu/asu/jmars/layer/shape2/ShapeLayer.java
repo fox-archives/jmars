@@ -1,29 +1,11 @@
-// Copyright 2008, Arizona Board of Regents
-// on behalf of Arizona State University
-// 
-// Prepared by the Mars Space Flight Facility, Arizona State University,
-// Tempe, AZ.
-// 
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-// 
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU General Public License for more details.
-// 
-// You should have received a copy of the GNU General Public License
-// along with this program.  If not, see <http://www.gnu.org/licenses/>.
-
-
 package edu.asu.jmars.layer.shape2;
 
 import java.awt.Color;
+import java.io.File;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
@@ -31,7 +13,6 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-import java.util.concurrent.CyclicBarrier;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
@@ -44,21 +25,23 @@ import javax.swing.event.TableModelListener;
 
 import edu.asu.jmars.Main;
 import edu.asu.jmars.layer.DataReceiver;
+import edu.asu.jmars.layer.LManager;
 import edu.asu.jmars.layer.Layer;
 import edu.asu.jmars.layer.map2.MapThreadFactory;
+import edu.asu.jmars.layer.util.features.AbstractFeatureCollection;
 import edu.asu.jmars.layer.util.features.Feature;
 import edu.asu.jmars.layer.util.features.FeatureCollection;
 import edu.asu.jmars.layer.util.features.FeatureEvent;
-import edu.asu.jmars.layer.util.features.FeatureIndex;
 import edu.asu.jmars.layer.util.features.FeatureListener;
 import edu.asu.jmars.layer.util.features.FeatureProvider;
 import edu.asu.jmars.layer.util.features.FeatureProviderFactory;
+import edu.asu.jmars.layer.util.features.FeatureProviderReadOnly;
+import edu.asu.jmars.layer.util.features.FeatureProviderSHP;
 import edu.asu.jmars.layer.util.features.Field;
 import edu.asu.jmars.layer.util.features.MemoryFeatureIndex;
 import edu.asu.jmars.layer.util.features.MultiFeatureCollection;
 import edu.asu.jmars.layer.util.features.SingleFeatureCollection;
 import edu.asu.jmars.layer.util.features.Style;
-import edu.asu.jmars.layer.util.features.StyleFieldSource;
 import edu.asu.jmars.layer.util.features.StyleSource;
 import edu.asu.jmars.layer.util.filetable.FileTable;
 import edu.asu.jmars.util.Config;
@@ -69,10 +52,21 @@ import edu.asu.jmars.util.Util;
 public class ShapeLayer extends Layer {
 	/** History size is obtained from the specified key. */
 	public static final String CONFIG_KEY_HISTORY_SIZE = "shape.history_size";
+	
+	/** Sorts Field instances by name in a case-insensitive way */
+	public static final Comparator<Field> fieldByName = new Comparator<Field>() {
+		public int compare(Field o1, Field o2) {
+			return String.CASE_INSENSITIVE_ORDER.compare(o1.name, o2.name);
+		}
+	};
 
 	/** selected features for this layer */
 	ObservableSet<Feature> selections = new ObservableSet<Feature>(new HashSet<Feature>());
 	
+	/**
+	 * Stores all world coordinate paths in a quad tree; every feature in the
+	 * feature table should be available here in world coordinate form.
+	 */
 	private final MemoryFeatureIndex index;
 	
 	/** FileTable for this layer */
@@ -89,7 +83,10 @@ public class ShapeLayer extends Layer {
 	private FeatureProviderFactory providerFactory;
 	
 	boolean showProgress = false;
+	
 	String name = "Shape Layer";
+	
+	final Set<Field> tooltipFields = new LinkedHashSet<Field>();
 	
 	// style settings for this layer
 	private final ShapeLayerStyles styles = new ShapeLayerStyles();
@@ -117,13 +114,20 @@ public class ShapeLayer extends Layer {
 	public final Map<FeatureCollection,CalcFieldListener> calcFieldMap = new HashMap<FeatureCollection,CalcFieldListener>();
 	private final FeatureCollection stylesFC = new SingleFeatureCollection();
 	
-	public ShapeLayer() {
+	public boolean isReadOnly=false;
+	
+	
+	/** The name of the custom shape layer added by the AddLayer Dialog */
+	public static final String CUSTOM_SHAPE_NAME = "Custom Shape Layer";
+	
+	
+	public ShapeLayer(boolean isReadOnly) {
 		super();
+		this.isReadOnly=isReadOnly;
 		
 		String[] classes = getFeatureProviderClassNames();
 		providerFactory = new FeatureProviderFactory(classes);
 		
-		// Tie FileTable, MultiFeatureCollection and FeatureTable together.
 		fileTable = new FileTable(history);
 		
 		updateLoadedShapes();
@@ -133,15 +137,17 @@ public class ShapeLayer extends Layer {
 			}
 		});
 		
-		index  = new MemoryFeatureIndex(fileTable.getMultiFeatureCollection());
+		index = new MemoryFeatureIndex(styles.geometry, fileTable.getMultiFeatureCollection());
 		
 		StyleColumnPositioner stylePos = new StyleColumnPositioner(fileTable.getMultiFeatureCollection(), stylesFC);
 		fileTable.getSelectionModel().addListSelectionListener(stylePos);
 		fileTable.getMultiFeatureCollection().addListener(stylePos);
 		
-		SingleFeatureCollection empty = new SingleFeatureCollection();
-		fileTable.getFileTableModel().add(empty);
-		fileTable.getSelectionModel().addSelectionInterval(0,0);
+		if(!isReadOnly){
+			SingleFeatureCollection empty = new SingleFeatureCollection();
+			fileTable.getFileTableModel().add(empty);
+			fileTable.getSelectionModel().addSelectionInterval(0,0);
+		}
 	}
 	
 	/** Called when the file table contents change; updates the history and calc field listener */
@@ -155,13 +161,13 @@ public class ShapeLayer extends Layer {
 		}
 		for (FeatureCollection f: inTable) {
 			// make sure this history object is set on the data
-			if (f instanceof SingleFeatureCollection) {
-				((SingleFeatureCollection)f).setHistory(getHistory());
+			if (f instanceof AbstractFeatureCollection) {
+				((AbstractFeatureCollection)f).setHistory(getHistory());
 			}
 			
 			if (!inCalcMap.contains(f)) {
 				// create the calc field updater, reusing the same field map
-				CalcFieldListener c = new CalcFieldListener(f, history);
+				CalcFieldListener c = new CalcFieldListener(f, this);
 				calcFieldMap.put(f, c);
 				f.addListener(c);
 			}
@@ -170,6 +176,8 @@ public class ShapeLayer extends Layer {
 	
 	public void cleanup() {
 		index.disconnect();
+		providerFactory = null;
+		history.dispose();
 	}
 	
 	public FileTable getFileTable() {
@@ -180,7 +188,7 @@ public class ShapeLayer extends Layer {
 	public void receiveRequest(Object layerRequest, DataReceiver requester) {
 	}
 
-	public FeatureCollection getFeatureCollection(){
+	public MultiFeatureCollection getFeatureCollection(){
 		return fileTable.getMultiFeatureCollection();
 	}
 
@@ -242,15 +250,17 @@ public class ShapeLayer extends Layer {
 		return new ShapeLayerStyles(styles);
 	}
 	
+	/** @return The live styles object. */
+	public ShapeLayerStyles getStylesLive() {
+		return styles;
+	}
+	
 	/** Returns the style instances that use any field in the given collection */
 	public Set<Style<?>> getStylesFromFields(Collection<Field> fields) {
 		Set<Style<?>> out = new HashSet<Style<?>>();
 		for (Style<?> s: styles.getStyles()) {
-			StyleSource<?> ss = s.getSource();
-			if (ss instanceof StyleFieldSource<?>) {
-				if (fields.contains(((StyleFieldSource<?>)ss).getField())) {
-					out.add(s);
-				}
+			if (!Collections.disjoint(fields, s.getSource().getFields())) {
+				out.add(s);
 			}
 		}
 		return out;
@@ -274,10 +284,7 @@ public class ShapeLayer extends Layer {
 		Set<Field> oldFields = new LinkedHashSet<Field>(stylesFC.getSchema());
 		Set<Field> newFields = new LinkedHashSet<Field>();
 		for (Style<?> s: current) {
-			StyleSource<?> source = s.getSource();
-			if (source instanceof StyleFieldSource) {
-				newFields.add(((StyleFieldSource<?>)source).getField());
-			}
+			newFields.addAll(s.getSource().getFields());
 		}
 		
 		// remove fields not still there
@@ -313,7 +320,7 @@ public class ShapeLayer extends Layer {
 		return selections;
 	}
 	
-	public FeatureIndex getIndex() {
+	public MemoryFeatureIndex getIndex() {
 		return index;
 	}
 	
@@ -365,7 +372,7 @@ public class ShapeLayer extends Layer {
 	}
 	
 	public void loadSources(final List<LoadData> sources) {
-		loadSources(sources, new SourceAdder(sources));
+		loadSources(sources, new SourceAdder());
 	}
 	
 	/**
@@ -375,11 +382,6 @@ public class ShapeLayer extends Layer {
 	 */
 	private class SourceAdder implements LoadListener {
 		private boolean marked = false;
-		private final List<String> msgs = new ArrayList<String>();
-		private final List<LoadData> sources;
-		public SourceAdder(List<LoadData> sources) {
-			this.sources = new ArrayList<LoadData>(sources);
-		}
 		public void receive(LoadData data) {
 			if (data.fc != null) {
 				if (!marked) {
@@ -387,15 +389,8 @@ public class ShapeLayer extends Layer {
 					getHistory().mark();
 				}
 				getFileTable().getFileTableModel().add(data.fc);
-			}
-			if (data.error != null) {
-				msgs.add(data.error.getMessage() + " while loading " + data.data);
-			}
-			sources.remove(data);
-			if (sources.isEmpty() && !msgs.isEmpty()) {
-				JOptionPane.showMessageDialog(Main.getLManager(),
-						Util.join("\n", msgs),
-						"Error occurred while loading...", JOptionPane.ERROR_MESSAGE);
+				int selectedFile = getFileTable().getFileTableModel().getRowCount()-1;
+				getFileTable().getSelectionModel().setSelectionInterval(selectedFile,selectedFile);
 			}
 		}
 	}
@@ -412,40 +407,73 @@ public class ShapeLayer extends Layer {
 	 * should show that a file IO operation is ongoing.
 	 */
 	public void loadSources(List<LoadData> sources, final LoadListener callback) {
-		final ExecutorService pool = Executors.newFixedThreadPool(5, new MapThreadFactory("ShapeLoader"));
-		final CyclicBarrier barrier = new CyclicBarrier(sources.size());
+		// Keep simultaneous shape layer reads between 1 and min(4, cores-1)
+		// since more than one read per CPU core causes bad thrashing.
+		int threads = Math.max(1, Math.min(4, Runtime.getRuntime().availableProcessors() - 1));
+		final ExecutorService pool = Executors.newFixedThreadPool(threads, new MapThreadFactory("ShapeLoader"));
+		final List<String> errors = new ArrayList<String>();
+		final List<Runnable> runnables = new ArrayList<Runnable>();
 		for (final LoadData source: new ArrayList<LoadData>(sources)) {
-			pool.execute(new Runnable() {
+			runnables.add(new Runnable() {
 				public void run() {
 					final ShapeLayer.LEDState led = new ShapeLayer.LEDStateFileIO();
 					begin(led);
 					try {
-						source.fc = (SingleFeatureCollection) source.fp.load(source.data);
-						source.fc.setProvider(source.fp);
-						source.fc.setFilename(source.data == null ? source.fp.getDescription() : source.data);
+						source.fc = source.fp.load(source.data);
+						if (source.fc != null) {
+							source.fc.setProvider(source.fp);
+							source.fc.setFilename(source.data == null ? source.fp.getDescription() : source.data);
+						}
+						if (source.fp.setAsDefaultFeatureCollection()) {
+						    ShapeLayer.this.getFileTable().getFileTableModel().setDefaultFeatureCollection(source.fc);
+						}
 					} catch (final Exception e) {
 						e.printStackTrace();
-						source.error = e;
+						synchronized(runnables) {
+							String text = "";
+							for (Throwable e2 = e; e2 != null; e2 = e2.getCause()) {
+								if (e2.getMessage() != null) {
+									text += "\n  " + e2.getMessage();
+								}
+							}
+							String title = (source.data != null ? source.data : "");
+							errors.add("Error loading " + title + ":" + text);
+						}
 					} finally {
 						SwingUtilities.invokeLater(new Runnable() {
 							public void run() {
-								callback.receive(source);
+								if (source.fc != null) {
+									callback.receive(source);
+								}
 								end(led);
 							}
 						});
 						
-						try {
-							barrier.await();
-						} catch (Exception e) {
-							e.printStackTrace();
-						}
-						
-						synchronized(pool) {
-							pool.shutdown();
+						synchronized(runnables) {
+							runnables.remove(this);
+							if (runnables.isEmpty()) {
+								pool.shutdown();
+								
+								final String msg = Util.join("\n", errors);
+								if (msg.length() > 0) {
+									SwingUtilities.invokeLater(new Runnable() {
+										public void run() {
+											JOptionPane.showMessageDialog(
+												LManager.getDisplayFrame(), msg,
+												"Unable to load all files", JOptionPane.ERROR_MESSAGE);
+										}
+									});
+								}
+							}
 						}
 					}
 				}
 			});
+		}
+		synchronized(runnables) {
+			for (Runnable r: runnables) {
+				pool.execute(r);
+			}
 		}
 	}
 	
@@ -456,12 +484,22 @@ public class ShapeLayer extends Layer {
 	public static class LoadData {
 		public final FeatureProvider fp;
 		public final String data;
-		public SingleFeatureCollection fc;
-		public Exception error;
+		public FeatureCollection fc;
 		public LoadData(FeatureProvider fp, String data) {
 			this.fp = fp;
 			this.data = data;
 		}
 	}
+	
+	public void loadReadOnlyFile(String dir, String fileName, String URL){
+		File f = new File(fileName);
+		
+		FeatureProvider fp = new FeatureProviderReadOnly(dir, fileName, URL);
+    	final List<ShapeLayer.LoadData> sources = new ArrayList<ShapeLayer.LoadData>();
+    	sources.add(new ShapeLayer.LoadData(fp, f.getAbsolutePath()));
+    	
+		loadSources(sources);
+	}
+	
 }
 

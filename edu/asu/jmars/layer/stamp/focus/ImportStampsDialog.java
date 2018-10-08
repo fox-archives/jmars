@@ -1,23 +1,3 @@
-// Copyright 2008, Arizona Board of Regents
-// on behalf of Arizona State University
-// 
-// Prepared by the Mars Space Flight Facility, Arizona State University,
-// Tempe, AZ.
-// 
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-// 
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU General Public License for more details.
-// 
-// You should have received a copy of the GNU General Public License
-// along with this program.  If not, see <http://www.gnu.org/licenses/>.
-
-
 package edu.asu.jmars.layer.stamp.focus;
 
 import java.awt.BorderLayout;
@@ -36,6 +16,7 @@ import javax.swing.JPanel;
 import javax.swing.JTextField;
 
 import edu.asu.jmars.Main;
+import edu.asu.jmars.layer.LManager;
 import edu.asu.jmars.swing.MultiLabel;
 import edu.asu.jmars.swing.PasteField;
 import edu.asu.jmars.util.Util;
@@ -111,14 +92,14 @@ public class ImportStampsDialog implements ActionListener
         bottom.add(btnCancel);
         
         // Construct the dialog itself
-        dialog = new JDialog(Main.getLManager(),
+        dialog = new JDialog(LManager.getDisplayFrame(),
                              "Import Stamps",
                              true);
         dialog.getContentPane().add(top, BorderLayout.NORTH);
         dialog.getContentPane().add(middle, BorderLayout.CENTER);
         dialog.getContentPane().add(bottom, BorderLayout.SOUTH);
         dialog.pack();
-        dialog.setLocation(Main.getLManager().getLocation());
+        dialog.setLocationRelativeTo(Util.getDisplayFrame(filledFocus));
     }
     
     // Does not return until dialog is hidden or

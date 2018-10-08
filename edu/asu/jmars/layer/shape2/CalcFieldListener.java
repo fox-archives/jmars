@@ -1,30 +1,16 @@
-// Copyright 2008, Arizona Board of Regents
-// on behalf of Arizona State University
-// 
-// Prepared by the Mars Space Flight Facility, Arizona State University,
-// Tempe, AZ.
-// 
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-// 
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU General Public License for more details.
-// 
-// You should have received a copy of the GNU General Public License
-// along with this program.  If not, see <http://www.gnu.org/licenses/>.
-
-
 package edu.asu.jmars.layer.shape2;
 
 import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.LinkedList;
+import java.util.List;
 import java.util.Map;
+import java.util.Map.Entry;
 
+import javax.swing.SwingUtilities;
+
+import edu.asu.jmars.layer.shape2.ShapeLayer.LEDStateProcessing;
 import edu.asu.jmars.layer.util.features.CalculatedField;
 import edu.asu.jmars.layer.util.features.Feature;
 import edu.asu.jmars.layer.util.features.FeatureCollection;
@@ -42,20 +28,20 @@ import edu.asu.jmars.util.Versionable;
 public class CalcFieldListener implements Versionable, FeatureListener {
 	private final FeatureCollection fc;
 	private final Map<Field,CalculatedField> calculatedFields;
-	private final History history;
-	public CalcFieldListener(FeatureCollection fc, History history) {
-		this(fc, history, new HashMap<Field,CalculatedField>());
+	private final ShapeLayer layer;
+	public CalcFieldListener(FeatureCollection fc, ShapeLayer layer) {
+		this(fc, layer, new HashMap<Field,CalculatedField>());
 	}
-	public CalcFieldListener(FeatureCollection fc, History history, Map<Field,CalculatedField> calcFields) {
+	public CalcFieldListener(FeatureCollection fc, ShapeLayer layer, Map<Field,CalculatedField> calcFields) {
 		this.fc = fc;
-		this.history = history;
+		this.layer = layer;
 		this.calculatedFields = calcFields;
 	}
 	public void setCalculatedFields(Map<Field,CalculatedField> calcFields) {
 		Map<Boolean,Map<Field,CalculatedField>> change = new HashMap<Boolean,Map<Field,CalculatedField>>();
 		change.put(false, new HashMap<Field,CalculatedField>(calculatedFields));
 		change.put(true, calcFields);
-		history.addChange(this, change);
+		layer.getHistory().addChange(this, change);
 		redo(change);
 	}
 	public Map<Field,CalculatedField> getCalculatedFields() {
@@ -81,7 +67,11 @@ public class CalcFieldListener implements Versionable, FeatureListener {
 			Map<Field,CalculatedField> toUpdate = null;
 			for (Field f: calculatedFields.keySet()) {
 				CalculatedField c = calculatedFields.get(f);
-				if (!Collections.disjoint(fields, c.getFields())) {
+				if (!Collections.disjoint(fields, c.getFields()) ||
+						(c.getFields().contains(Field.FIELD_PATH) &&
+						 !Collections.disjoint(
+							fields,
+							layer.getStylesLive().geometry.getSource().getFields()))) {
 					if (toUpdate == null) {
 						toUpdate = new HashMap<Field,CalculatedField>();
 					}
@@ -93,25 +83,121 @@ public class CalcFieldListener implements Versionable, FeatureListener {
 			}
 		}
 	}
-	/** applies auto calculations to the given features and fields */
-	public void updateValues(Iterable<Feature> features, Map<Field,CalculatedField> fieldMap) {
-		Map<Feature,Map<Field,Object>> newValues = null;
-		for (Feature feature: features) {
-			boolean send = newValues != null && newValues.size() >= 5000;
-			if (send) {
-				fc.setAttributes(newValues);
-			}
-			if (newValues == null || send) {
-				newValues = new HashMap<Feature,Map<Field,Object>>();
-			}
-			Map<Field,Object> row = new HashMap<Field,Object>(fieldMap.size()*2);
-			for (Field field: fieldMap.keySet()) {
-				row.put(field, fieldMap.get(field).getValue(feature));
-			}
-			newValues.put(feature, row);
+	
+	private Thread workingThread;
+	private final List<Collection<Feature>> workingFeatures = new LinkedList<Collection<Feature>>();
+	private final List<Map<Field,CalculatedField>> workingFields = new LinkedList<Map<Field,CalculatedField>>();
+	
+	/**
+	 * Applies auto calculations to the given features and fields. The
+	 * auto-calculations can take a long time, and may require a lot of memory,
+	 * so we set the status LED, get off the AWT event thread, and set values
+	 * once every second or so. When all values have been set, the status LED is
+	 * cleared. If a FeatureEvent arrives in the middle of processing that
+	 * invalidates any previously submitted results, those Feature instances are
+	 * re-scheduled for computation.
+	 */
+	public synchronized void updateValues(Collection<Feature> features, Map<Field,CalculatedField> fieldMap) {
+		if (features.isEmpty() || fieldMap.isEmpty()) {
+			return;
 		}
-		if (newValues != null && newValues.size() > 0) {
-			fc.setAttributes(newValues);
+		
+		workingFeatures.add(features);
+		workingFields.add(fieldMap);
+		
+		if (workingThread == null) {
+			workingThread = new Thread(new Runnable() {
+				private final Map<Feature,Map<Field,Object>> feat2fld2val = new HashMap<Feature,Map<Field,Object>>();
+				private final LEDStateProcessing led = new ShapeLayer.LEDStateProcessing();
+				private long lastTime = System.currentTimeMillis();
+				
+				/**
+				 * Will remove and run calculations from the
+				 * workingFeatures/workingFields parallel lists until there is
+				 * no more work to do.
+				 */
+				public void run() {
+					layer.begin(led);
+					while (true) {
+						try {
+							if (!run_impl()) {
+								break;
+							}
+						} catch (Exception e) {
+							e.printStackTrace();
+						}
+					}
+					layer.end(led);
+				}
+				
+				/** @return false if there is nothing to do */
+				private boolean run_impl() {
+					// remove the next set of features/fields to process, or
+					// return false when finished
+					Collection<Feature> features;
+					Map<Field,CalculatedField> fieldMap;
+					synchronized(CalcFieldListener.this) {
+						if (workingFeatures.isEmpty()) {
+							workingThread = null;
+							return false;
+						}
+						features = workingFeatures.remove(0);
+						fieldMap = workingFields.remove(0);
+					}
+					
+					// Dispatch results to the feature collection every half a
+					// second, or every 10 seconds if one of the fields is used
+					// in shape rendering.
+					int delay = Collections.disjoint(layer.getStyles().getFields(), fieldMap.keySet()) ? 500 : 10000;
+					
+					for (Feature feature: features) {
+						Map<Field,Object> values;
+						if (fieldMap.size() == 1) {
+							Entry<Field,CalculatedField> entry = fieldMap.entrySet().iterator().next();
+							values = Collections.singletonMap(
+								entry.getKey(),
+								entry.getValue().getValue(layer, feature));
+						} else {
+							values = new HashMap<Field,Object>();
+							for (Entry<Field,CalculatedField> entry: fieldMap.entrySet()) {
+								values.put(entry.getKey(), entry.getValue().getValue(layer, feature));
+							}
+						}
+						feat2fld2val.put(feature, values);
+						// Send event after 50,000 cells or enough time has passed
+						if (feat2fld2val.size() > 50000/fieldMap.size() || System.currentTimeMillis() - lastTime > delay) {
+							send();
+						}
+					}
+					if (!feat2fld2val.isEmpty()) {
+						send();
+					}
+					return true;
+				}
+				
+				/** dispatch results to the feature collection */
+				private void send() {
+					try {
+						final Map<Feature,Map<Field,Object>> copy = new HashMap<Feature,Map<Field,Object>>(feat2fld2val);
+						// get onto the AWT thread to report the current results
+						SwingUtilities.invokeAndWait(new Runnable() {
+							public void run() {
+								fc.setAttributes(copy);
+							}
+						});
+					} catch (Exception e) {
+						// interruption or invocation errors shouldn't
+						// occur, but let's print them in case they do
+						e.printStackTrace();
+					}
+					feat2fld2val.clear();
+					lastTime = System.currentTimeMillis();
+				}
+			});
+			workingThread.setDaemon(true);
+			workingThread.setPriority(Thread.MIN_PRIORITY);
+			workingThread.setName("CalcFieldThread-" + System.currentTimeMillis());
+			workingThread.start();
 		}
 	}
 }

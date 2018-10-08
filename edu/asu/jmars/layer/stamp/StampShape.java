@@ -1,44 +1,29 @@
-// Copyright 2008, Arizona Board of Regents
-// on behalf of Arizona State University
-// 
-// Prepared by the Mars Space Flight Facility, Arizona State University,
-// Tempe, AZ.
-// 
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-// 
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU General Public License for more details.
-// 
-// You should have received a copy of the GNU General Public License
-// along with this program.  If not, see <http://www.gnu.org/licenses/>.
-
-
 package edu.asu.jmars.layer.stamp;
 
-import java.awt.Dimension;
+import java.awt.Color;
 import java.awt.Shape;
 import java.awt.geom.GeneralPath;
+import java.awt.geom.Line2D;
 import java.awt.geom.PathIterator;
 import java.awt.geom.Point2D;
 import java.awt.geom.Rectangle2D;
 import java.io.ObjectInputStream;
-import java.net.URL;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 
 import edu.asu.jmars.Main;
+import edu.asu.jmars.layer.InvestigateData;
+import edu.asu.jmars.layer.stamp.focus.OutlineFocusPanel;
+import edu.asu.jmars.layer.stamp.focus.StampFocusPanel;
+import edu.asu.jmars.layer.stamp.focus.OutlineFocusPanel.StampAccessor;
 import edu.asu.jmars.util.HVector;
 import edu.asu.msff.StampInterface;
+import gnu.jel.CompiledExpression;
 
 public class StampShape {
 
-	private StampInterface myStamp;
+	protected StampInterface myStamp;
 	StampLayer stampLayer;
 	
 	public StampShape(StampInterface stamp, StampLayer stampLayer) {
@@ -54,13 +39,199 @@ public class StampShape {
 		return myStamp;
 	}
 	
+	public String getColumnName(int index) {
+		return stampLayer.getColumnName(index);
+	}	
+	
+	public Object getData(int index) {
+		int maxLength = myStamp.getData().length;
+		if (index>=0 && index<maxLength) {
+			// TODO: Add safety
+			return myStamp.getData()[index];
+		} else {
+			if (index==maxLength) {
+				return calculatedColor;
+			} else if (index==maxLength+1) {
+				return Boolean.FALSE;
+			} else if (index==maxLength+2) {
+				return calculatedValue;
+			}
+			return null;
+		}
+	}
+	
+	double calculatedValue=Double.NaN;
+	public void setCalculatedValue(double newVal) {
+		calculatedValue = newVal;
+	}
+	
+	public double getCalculatedValue() {
+		return calculatedValue;
+	}
+	
+	Color calculatedColor=null;
+	public void setCalculatedColor(Color newColor) {
+		calculatedColor=newColor;
+	}
+	
+	public Color getCalculatedColor() {
+		return calculatedColor;
+	}
+	
+	// TODO: StampShape is probably misnamed.
+	public double[] getXValues(String columnName) {	
+		HashMap<String,String> axisMap = stampLayer.getSpectraAxisMap();
+		HashMap<String,String> axisPostMap = stampLayer.getSpectraAxisPostMap();
+			
+		String xAxisName = axisMap.get(columnName.trim());
+				
+		String postCol = axisPostMap.get(columnName.trim());
+		if (postCol!=null && postCol.length()>0) {
+			xAxisName += getVal(postCol);
+		} 
+
+		double axisVals[]=stampLayer.getAxis(xAxisName.trim());
+		
+		if (axisVals!=null) {
+			return axisVals;
+		}
+		
+		
+		Object v = getVal((xAxisName.trim()));
+
+		if (v!=null) {
+			if (v instanceof float[]) {
+				float f[]=(float[])v;
+				
+				double d[] = new double[f.length];
+				
+				for (int i=0; i<f.length; i++) {
+					d[i]=f[i];
+				}
+				
+				return d;
+				
+			} else {
+
+				return (double[])v;
+			}
+		} else {
+			System.out.println("Unknown value!");
+			return new double[0];
+		}
+	}
+
 	public String toString() {
 		return myStamp.getId();
 	}
 	
+	public Object getVal(String columnName) {
+		int colNum = stampLayer.getColumnNum(columnName);
+
+		if (colNum>getStamp().getData().length) {
+			return "Nonsense";
+		}
+		
+		if (colNum>=0) {
+			return getStamp().getData()[colNum];
+		}
+		
+		return null;
+	}
+	
+	// -2 is our uninitialized value, because -1 represents that the column wasn't found
+	private int tipIndex = -2;
+	
+	private void calcTooltipIndex() {
+		String tipCol=stampLayer.getParam(stampLayer.TOOLTIP_COLUMN);
+		
+		if (tipCol==null || tipCol.length()==0) {
+			tipIndex=-1;
+		} else {
+			tipIndex = stampLayer.getColumnNum(tipCol);
+			if (tipIndex>=0) return;
+		}
+		
+		tipIndex=-1;
+	}
+	
+	public String getTooltipText() {
+		// TODO: Don't short circuit
+		if (stampLayer.spectraData()) {
+			return getData(myStamp.getData().length+2).toString();
+		}
+
+		String tipUnits=stampLayer.getParam(stampLayer.TOOLTIP_UNITS);
+		if (tipIndex==-2) calcTooltipIndex();
+				
+		if (tipIndex==-1) return "ID: " + getId();
+		
+		String retStr = myStamp.getData()[tipIndex].toString();
+		
+		if (tipUnits!=null) {
+			retStr+=" "+tipUnits;
+		}
+		
+		return retStr;
+	}
+	
+	
+	public InvestigateData getInvestigateData(InvestigateData iData) {
+		if (stampLayer.spectraData()) {
+			tipIndex=myStamp.getData().length+2;
+			Object val = getData(tipIndex).toString();
+			
+			String name;
+			StampFocusPanel fp = stampLayer.viewToUpdate.myFocus;
+			if(fp.outlinePanel.getExpression() == null){
+				int nameIndex = fp.outlinePanel.getColorColumn();
+				name = fp.table.getTableModel().getColumnName(nameIndex);
+			}else{
+				name = "Calculated value";
+			}
+			
+			
+			String key = getId()+"-"+name;
+			
+			String str = (String) val;
+			if (str!=null) {
+				String vals[] = str.split(",");
+				
+				for (String v : vals) {
+					//TODO: figure out how to calculate units?
+					iData.add(key, v, "", "ItalicSmallBlue","SmallBlue", true);
+				}
+			} else {
+				iData.add(key, val.toString(), "TBD", false);
+			}
+
+			return iData;
+		}		
+		else{
+			String tipUnits=stampLayer.getParam(stampLayer.TOOLTIP_UNITS);
+			if (tipIndex==-2) calcTooltipIndex();
+	
+			if (tipIndex==-1) {
+				iData.add("ID", myStamp.getId());
+				return iData;
+			}
+			
+			Object val = getStamp().getData()[tipIndex];
+			
+			try {
+				if (val instanceof Number) {
+					iData.add(stampLayer.viewToUpdate.myFocus.table.getTableModel().getColumnName(tipIndex), ""+getStamp().getData()[tipIndex], tipUnits, true);
+				}
+			} catch (NumberFormatException nfe) {
+				iData.add(stampLayer.viewToUpdate.myFocus.table.getTableModel().getColumnName(tipIndex), ""+getStamp().getData()[tipIndex], tipUnits, false);			
+			}
+					
+			return iData;
+		}
+	}
+	
 	/**
-	 * Calculates and returns the center point (in lon/lat) for this stamp by
-	 * averaging the 4 corner points
+	 * Calculates and returns the center point (in lon/lat) for this stamp by averaging the points
 	 */
     Point2D centerPoint=null;
     
@@ -69,10 +240,16 @@ public class StampShape {
     		
     		HVector corner = new HVector();
     		
+    		int validPts = 0;
     		for (int i=0; i<myStamp.getPoints().length; i=i+2) {
+    			// If we have a multipolygon, there may be Double.NANs involved that will ruin our day.  Exclude them.
+    			double x = myStamp.getPoints()[i];
+    			double y = myStamp.getPoints()[i+1];
+    			if (Double.isNaN(x) || Double.isNaN(y)) continue;
     			corner=corner.add(new HVector(new Point2D.Double(myStamp.getPoints()[i], myStamp.getPoints()[i+1])));
+    			validPts++;
     		}
-    		corner.div(myStamp.getPoints().length/2);
+    		corner.div(validPts);
     		
     		centerPoint = corner.toLonLat(null);    		
     	}
@@ -110,34 +287,18 @@ public class StampShape {
     	return sw;
     }
     
-    public String getPopupInfo(boolean showAsHTML) {
-        
-        String info = "";
-        
-        if ( showAsHTML ) {
-            info += "<html>";
-        }
-        
-        info += "ID: ";
-        info += getId();
-        
-        if ( showAsHTML ) {
-            info += "</html>";
-        }
-        
-        return info;
-    }
-
     private List<String> supportedTypes=null;
     
     public List<String> getSupportedTypes() {
 		if (supportedTypes==null) {		
 			try {
-				String typeLookupStr = StampLayer.stampURL+"ImageTypeLookup?id="+getId()+"&instrument="+stampLayer.getInstrument()+"&format=JAVA"+stampLayer.getAuthString()+StampLayer.versionStr;
+				String typeLookupStr = "ImageTypeLookup?id="+getId()+"&instrument="+stampLayer.getInstrument()+"&format=JAVA";
 						
-				ObjectInputStream ois = new ObjectInputStream(new URL(typeLookupStr).openStream());
+				ObjectInputStream ois =  new ObjectInputStream(StampLayer.queryServer(typeLookupStr));
 				
-				supportedTypes = (List<String>)ois.readObject();				
+				supportedTypes = (List<String>)ois.readObject();
+				
+				ois.close();
 			} catch (Exception e) {
 				supportedTypes=new ArrayList<String>();
 				e.printStackTrace();
@@ -145,59 +306,7 @@ public class StampShape {
 		}
 		return supportedTypes;
     }
-    
-    private long numLines=Long.MIN_VALUE;
-    private int numSamplesPerLine=Integer.MIN_VALUE;
-    
-    public long getNumLines() {
-    	if (numLines==Long.MIN_VALUE) {
-    		getFullImageSize();
-    	}
-    	return numLines;
-    }
-    
-    public int getNumSamples() {
-    	if (numSamplesPerLine==Integer.MIN_VALUE) {
-    		getFullImageSize();
-    	}
-    	return numSamplesPerLine;
-    }
-    
-    private void getFullImageSize() {
-		try {
-			String sizeLookupStr = StampLayer.stampURL+"ImageSizeLookup?id="+getId()+"&instrument="+stampLayer.getInstrument()+"&format=JAVA"+stampLayer.getAuthString()+StampLayer.versionStr;
-					
-			ObjectInputStream ois = new ObjectInputStream(new URL(sizeLookupStr).openStream());
-			
-			Integer samples = (Integer)ois.readObject();
-			Long lines = (Long)ois.readObject();
-			numLines = lines.longValue();
-			numSamplesPerLine = samples.intValue();
-		} catch (Exception e) {
-			numLines=0;
-			numSamplesPerLine=0;
-			e.printStackTrace();
-		}
-    }
-    
-    private HashMap<String,String> projectionParams=null;
-    
-    public HashMap<String, String> getProjectionParams() {
-    	if (projectionParams!=null) return projectionParams;
-    	
-		try {
-			String paramLookupStr = StampLayer.stampURL+"ProjectionParamLookup?id="+getId()+"&instrument="+stampLayer.getInstrument()+"&format=JAVA"+stampLayer.getAuthString()+StampLayer.versionStr;
-					
-			ObjectInputStream ois = new ObjectInputStream(new URL(paramLookupStr).openStream());
-			
-			projectionParams = (HashMap<String,String>)ois.readObject();
-		} catch (Exception e) {
-			e.printStackTrace();
-		}
-		
-		return projectionParams;
-    }
-    
+        
     public final synchronized void clearProjectedData()
     {
         path = null;
@@ -252,25 +361,75 @@ public class StampShape {
                         
             double pts[] = myStamp.getPoints();
             
+            boolean moveNext=true;
+            boolean closePath=true;
+            
             for (int i=0; i<pts.length; i=i+2) {
-                pt = Main.PO.convSpatialToWorld(pts[i],
+            	if (Double.isNaN(pts[i]) || Double.isNaN(pts[i+1])) {
+            		moveNext=true;
+            		closePath=false;
+            		continue;
+            	} else {
+            		pt = Main.PO.convSpatialToWorld(pts[i],
                         pts[i+1]);
-
-                if (i==0) {
+            	}
+            	
+                if (moveNext) {
                 	path.moveTo((float)pt.getX(),
                         (float)pt.getY());
+                	moveNext=false;
                 } else {
-                	path.lineTo((float)pt.getX(),
-                            (float)pt.getY());                	
+//            		System.out.println("Line");
+                	float x = (float) pt.getX();
+                	float y = (float) pt.getY();
+               		path.lineTo(x, y);
                 }
             }
             
-            path.closePath();
+            if (closePath && pts.length>0) {
+            	path.closePath();
+            }
         } 
         return  path;
     }
 
+    public boolean intersects(Rectangle2D intersectBox, Rectangle2D intersectBox2) {
 
+    	if (stampLayer.lineShapes()) {
+	        
+	        double pts[] = myStamp.getPoints();
+	        
+	        Point2D lastPt = null;
+	        Point2D curPt = null;
+	        	        
+	        for (int i=0; i<pts.length; i=i+2) {
+	        	if (Double.isNaN(pts[i]) || Double.isNaN(pts[i+1])) {
+	        		return false;
+	        	} else {
+	        		curPt = Main.PO.convSpatialToWorld(pts[i], pts[i+1]);
+	        	}
+	        	
+	        	if (lastPt!=null && curPt!=null) {
+	        		Shape line = normalize360(new Line2D.Double(lastPt,  curPt));
+	        		if (line.intersects(intersectBox)) {
+	        			return true;
+	        		}
+	        		if (intersectBox2!=null && line.intersects(intersectBox2)) {
+	        			return true;
+	        		}
+	        	}
+            	
+        		lastPt = curPt;
+	        }
+    	} else {  // Why is this being called?
+    		return getNormalPath().intersects(intersectBox);
+    	}
+    	
+    	
+    	return false;
+    }
+    
+    
 /**
  ** Given a shape, iterates over it and performs the given
  ** coordinate modification to every point in the shape.

@@ -1,23 +1,3 @@
-// Copyright 2008, Arizona Board of Regents
-// on behalf of Arizona State University
-// 
-// Prepared by the Mars Space Flight Facility, Arizona State University,
-// Tempe, AZ.
-// 
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-// 
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU General Public License for more details.
-// 
-// You should have received a copy of the GNU General Public License
-// along with this program.  If not, see <http://www.gnu.org/licenses/>.
-
-
 package edu.asu.jmars.layer.map2.stages.composite;
 
 import java.awt.Color;
@@ -64,8 +44,9 @@ public class HSVComposite extends CompositeStage implements Cloneable, Serializa
 		extractor[input] = Extractor.create(inputData.getImage());
 		
 		if (output.getWidth() != inputData.getImage().getWidth()
-		||  output.getHeight() != inputData.getImage().getHeight())
+		||  output.getHeight() != inputData.getImage().getHeight()) {
 			throw new IllegalArgumentException("Invalid image sizes, huh?");
+		}
 		
 		// narrow changed area down to the valid area
 		changedArea.intersect(data.getValidArea());
@@ -80,14 +61,12 @@ public class HSVComposite extends CompositeStage implements Cloneable, Serializa
 			final int y2 = y1 + (int)Math.ceil(region.getHeight());
 			for (int i = x1; i < x2; i++) {
 				for (int j = y1; j < y2; j++) {
-					
 					// convert HSB values to RGB for this output location
 					// and always enable alpha on pixels we set here
 					for(int k=0; k<3; k++)
 						alphas[k] = extractor[k].getAlpha(i, j);
 
 					int outAlpha = (int)AlphaCombinerOp.alphaCombine(alphas) * 255;
-					
 					output.setRGB(i, j, (outAlpha << 24) | 
 							(Color.HSBtoRGB(
 									extractor[0].getHue(i, j),

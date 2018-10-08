@@ -1,23 +1,3 @@
-// Copyright 2008, Arizona Board of Regents
-// on behalf of Arizona State University
-// 
-// Prepared by the Mars Space Flight Facility, Arizona State University,
-// Tempe, AZ.
-// 
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-// 
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU General Public License for more details.
-// 
-// You should have received a copy of the GNU General Public License
-// along with this program.  If not, see <http://www.gnu.org/licenses/>.
-
-
 package edu.asu.jmars.swing;
 
 import java.awt.Color;
@@ -148,18 +128,27 @@ public abstract class ColorInterp implements Cloneable, Serializable
 			// meaningless... so to prevent its "random" value from
 			// causing trouble, we fix the grayscale's hue to the color's
 			// hue for smooth fading.
-			if(hsb0[1] == 0)
-				return  Color.getHSBColor(hsb1[0],
+			Color result;
+			
+			if(hsb0[1] == 0){
+				result = Color.getHSBColor(hsb1[0],
 										  mix0*hsb0[1] + mix1*hsb1[1],
 										  mix0*hsb0[2] + mix1*hsb1[2]);
-			if(hsb1[1] == 0.0)
-				return  Color.getHSBColor(hsb0[0],
+			}
+			else if(hsb1[1] == 0.0){
+				result = Color.getHSBColor(hsb0[0],
 										  mix0*hsb0[1] + mix1*hsb1[1],
 										  mix0*hsb0[2] + mix1*hsb1[2]);
-
-			return  Color.getHSBColor(mixHue(hsb0[0], hsb1[0], mix0, mix1),
-									  mix0*hsb0[1] + mix1*hsb1[1],
-									  mix0*hsb0[2] + mix1*hsb1[2]);
+			}
+			else{
+				result =  Color.getHSBColor(mixHue(hsb0[0], hsb1[0], mix0, mix1),
+										  mix0*hsb0[1] + mix1*hsb1[1],
+										  mix0*hsb0[2] + mix1*hsb1[2]);
+			}
+			//Don't forget to take the alpha into consideration
+			int alpha = (int) Math.round(c0.getAlpha()*mix0 + c1.getAlpha()*mix1);
+			
+			return new Color(result.getRed(), result.getGreen(), result.getBlue(), alpha);
 		 }
 	 }
 
@@ -265,7 +254,9 @@ public abstract class ColorInterp implements Cloneable, Serializable
 			int g = (int) Math.round(mix0*c0.getGreen() + mix1*c1.getGreen());
 			int b = (int) Math.round(mix0*c0.getBlue()  + mix1*c1.getBlue() );
 
-			return  new Color(r, g, b);
+			int a = (int) Math.round(mix0*c0.getAlpha() + mix1*c1.getAlpha());
+			
+			return  new Color(r, g, b, a);
 		 }
 	 }
 	;

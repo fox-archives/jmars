@@ -1,52 +1,11 @@
-// Copyright 2008, Arizona Board of Regents
-// on behalf of Arizona State University
-// 
-// Prepared by the Mars Space Flight Facility, Arizona State University,
-// Tempe, AZ.
-// 
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-// 
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU General Public License for more details.
-// 
-// You should have received a copy of the GNU General Public License
-// along with this program.  If not, see <http://www.gnu.org/licenses/>.
-
-
 package edu.asu.jmars.util.stable;
 
-import java.awt.BorderLayout;
-import java.awt.Component;
-import java.awt.Dimension;
-import java.awt.Frame;
-import java.awt.GridBagConstraints;
-import java.awt.GridBagLayout;
-import java.awt.Insets;
-import java.awt.Toolkit;
-import java.awt.event.ActionEvent;
-import java.awt.event.ItemEvent;
-import java.awt.event.ItemListener;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 
-import javax.swing.AbstractAction;
-import javax.swing.BoxLayout;
-import javax.swing.JButton;
-import javax.swing.JCheckBox;
-import javax.swing.JDialog;
-import javax.swing.JPanel;
-import javax.swing.JScrollPane;
-import javax.swing.WindowConstants;
 import javax.swing.table.DefaultTableColumnModel;
 import javax.swing.table.TableColumn;
-
-import edu.asu.jmars.Main;
 
 /**
  * Extends DefaultTableColumnModel to let the user filter which columns they
@@ -60,12 +19,18 @@ public class FilteringColumnModel extends DefaultTableColumnModel {
 	 * All the columns, visible or not
 	 */
 	private List<TableColumn> allColumns = new ArrayList<TableColumn>();
-
-	/**
-	 * Column dialog for selecting which columns are visible.
-	 */
-	private ColumnDialog columnDialog = new ColumnDialog((Frame)Main.testDriver.getLManager(), this);
-
+	
+	public interface FilterChangeListener {
+		void filtersChanged();
+	}
+	private List<FilterChangeListener> listeners = new ArrayList<FilterChangeListener>();
+	public void addListener(FilterChangeListener listener) {
+		listeners.add(listener);
+	}
+	public void removeListener(FilterChangeListener listener) {
+		listeners.remove(listener);
+	}
+	
 	// Convert from visible index to allColumns index; the 'first available'
 	// index in tableColumns is translated to the 'first available' index in
 	// allColumns.
@@ -84,7 +49,7 @@ public class FilteringColumnModel extends DefaultTableColumnModel {
 		copyA.retainAll(b);
 		return copyA;
 	}
-
+	
 	/**
 	 * Returns unmodifiable List of all columns, visible or not.
 	 */
@@ -132,22 +97,22 @@ public class FilteringColumnModel extends DefaultTableColumnModel {
 		if (!allColumns.contains(col)) {
 			super.addColumn(col);
 			allColumns.add(col);
-			columnDialog.buildCheckboxes();
+			fireFiltersChanged();
 		}
 	}
-
+	
 	public void removeAllColumns() {
         for (Object tc : allColumns) {
             super.removeColumn((TableColumn)tc);
         }
-		allColumns.clear();		
-		columnDialog.buildCheckboxes();
+		allColumns.clear();
+		fireFiltersChanged();
 	}
 	
 	public void removeColumn(TableColumn column) {
 		allColumns.remove(column);
 		super.removeColumn(column);
-		columnDialog.buildCheckboxes();
+		fireFiltersChanged();
 	}
 
 	public void moveColumn(int tableFrom, int tableTo) {
@@ -164,7 +129,7 @@ public class FilteringColumnModel extends DefaultTableColumnModel {
 			return;
 		// update both column lists
 		allColumns.add(allTo, allColumns.remove(allFrom));
-		columnDialog.buildCheckboxes();
+		fireFiltersChanged();
 	}
 
 	/**
@@ -184,116 +149,35 @@ public class FilteringColumnModel extends DefaultTableColumnModel {
 			int to = intersection(allColumns, tableColumns).indexOf(column);
 			super.moveColumn(from, to);
 		}
-		columnDialog.buildCheckboxes();
+		fireFiltersChanged();
 	}
-
+	
 	/**
-	 * Returns a JDialog for choosing columns. Note that since it is unparented,
-	 * the calling code must deal with closing the dialog if it shows it.
+	 * Set all columns visible or hidden at once, firing a listener update at the end.
+	 * The alternate approach triggered many updates if a table had lots of columns that were being toggled at once.
+	 * @param vis
 	 */
-	public JDialog getColumnDialog () {
-		return columnDialog;
-	}
-
-	/**
-	 * Allows selecting which columns are displayed in the table.
-	 */
-	class ColumnDialog extends JDialog {
-		private FilteringColumnModel columnModel;
-		private JPanel columnPanel;
-
-		public ColumnDialog(Frame parent, FilteringColumnModel columnModel) {
-			super((Frame) parent, "Columns", false);
-			this.columnModel = columnModel;
-			setDefaultCloseOperation(WindowConstants.HIDE_ON_CLOSE);
-			getContentPane().setLayout(new BorderLayout());
-
-			// Set up list of columns in the middle of the dialog
-			columnPanel = new JPanel();
-			columnPanel.setLayout(new BoxLayout(columnPanel,
-				BoxLayout.Y_AXIS));
-			buildCheckboxes();
-			JScrollPane scrollPane = new JScrollPane(columnPanel);
-			getContentPane().add(scrollPane, BorderLayout.CENTER);
-			scrollPane.setPreferredSize(new Dimension(250,400));
-
-			// Set up the button panel at the bottom of the panel.
-			JPanel buttonPanel = new JPanel();
-			JButton allButton = new JButton(new AbstractAction("Show All") {
-				public void actionPerformed(ActionEvent e) {
-					Component[] list = columnPanel.getComponents();
-					for (int i = 0; i < list.length; i++) {
-						JCheckBox cb = (JCheckBox) list[i];
-						if (!cb.isSelected())
-							cb.doClick(1);
-					}
+	public void setAllVisible(boolean vis) {
+		for (TableColumn column : allColumns) {
+			if (vis) {
+				if (!tableColumns.contains(column)) {
+					super.addColumn(column);
+					int from = tableColumns.indexOf(column);
+					int to = intersection(allColumns, tableColumns).indexOf(column);
+					super.moveColumn(from, to);		
 				}
-			});
-
-			JButton nothingButton = new JButton(new AbstractAction(
-					"Hide All") {
-				public void actionPerformed(ActionEvent e) {
-					Component[] list = columnPanel.getComponents();
-					for (int i = 0; i < list.length; i++) {
-						JCheckBox cb = (JCheckBox) list[i];
-						if (cb.isSelected())
-							cb.doClick(1);
-					}
-				}
-			});
-
-			JButton okButton = new JButton(new AbstractAction("OK") {
-				public void actionPerformed(ActionEvent e) {
-					setVisible(false);
-				}
-			});
-
-			allButton.setFocusPainted(false);
-			nothingButton.setFocusPainted(false);
-			okButton.setFocusPainted(false);
-
-			buttonPanel.setLayout(new GridBagLayout());
-			GridBagConstraints gbc = new GridBagConstraints();
-			gbc.insets = new Insets(5, 5, 5, 5);
-			gbc.gridx = 0;
-			buttonPanel.add(allButton, gbc);
-			gbc.gridx = 1;
-			buttonPanel.add(nothingButton, gbc);
-			gbc.gridy = 1;
-			gbc.gridx = 0;
-			gbc.gridwidth = 2;
-			gbc.insets.top = 0;
-			buttonPanel.add(okButton, gbc);
-			getContentPane().add(buttonPanel, BorderLayout.SOUTH);
-			pack();
-
-			// Display this dialog in the middle of the screen.
-			Dimension screen = Toolkit.getDefaultToolkit().getScreenSize();
-			Dimension d = getSize();
-			d.width = Math.min(d.width, (screen.width / 2));
-			d.height = Math.min(d.height, (screen.height / 2));
-			setSize(d);
-			int x = (screen.width - d.width) / 2;
-			int y = (screen.height - d.height) / 2;
-			setLocation(x, y);
-		}
-
-		public void buildCheckboxes() {
-			columnPanel.removeAll();
-			for (final TableColumn column: columnModel.getAllColumns()) {
-				String name = column.getHeaderValue().toString();
-				boolean visible = (null != columnModel.getVisColumn(column.getIdentifier()));
-				JCheckBox cb = new JCheckBox (name, null, visible);
-				cb.addItemListener(new ItemListener() {
-					public void itemStateChanged(ItemEvent e) {
-						boolean checked = (e.getStateChange() == ItemEvent.SELECTED);
-						columnModel.setVisible(column, checked);
-					}
-				});
-				columnPanel.add(cb);
+			} else {
+				super.removeColumn(column);				
 			}
-			validate();
-			paint (getGraphics());
+		}
+			
+		fireFiltersChanged();
+	}
+		
+	/** notifies that filters or columns changed */
+	protected void fireFiltersChanged() {
+		for (FilterChangeListener l: new ArrayList<FilterChangeListener>(listeners)) {
+			l.filtersChanged();
 		}
 	}
 }

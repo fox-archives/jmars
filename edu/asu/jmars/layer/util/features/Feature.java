@@ -1,34 +1,9 @@
-// Copyright 2008, Arizona Board of Regents
-// on behalf of Arizona State University
-// 
-// Prepared by the Mars Space Flight Facility, Arizona State University,
-// Tempe, AZ.
-// 
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-// 
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU General Public License for more details.
-// 
-// You should have received a copy of the GNU General Public License
-// along with this program.  If not, see <http://www.gnu.org/licenses/>.
-
-
 package edu.asu.jmars.layer.util.features;
 
-import java.util.ArrayList;
 import java.util.Collections;
-import java.util.Iterator;
 import java.util.LinkedHashMap;
-import java.util.List;
 import java.util.Map;
 import java.util.Set;
-
-import edu.asu.jmars.util.Util;
 
 /**
  * A set of attributes for a specific feature and a reference to the owning
@@ -53,7 +28,7 @@ import edu.asu.jmars.util.Util;
  */
 public class Feature {
 	// package-private collection that 'owns' this Feature
-	public SingleFeatureCollection owner;
+	private final FeatureCollection owner;
 	// package-private map of Field to Object
 	public Map<Field,Object> attributes = new LinkedHashMap<Field,Object>();
 
@@ -61,6 +36,11 @@ public class Feature {
 	 * Default constructor creates a Feature object with no defined attributes.
 	 */
 	public Feature () {
+		owner = null;
+	}
+	
+	public Feature(FeatureCollection fc) {
+		this.owner = fc;
 	}
 	
 	/**
@@ -83,20 +63,16 @@ public class Feature {
 	public Object getAttribute (Field f) {
 		return attributes.get (f);
 	}
-
+	
 	/**
 	 * Set the value of a given attribute. If the given Field is not defined
 	 * on the containing collection's schema, it will be added.
 	 */
 	public void setAttribute (Field f, Object value) {
-		Feature valueBefore = (Feature)this.clone();
-		setAttributeQuiet (f, value);
-		
 		if (owner != null) {
-			owner.notify (new FeatureEvent (FeatureEvent.CHANGE_FEATURE, owner, 
-					Collections.singletonList (this),
-					Collections.singletonMap(this, valueBefore),
-					Collections.singletonList(f)));
+			owner.setAttributes(this, Collections.singletonMap(f, value));
+		} else {
+			setAttributeQuiet (f, value);
 		}
 	}
 	
@@ -119,24 +95,6 @@ public class Feature {
 	}
 	
 	/**
-	 * Set the values of multiple attributes. The owner is notified if 
-	 * the quiet parameter is false.
-	 * 
-	 * @param fieldMap
-	 * @param quiet
-	 */
-	public void setAttributes(Map fieldMap, boolean quiet){
-		Feature valueBefore = (Feature)this.clone();
-		attributes.putAll(fieldMap);
-		if (!quiet && owner != null){
-			owner.notify(new FeatureEvent(FeatureEvent.CHANGE_FEATURE, owner,
-					Collections.singletonList(this),
-					Collections.singletonMap(this, valueBefore),
-					new ArrayList(fieldMap.keySet())));
-		}
-	}
-
-	/**
 	 * Clones the attribute map <i>only</i>; the Feature must be attached to a
 	 * FeatureCollection to set the owner.
 	 */
@@ -156,37 +114,22 @@ public class Feature {
 			return false;
 		
 		Feature f = (Feature)o;
-		return (f.owner == owner)
-			&& f.attributes.equals(attributes);
+		return f.owner == owner && f.attributes.equals(attributes);
 	}
 	
 	/**
-	 * Debugging version of toString() method.
+	 * Since the path is used so frequently, this particular resource has get/set
+	 * properties.
 	 */
-	public String debugToString(){
-		List attr = new ArrayList();
-		
-		for(Iterator i=attributes.keySet().iterator(); i.hasNext(); ){
-			Object key = i.next();
-			attr.add(""+key+"="+attributes.get(key));
-		}
-		
-		return "Feature[owner="+owner+","+Util.join(",", (String[])attr.toArray(new String[0]))+"]";
+	public final FPath getPath() {
+		return (FPath)attributes.get(Field.FIELD_PATH);
 	}
 
 	/**
 	 * Since the path is used so frequently, this particular resource has get/set
 	 * properties.
 	 */
-	public FPath getPath() {
-		return (FPath) getAttribute(Field.FIELD_PATH);
-	}
-
-	/**
-	 * Since the path is used so frequently, this particular resource has get/set
-	 * properties.
-	 */
-	public void setPath (FPath path) {
+	public final void setPath (FPath path) {
 		setAttribute(Field.FIELD_PATH, path);
 	}
 }

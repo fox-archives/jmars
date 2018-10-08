@@ -1,30 +1,9 @@
-// Copyright 2008, Arizona Board of Regents
-// on behalf of Arizona State University
-// 
-// Prepared by the Mars Space Flight Facility, Arizona State University,
-// Tempe, AZ.
-// 
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-// 
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU General Public License for more details.
-// 
-// You should have received a copy of the GNU General Public License
-// along with this program.  If not, see <http://www.gnu.org/licenses/>.
-
-
 package edu.asu.jmars.swing;
 
 import java.awt.BorderLayout;
 import java.awt.Color;
 import java.awt.Component;
 import java.awt.Dimension;
-import java.awt.Frame;
 import java.awt.Graphics;
 import java.awt.event.ActionEvent;
 import java.awt.event.ActionListener;
@@ -46,6 +25,7 @@ import java.io.PrintStream;
 import java.io.Serializable;
 import java.net.URL;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
@@ -91,6 +71,7 @@ import javax.swing.event.MouseInputAdapter;
 import javax.swing.filechooser.FileFilter;
 
 import edu.asu.jmars.Main;
+import edu.asu.jmars.layer.map2.stages.ColorStretcherStageSettings;
 import edu.asu.jmars.util.DebugLog;
 import edu.asu.jmars.util.Util;
 
@@ -164,12 +145,11 @@ public class ColorMapper
 			);
 	 }
 
-	public ColorMapper(int[] values, Color[] colors)
-	 {
+	public ColorMapper(int[] values, Color[] colors, ColorStretcherStageSettings settings) {
 		super(new BorderLayout());
-
+		
 		mslider = new MultiSlider(0, 255, values);
-		scale = new ColorScale(mslider, colors);
+		scale = new ColorScale(mslider, colors, settings);
 		scale.setBorder(
 			BorderFactory.createEmptyBorder(0, mslider.getLeftPadding(),
 											0, mslider.getRightPadding())
@@ -191,6 +171,10 @@ public class ColorMapper
 		scale.addMouseListener(doubles);
 
 		extraInit();
+	}
+	public ColorMapper(int[] values, Color[] colors)
+	 {
+		this(values,colors,null);
 	 }
 
 	public ColorScale getColorScale()
@@ -202,6 +186,13 @@ public class ColorMapper
 	 {
 		Dimension size = super.getPreferredSize();
 		size.height += 3 * scale.getPreferredSize().height;
+		return  size;
+	 }
+	
+	public Dimension getMinimumSize()
+	 {
+		Dimension size = super.getMinimumSize();
+		size.height += 3 * scale.getMinimumSize().height;
 		return  size;
 	 }
 
@@ -287,14 +278,14 @@ public class ColorMapper
 			return s;
 		}
 
-		public ColorMapOp getColorMapOp()
+		public ColorMapOp getColorMapOp(BufferedImage image)
 		 {
 			if(values.length == 2  &&  values[0] == 0  &&  values[1] == 255  &&
 			   colors[0].equals(Color.black)  && colors[1].equals(Color.white))
-				return  new ColorMapOp();
+				return  new ColorMapOp(image);
 			else
 				return  new ColorMapOp(interpolation.createColorMap(values,
-																	colors));
+																	colors), image);
 		 }
 		
 		public int[] getValues(){
@@ -309,11 +300,29 @@ public class ColorMapper
 			return interpolation;
 		}
 
+		public String toString(){
+			return this.getClass().getSimpleName()+"(values="+Arrays.asList(getValues())+
+			"; colors="+Arrays.asList(getColors())+
+			"; interp="+getInterpolation().getKeyword()+")";
+		}
+		
 		public static State DEFAULT = new State(
 			new int[] { 0, 255 },
 			new Color[] { Color.black, Color.white },
 			ColorInterp.LIN_HSB_SHORT
 			);
+		
+		/**
+		 * Compare the values to determine if the passed in state is equal to this state
+		 * @param checkState
+		 * @return
+		 */
+		public boolean equals(State checkState){
+			boolean valuesEqual = Arrays.equals(checkState.getValues(),values);
+			boolean colorsEqual = Arrays.equals(checkState.getColors(),colors);
+			boolean interpEqual = interpolation.equals(checkState.getInterpolation());
+			return (valuesEqual && colorsEqual && interpEqual);
+		}
 	 }
 
 	public State getState()
@@ -358,7 +367,7 @@ public class ColorMapper
 
 	public ColorMapOp getColorMapOp()
 	 {
-		return  new ColorMapOp(scale);
+		return  new ColorMapOp(scale, null);
 	 }
 
 	public void addChangeListener(ChangeListener l)
@@ -1010,6 +1019,7 @@ private class ResetColors extends JMenu
 			add(new LoadColorMap("dv6color.cmap", "Color Scale (6)"));
 			add(new LoadColorMap("dv7color.cmap", "Color Scale (7)"));
 			add(new LoadColorMap("xvcolor.cmap", "XV Color Scale"));
+			add(new LoadColorMap("topo_schwarzwald.cmap", "Topo Schwarzwald"));
 		 }
 	 }
 

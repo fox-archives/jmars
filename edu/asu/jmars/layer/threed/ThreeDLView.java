@@ -1,23 +1,3 @@
-// Copyright 2008, Arizona Board of Regents
-// on behalf of Arizona State University
-// 
-// Prepared by the Mars Space Flight Facility, Arizona State University,
-// Tempe, AZ.
-// 
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-// 
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU General Public License for more details.
-// 
-// You should have received a copy of the GNU General Public License
-// along with this program.  If not, see <http://www.gnu.org/licenses/>.
-
-
 package edu.asu.jmars.layer.threed;
 
 import java.awt.geom.Rectangle2D;
@@ -32,16 +12,25 @@ import edu.asu.jmars.layer.Layer.LView;
  */
 public class ThreeDLView extends LView {
 	/** The user controls options */
-	private ThreeDSettings settings;
+	private StartupParameters settings;
 	/** The focus panel */
 	private ThreeDFocus focus;
 	/** The layer */
 	private ThreeDLayer myLayer;
+	//private static Action updateAction; // JNN: added
 	
-	public ThreeDLView(ThreeDLayer parent, ThreeDSettings s) {
+	public ThreeDLView(ThreeDLayer parent, StartupParameters s) {
 		super(parent);
 		myLayer = parent;
 		settings = s;
+	}
+
+	public StartupParameters getInitialLayerData() {
+		if (focus != null) {
+			return focus.getSettings();
+		} else {
+			return (StartupParameters)getLayer().initialLayerData;
+		}
 	}
 	
 	protected LView _new() {
@@ -78,7 +67,7 @@ public class ThreeDLView extends LView {
 		}
 		if (focus == null) {
 			// set the base class reference too!
-			focusPanel = focus = new ThreeDFocus(myLayer, this, settings);
+		focusPanel = focus = new ThreeDFocus(this, settings);
 		}
 		return focus;
 	}
@@ -91,7 +80,7 @@ public class ThreeDLView extends LView {
 	 */
 	protected Object createRequest(Rectangle2D where) {
 		if (isAlive()) {
-			return new Request(this, getProj().getWorldWindow(), viewman2.getMagnify(), Main.PO);
+			return new Request(this, getProj().getWorldWindow(), viewman.getZoomManager().getZoomPPD(), Main.PO);
 		} else {
 			return null;
 		}
@@ -114,18 +103,29 @@ public class ThreeDLView extends LView {
 		// save settings
 		if (saving == true) {
 			ThreeDFocus fp = (ThreeDFocus) getFocusPanel();
-			ThreeDSettings s = fp.getSettings();
+			StartupParameters s = fp.getSettings();
 			viewSettings.put(key, s);
+			viewSettings.put("mainEnabled", new Boolean(true));//update the mainEnabled flag
+			viewSettings.put("showMain", new Boolean(true));
 		}
 		
 		// load settings
 		else {
 			if (viewSettings.containsKey(key)) {
-				settings = (ThreeDSettings) viewSettings.get(key);
+				settings = (StartupParameters) viewSettings.get(key);
 				focusPanel = getFocusPanel();
 			}
 		}
 	}
+	
+//The following two methods are used to query for the
+// info panel fields (description, citation, etc)	
+ 	public String getLayerKey(){
+ 		return "3D Layer";
+ 	}
+ 	public String getLayerType(){
+ 		return "3d";
+ 	}
 }
 
 class Request {

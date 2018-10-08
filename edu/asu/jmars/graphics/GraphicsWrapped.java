@@ -1,23 +1,3 @@
-// Copyright 2008, Arizona Board of Regents
-// on behalf of Arizona State University
-// 
-// Prepared by the Mars Space Flight Facility, Arizona State University,
-// Tempe, AZ.
-// 
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-// 
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU General Public License for more details.
-// 
-// You should have received a copy of the GNU General Public License
-// along with this program.  If not, see <http://www.gnu.org/licenses/>.
-
-
 package edu.asu.jmars.graphics;
 
 import edu.asu.jmars.*;
@@ -194,6 +174,18 @@ public final class GraphicsWrapped
 			Shape s2 = AffineTransform
 				.getTranslateInstance(base + mod*i, 0)
 				.createTransformedShape(s);
+			
+			//TODO: a bug is submitted for this in bugzilla,
+			// if java fixes this, the check may not be 
+			//necessary anymore.
+			
+			//If zoomed in really high, one of the two
+			// shapes returned will have an x value that
+			// is ridiculously high, which will cause 
+			// a segmentation fault and crash jmars.
+			if(s2.getBounds().getX()>100000){
+				continue;
+			}
 			g2.draw(s2);
 		 }
      }
@@ -213,6 +205,19 @@ public final class GraphicsWrapped
 			g2.fill(s2);
 		 }
      }
+
+	@Override
+	public void drawOval(int x, int y, int width, int height) {
+		Shape oval = new Ellipse2D.Double(x, y, width, height);
+		draw(oval);
+	}
+    
+    
+	@Override
+	public void fillOval(int x, int y, int width, int height) {
+		Shape oval = new Ellipse2D.Double(x, y, width, height);
+		fill(oval);
+	}
 
 	public void transform(AffineTransform at)
 	 {

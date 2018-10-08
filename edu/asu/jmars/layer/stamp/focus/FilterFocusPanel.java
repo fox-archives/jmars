@@ -1,23 +1,3 @@
-// Copyright 2008, Arizona Board of Regents
-// on behalf of Arizona State University
-// 
-// Prepared by the Mars Space Flight Facility, Arizona State University,
-// Tempe, AZ.
-// 
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-// 
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU General Public License for more details.
-// 
-// You should have received a copy of the GNU General Public License
-// along with this program.  If not, see <http://www.gnu.org/licenses/>.
-
-
 package edu.asu.jmars.layer.stamp.focus;
 
 import java.awt.BorderLayout;
@@ -35,6 +15,7 @@ import javax.swing.JScrollPane;
 
 import edu.asu.jmars.layer.stamp.AddLayerWrapper;
 import edu.asu.jmars.layer.stamp.StampFilter;
+import edu.asu.jmars.layer.stamp.StampLView;
 import edu.asu.jmars.layer.stamp.StampLayer;
 
 public class FilterFocusPanel extends JPanel {
@@ -42,13 +23,13 @@ public class FilterFocusPanel extends JPanel {
 	StampLayer stampLayer;
 	final AddLayerWrapper wrapper;
 	
-	public FilterFocusPanel(StampLayer newLayer, AddLayerWrapper newWrapper) {
-		stampLayer = newLayer;
+	public FilterFocusPanel(final StampLView stampLView, AddLayerWrapper newWrapper) {
+		stampLayer = stampLView.stampLayer;
 		wrapper = newWrapper;
 		
 		final Box vert = Box.createVerticalBox();
 	
-		JLabel srcLbl = new JLabel(stampLayer.viewToUpdate.getName());
+		JLabel srcLbl = new JLabel(stampLView.getName());
 		JPanel srcLblPanel = new JPanel(new BorderLayout());
 		srcLblPanel.add(srcLbl, BorderLayout.NORTH);
 		
@@ -64,7 +45,7 @@ public class FilterFocusPanel extends JPanel {
 				
 				if (selected != null){
 					vert.add(selected.getUI(stampLayer));
-					stampLayer.viewToUpdate.focusPanel.validate();
+					stampLView.focusPanel.validate();
 				}
 			}
 		});

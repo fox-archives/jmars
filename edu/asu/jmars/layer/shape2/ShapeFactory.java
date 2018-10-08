@@ -1,28 +1,11 @@
-// Copyright 2008, Arizona Board of Regents
-// on behalf of Arizona State University
-// 
-// Prepared by the Mars Space Flight Facility, Arizona State University,
-// Tempe, AZ.
-// 
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-// 
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU General Public License for more details.
-// 
-// You should have received a copy of the GNU General Public License
-// along with this program.  If not, see <http://www.gnu.org/licenses/>.
-
-
 package edu.asu.jmars.layer.shape2;
 
+import edu.asu.jmars.layer.LManager;
 import edu.asu.jmars.layer.LViewFactory;
+import edu.asu.jmars.layer.LayerParameters;
 import edu.asu.jmars.layer.SerializedParameters;
 import edu.asu.jmars.layer.Layer.LView;
+import edu.asu.jmars.layer.shape2.ShapeLView.ShapeParams;
 
 public class ShapeFactory extends LViewFactory {
 	public ShapeFactory() {
@@ -37,15 +20,45 @@ public class ShapeFactory extends LViewFactory {
 		return null;
 	}
 	
-	public void createLView(Callback callback) {
-		LView lview = new ShapeLView(new ShapeLayer());
-		lview.originatingFactory = this;
-		callback.receiveNewLView(lview);
-	}
-	
-	public LView recreateLView(SerializedParameters parmBlock) {
-		LView lview = new ShapeLView(new ShapeLayer());
+	public ShapeLView newInstance(boolean isReadOnly, LayerParameters lp) {
+		ShapeLayer layer = new ShapeLayer(isReadOnly);
+		ShapeLView lview = new ShapeLView(layer, true, isReadOnly, lp);
 		lview.originatingFactory = this;
 		return lview;
 	}
+	
+	public ShapeLView newInstance(LayerParameters lp) {
+	// the true passed into the shapelayer means it is a read only shape file	
+		boolean isReadOnly = false;
+		if (lp.name!=null)
+			isReadOnly = true;
+		ShapeLayer layer = new ShapeLayer(isReadOnly);
+		ShapeLView lview = new ShapeLView(layer, true, isReadOnly, lp);
+		lview.originatingFactory = this;
+		return lview;
+	}
+	
+	public void createLView(boolean async, LayerParameters lp) {
+		LManager.receiveNewLView(newInstance(false, lp));
+	}
+	
+	public LView recreateLView(SerializedParameters parmBlock) {
+		boolean isReadOnly=false;
+		String name = "";
+		LayerParameters lp = null;
+		if (parmBlock instanceof ShapeParams){
+			lp = ((ShapeParams)parmBlock).layerParams;
+			if(lp!=null)
+				name = lp.name;
+
+			if (!name.equals("Custom Shape Layer") && !name.equals("")){
+				isReadOnly=true;
+			}
+		}
+		ShapeLView slv = newInstance(isReadOnly, lp);
+		slv.setName(name);
+		return slv;
+	}
+	
+	
 }

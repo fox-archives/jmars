@@ -1,28 +1,10 @@
-// Copyright 2008, Arizona Board of Regents
-// on behalf of Arizona State University
-// 
-// Prepared by the Mars Space Flight Facility, Arizona State University,
-// Tempe, AZ.
-// 
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-// 
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU General Public License for more details.
-// 
-// You should have received a copy of the GNU General Public License
-// along with this program.  If not, see <http://www.gnu.org/licenses/>.
-
-
 package edu.asu.jmars.swing;
 
+import edu.asu.jmars.layer.map2.stages.ColorStretcherStageSettings;
 import edu.asu.jmars.util.*;
 import java.awt.*;
 import java.awt.event.*;
+import java.text.NumberFormat;
 import java.util.*;
 import javax.swing.*;
 import javax.swing.event.*;
@@ -37,17 +19,31 @@ public class ColorScale extends JPanel
 	private Color[] colors;
 	private float boundLo = 0;
 	private float boundHi = 255;
+	private double colorSettingsMax;
+	
+	public double getColorSettingsMax() {
+		return colorSettingsMax;
+	}
 
-	public ColorScale(int[] values, Color[] colors)
-	 {
-		setBorder(BorderFactory.createLineBorder(Color.yellow, 50));
-		setColors(values, colors);
-  		setToolTipText("");
-	 }
+	public void setColorSettingsMax(double colorSettingsMax) {
+		this.colorSettingsMax = colorSettingsMax;
+	}
 
-	public ColorScale(final MultiSlider slider, Color[] colors)
-	 {
-		this(slider.getValues(), colors);
+	private double colorSettingsMin;	
+
+	
+	
+	public double getColorSettingsMin() {
+		return colorSettingsMin;
+	}
+
+	public void setColorSettingsMin(double colorSettingsMin) {
+		this.colorSettingsMin = colorSettingsMin;
+	}
+
+	public ColorScale(final MultiSlider slider, Color[] colors, ColorStretcherStageSettings settings) {
+		this(slider.getValues(), colors, settings);
+
 		slider.addChangeListener(
 			new ChangeListener()
 			 {
@@ -58,8 +54,31 @@ public class ColorScale extends JPanel
 				 }
 			 }
 			);
+	}
+	
+	public ColorScale(final MultiSlider slider, Color[] colors)
+	 {
+		this(slider, colors, null);
+		
 	 }
 
+	public ColorScale(int[] values, Color[] colors)
+	 {
+		this(values,colors,null);
+	 }
+	
+	public ColorScale(int[] values, Color[] colors, ColorStretcherStageSettings settings)
+	 {
+		setBorder(BorderFactory.createLineBorder(Color.yellow, 50));
+		setColors(values, colors);
+		setToolTipText("");
+		
+		if (settings != null) {
+			colorSettingsMax = settings.getMaxValue();
+			colorSettingsMin = settings.getMinValue();
+		}
+	 }
+	
 	public void addChangeListener(ChangeListener l)
 	 {
 		listenerList.add(ChangeListener.class, l);
@@ -200,10 +219,11 @@ public class ColorScale extends JPanel
 
 		int index =
 			Math.round(255f * (x - insets.left)
-					   / (getWidth() - insets.right - insets.left));
-		Color col = getColorMap()[index];
-
-		return  "DN " + index + " / RGB #" + hex24(col.getRGB() & 0xFFFFFF);
+				/ (getWidth() - insets.right - insets.left));
+		Color col = getColorMap()[index]; 
+		double value = colorSettingsMin + (((Math.abs(colorSettingsMax) + Math.abs(colorSettingsMin)) / 255) * index) ;
+		return  "Value: " + NumberFormat.getInstance().format(value) + " / DN " + index + " / RGB #" + hex24(col.getRGB() & 0xFFFFFF);
+		
 	 }
 
 	private String hex24(int val)

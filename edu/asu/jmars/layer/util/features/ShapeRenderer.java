@@ -1,48 +1,27 @@
-// Copyright 2008, Arizona Board of Regents
-// on behalf of Arizona State University
-// 
-// Prepared by the Mars Space Flight Facility, Arizona State University,
-// Tempe, AZ.
-// 
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-// 
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU General Public License for more details.
-// 
-// You should have received a copy of the GNU General Public License
-// along with this program.  If not, see <http://www.gnu.org/licenses/>.
-
-
 package edu.asu.jmars.layer.util.features;
 
 import java.awt.BasicStroke;
 import java.awt.Color;
+import java.awt.Dimension;
 import java.awt.Font;
 import java.awt.Graphics2D;
 import java.awt.RenderingHints;
+import java.awt.Shape;
 import java.awt.Stroke;
 import java.awt.geom.AffineTransform;
-import java.awt.geom.GeneralPath;
 import java.awt.geom.Line2D;
+import java.awt.geom.Path2D;
 import java.awt.geom.PathIterator;
 import java.awt.geom.Point2D;
 import java.awt.geom.Rectangle2D;
 import java.util.ArrayList;
-import java.util.Collection;
 import java.util.HashMap;
-import java.util.Iterator;
-import java.util.List;
 import java.util.Map;
 
 import edu.asu.jmars.Main;
-import edu.asu.jmars.layer.Layer;
-import edu.asu.jmars.layer.ProjectionEvent;
-import edu.asu.jmars.layer.ProjectionListener;
+import edu.asu.jmars.graphics.FontRenderer;
+import edu.asu.jmars.util.HighResExport;
+import edu.asu.jmars.util.LineType;
 
 /**
  * Realizes the FeatureRenderer for the ShapeLayer. The ShapeLayer uses this
@@ -56,197 +35,135 @@ import edu.asu.jmars.layer.ProjectionListener;
  * styles allows using a renderer with a fixed set of understood attributes
  * with any kind of Feature by mapping attributes to styles through the Styles
  * class.
- * 
- * During {@link #drawAll(Graphics2D, Collection)}, a progress notification is
- * sent to each ProgressListener registered with the Renderer. This notification
- * is generated on every draw.
- * 
- * A {@link #drawAll(Graphics2D, Collection)} may be aborted in middle by
- * issuing a {@link #stopDrawing()}. This call has no effect when the
- * ShapeRenderer is not currently drawing.
  */
-public class ShapeRenderer implements ProjectionListener {
-	private static final Point2D labelOffset = new Point2D.Float(3f,3f);
-	
-	/**
-	 * Owner LView.
-	 */
-	private Layer.LView lView;
-
-	/**
-	 * Flag indicating that the ShapeRenderer has been instructed to abandon
-	 * further drawing within the {@link #drawAll(Graphics2D, Collection)} loop.
-	 */
-	private volatile boolean stopDrawing = false;
-
-	/**
-	 * Flag indicating that the ShapeRenderer is currently within a
-	 * {@link #drawAll(Graphics2D, Collection)} loop.
-	 */
-	private volatile boolean isDrawing = false;
-
-	/**
-	 * List of {@link ProgressListener}s.
-	 */
-	private List<ProgressListener> listeners = new ArrayList<ProgressListener>();
-	
-	/**
-	 * BasicStroke's end-cap style.
-	 */
+public class ShapeRenderer {
+	/** BasicStroke's end-cap style. */
 	private static final int defaultStrokeCapStyle = BasicStroke.CAP_BUTT;
 
-	/**
-	 * BasicStroke's end-join style.
-	 */
+	/** BasicStroke's end-join style. */
 	private static final int defaultStrokeJoinStyle = BasicStroke.JOIN_MITER;
 
-	/**
-	 * BasicStroke's miter-limit.
-	 */
+	/** BasicStroke's miter-limit. */
 	private static final float defaultMiterLimit = 10.0f;
 
-	/**
-	 * Height of the arrowhead from the base (in pixels).
-	 */
-	private static final double ahHeight = 15;
-
-	/**
-	 * Width of the arrowhead base (in pixels).
-	 */
-	private static final double ahWidth = 12;
-
-	/**
-	 * Half the width of the arrowhead base (in pixels).
-	 */
-	private static final double ahHalfWidth = ahWidth / 2.0;
-	
-	Styles styles = new Styles();
-	private final Font font;
-	
 	/**
 	 * A standard arrowhead based on the static width and height parameters. The
 	 * arrowhead is aligned with the x-axis with its tip at the origin and the
 	 * base of the triangle extending in the negative-X direction.
 	 */
-	private static final GeneralPath arrowHead;
+	private static final Path2D arrowHead;
 	static {
+		// Height of the arrowhead from the base (in pixels).
+		final int ahHeight = 15;
+		// Width of the arrowhead base (in pixels).
+		final int ahWidth = 12;
+		final double ahHalfWidth = ahWidth / 2f;
 		// Populate the default arrowhead as a head aligned with the X-axis
 		// pointing at (0,0)
-		GeneralPath ah = new GeneralPath();
+		Path2D ah = new Path2D.Double();
 		ah.moveTo(0, 0);
-		ah.lineTo(-(float) ahHeight, -(float) ahHalfWidth);
-		ah.lineTo(-(float) ahHeight, (float) ahHalfWidth);
+		ah.lineTo(-(double) ahHeight, -ahHalfWidth);
+		ah.lineTo(-(double) ahHeight, ahHalfWidth);
 		ah.closePath();
 		arrowHead = ah;
 	}
-
-	/**
-	 * Number of iterations between checking the {@link #stopDrawing} flag.
-	 * Reading of <code>volatile</code> data has been conjectured to being
-	 * slow.
-	 */
-	private static final int defaultStopDrawingCheckCount = 10;
-
-	/**
-	 * Creates an instance of the ShapeRenderer object. The instance takes the
-	 * owner LView as a parameter.
-	 * 
-	 * @param lView
-	 *            Owning LView.
-	 */
-	public ShapeRenderer(Layer.LView lView) {
-		super();
-		this.lView = lView;
-		font = lView.getFont().deriveFont(Font.BOLD);
-		Main.addProjectionListener(this);
-	}
+	
+	private static final LineType noLineDash = new LineType();
+	
+	/** The label's x offset in world coordinates from object center */
+	private final double labelOffsetX;
+	/** The label's y offset in world coordinates from object center */
+	private final double labelOffsetY;
+	/** the font renderer */
+	private final FontRenderer fRenderer;
+	/** the pixels per degree of this renderer */
+	private final int ppd;
+	/** the styles to use for this renderer */
+	private final Styles styles = new Styles();
+	/** Cached rectangles */
+	private final Map<Integer,Rectangle2D.Double> sharedVertexBoxes = new HashMap<Integer,Rectangle2D.Double>();
+	/** Cached strokes */
+	private final Map<Integer,Map<Double,Stroke>> strokeCaches = new HashMap<Integer,Map<Double,Stroke>>();
+	/** Source of FPath instances */
+	private StyleSource<FPath> pathSource;
 	
 	/**
-	 * Returns magnified dash-pattern by copying the input dash-pattern and
-	 * scaling it with the LView PPD magnification. If the input dash-pattern is
-	 * null, a null is returned.
-	 * 
-	 * @param dashPattern
-	 *            The dash pattern to scale.
-	 * @return Scaled dash pattern.
+	 * Create a renderer instance suitable for one rendering pass.
+	 * Reusable objects within a single rendering pass are cached
+	 * on the renderer, so if style or other changes cause a new
+	 * rendering to be done, it should be with a new ShapeRenderer
+	 * instance.
+	 * @param ppd The pixels per degree of this renderer.
 	 */
-	protected float[] getMagnifiedDashPattern(float[] dashPattern) {
-		int magnification = getMagnification();
-
-		if (dashPattern != null) {
-			dashPattern = (float[]) dashPattern.clone();
-			for (int i = 0; i < dashPattern.length; i++)
-				dashPattern[i] /= magnification;
-		}
-
-		return dashPattern;
+	public ShapeRenderer(int ppd) {
+		super();
+		this.ppd = ppd;
+		fRenderer = new FontRenderer();
+		labelOffsetX = labelOffsetY = 3f/ppd;
+		pathSource = styles.geometry.getSource();
 	}
-
-	/**
-	 * Returns line-width scaled according to the current LView (PPD)
-	 * magnification.
-	 * 
-	 * @param lineWidth
-	 *            Line width to magnify.
-	 * @return Magnified line width.
-	 */
-	protected float getMagnifiedLineWidth(double lineWidth) {
-		int magnification = getMagnification();
-		return (float)lineWidth / magnification;
-	}
-
-	/**
-	 * Returns TextOffset according to current LView (PPD) magnification.
-	 * 
-	 * @param offset
-	 *            Text offset to magnify.
-	 * @return Magnified text offset.
-	 */
-	protected Point2D getMagnifiedTextOffset(Point2D offset) {
-		double magnification = getMagnification();
-		return new Point2D.Double(offset.getX() / magnification, offset.getY()
-				/ magnification);
-	}
-
-	public Styles getStyles() {
-		return styles;
+	
+	public Styles getStyleCopy() {
+		return new Styles(styles);
 	}
 	
 	public void setStyles(Styles styles) {
-		this.styles = styles;
+		this.styles.setFrom(styles);
+		pathSource = styles.geometry.getSource();
+	}
+	
+	/*
+	 * This is used to access the path that would be drawn to the screen for a feature.  This may vary from the path of the feature itself, such as in the
+	 * case of Circles.  The feature itself is a single point, but it is rendered to the screen as a set of points at a given radius from that point.
+	 * When calculating stamp/shape intersections, the difference between a single point and a circle is very noticeable to the user. 
+	 */
+	FPath getPath(Feature f) {
+		return pathSource.getValue(f).getWorld();	
 	}
 	
 	/**
-	 * Draws the given Feature onto the specified World Graphics2D. While
-	 * drawing, ignore everything that does not fall within our current display
+	 * Draws the given Feature onto the specified World Graphics2D.  Also needs
+	 * a screen graphics object to properly draw the label.
+	 * While drawing, ignore everything that does not fall within our current display
 	 * boundaries. In addition pay attention to the controlling flags, such as
 	 * "show-label-off", "show-vertices-off", "minimum-line-width" etc.
 	 * 
 	 * @param g2w
-	 *            World Graphics2D to draw into.
+	 *            World Graphics2D to draw shape into.
+	 * @param g2s
+	 * 			  Screen Graphics2D to draw label into.
 	 * @param f
 	 *            Feature object to render.
 	 */
-	public void draw(Graphics2D g2w, Feature f) {
+	public void draw(Graphics2D g2w, Graphics2D g2s, Feature f) {
 		try {
 			g2w.setRenderingHint(RenderingHints.KEY_ANTIALIASING,
 				styles.antialias.getValue(f)
 					? RenderingHints.VALUE_ANTIALIAS_ON
 					: RenderingHints.VALUE_ANTIALIAS_OFF);
 			
-			// Get the req'd path field
-			FPath path = styles.geometry.getValue(f);
-			GeneralPath p = path.getWorld().getGeneralPath();
+			// Get the path and path type
+			FPath path = pathSource.getValue(f).getWorld();
+			Shape p = path.getShape();
 			int type = path.getType();
 			if (type == FPath.TYPE_NONE || p == null)
 				return;
-
+			
+			// The shape layer styles are absolute in size - they don't change as you zoom in and out.  As a result, points,
+			// lines, and fonts become very small when doing a High Resolution Export.  To counter this, attempt to apply an 
+			// appropriate multiplier to the size of these items if we're drawing them during a HiResExport.
+			int zoomFactor = 1;  // If we're not exporting, don't change the values
+			
+			if (HighResExport.exporting) {
+				zoomFactor = HighResExport.zoomFactor;
+			}
+			
 			// Install various pieces of style as needed and draw.
-
+			
 			// Draw filled polygon.
 			if (type == FPath.TYPE_POINT) {
 				g2w.setColor(styles.fillColor.getValue(f));
-				fillVertices(g2w, p, styles.pointSize.getValue(f).intValue());
+				fillVertices(g2w, p, styles.pointSize.getValue(f).intValue()*zoomFactor);
 			} else if (type == FPath.TYPE_POLYGON) {
 				g2w.setColor(styles.fillColor.getValue(f));
 				if (styles.fillPolygons.getValue(f)) {
@@ -254,57 +171,100 @@ public class ShapeRenderer implements ProjectionListener {
 				}
 			}
 			
-			double lineWidth = styles.lineWidth.getValue(f).doubleValue();
-			float[] dashPattern = styles.lineDash.getValue(f).getDashPattern();
+			double lineWidth = styles.lineWidth.getValue(f).doubleValue()*zoomFactor;
 			
-			// TODO: THIS IS FOR THE FUTURE (WHERE NO MAN HAS GONE BEFORE ...
-			// CAPTAIN!)
-			// TODO: Add caching here: Cache: <lineWidth,lineDash,ProjObj> ->
-			// Stroke
-			// TODO: Drop Stroke cache on a Projection change
-			Stroke stroke = new BasicStroke(
-					getMagnifiedLineWidth(lineWidth),
-					defaultStrokeCapStyle, defaultStrokeJoinStyle,
-					defaultMiterLimit, getMagnifiedDashPattern(dashPattern), 0);
-
-			g2w.setStroke(stroke);
 			g2w.setColor(styles.lineColor.getValue(f));
-			if (type == FPath.TYPE_POINT)
-				drawVertices(g2w, p, styles.pointSize.getValue(f).intValue());
-			else
-				g2w.draw(p);
-
-			// Switch to non-patterned stroke to draw vertices and arrows.
-			stroke = new BasicStroke(getMagnifiedLineWidth(lineWidth),
-					defaultStrokeCapStyle, defaultStrokeJoinStyle,
-					defaultMiterLimit, null, 0);
-
-			g2w.setStroke(stroke);
-
-			// Draw vertices.
-			if (type != FPath.TYPE_POINT && styles.showVertices.getValue(f))
-				drawVertices(g2w, p, styles.vertexSize.getValue(f).intValue());
-
-			// Draw direction arrows.
-			if (type == FPath.TYPE_POLYLINE) {
-				if (styles.showLineDir.getValue(f)) {
-					Line2D lastSeg = getLastSegment(p);
-					GeneralPath arrowHead = makeArrowHead(lastSeg);
-					g2w.fill(arrowHead);
-				}
+			
+			if (type == FPath.TYPE_POLYLINE || styles.drawOutlines.getValue(f)) {
+				g2w.setStroke(getStroke(lineWidth, styles.lineDash.getValue(f)));
+				
+				if (type == FPath.TYPE_POINT)
+					drawVertices(g2w, p, styles.pointSize.getValue(f).intValue()*zoomFactor);
+				else
+					g2w.draw(p);
 			}
-
+			
+			g2w.setStroke(getStroke(lineWidth, noLineDash));
+			
+			// Draw vertices.
+			if (f.getPath().getType() != FPath.TYPE_POINT && styles.showVertices.getValue(f))
+				drawVertices(g2w, p, styles.vertexSize.getValue(f).intValue()*zoomFactor);
+			
+			// Draw direction arrows.
+			if (type == FPath.TYPE_POLYLINE && styles.showLineDir.getValue(f)) {
+				Line2D lastSeg = getLastSegment(p);
+				Path2D arrowHead = makeArrowHead(lastSeg);
+				g2w.fill(arrowHead);
+			}
+			
 			// Draw optional text.
 			if (styles.showLabels.getValue(f)) {
 				String label = styles.labelText.getValue(f);
 				Color labelColor = styles.labelColor.getValue(f);
-				Point2D center = path.getWorld().getCenter();
-				Point2D offset = getMagnifiedTextOffset(labelOffset);
-				float x = (float)(center.getX() + offset.getX());
-				float y = (float)(center.getY() + offset.getY());
-				g2w.setFont(font);
-				g2w.setColor(labelColor);
-				g2w.drawString(label, x, y);
+				Color labelOutlineColor = styles.labelBorderColor.getValue(f);
+				int fontSize = styles.labelSize.getValue(f).intValue()*zoomFactor;
+				int fontStyleInt = Font.PLAIN;
+				String fontStyle = styles.labelStyle.getValue(f);
+				String fontName = styles.labelFont.getValue(f);
+				Point2D center = path.getCenter();
+				//need to be drawing in screen coordinates for labels
+				Point2D scCenter = Main.testDriver.mainWindow.getProj().world.toScreen(center);
+				//We need to make sure we get all the screen coordinates this point may
+				// show up on (if the world wraps it will show in multiple places)
+				//Only care about the x direction, doesn't wrap in the y direction
+				Dimension s = Main.testDriver.mainWindow.getSize();
+				double maxX = s.getWidth();
+				ArrayList<Double> xs = new ArrayList<Double>();
+				double x = scCenter.getX();
+				//Add the original screen x
+				xs.add(x);
+				//First go to the left (negative world coords)
+				int j = 0;
+				double centerX = center.getX();
+				while(x>0){
+					centerX = centerX - 360;
+					Point2D newWorld = new Point2D.Double(centerX, center.getY());
+					Point2D newScreen = Main.testDriver.mainWindow.getProj().world.toScreen(newWorld);
+					x = newScreen.getX();
+					if(x>0){
+						xs.add(x);
+					}
+				}
+				//Next start over and go right (positive world coords)
+				centerX = center.getX();
+				while(x<maxX){
+					centerX = centerX + 360;
+					Point2D newWorld = new Point2D.Double(centerX, center.getY());
+					Point2D newScreen = Main.testDriver.mainWindow.getProj().world.toScreen(newWorld);
+					x = newScreen.getX();
+
+					if(x<maxX){
+						xs.add(x);
+					}
+				}
+				//The y value doesn't change
+				double y = scCenter.getY();
+				int xOffset = 8;
+				int yOffset = 0;
+				
+				
+				if (fontStyle.equalsIgnoreCase("plain")) {
+					fontStyleInt = Font.PLAIN;
+				} else if (fontStyle.equalsIgnoreCase("bold")) {
+					fontStyleInt = Font.BOLD;
+				} else if (fontStyle.equalsIgnoreCase("italic")) {
+					fontStyleInt = Font.ITALIC;
+				}
+			    fRenderer.setFont(new Font(fontName, fontStyleInt, fontSize));
+				fRenderer.setForeground(labelColor);
+				fRenderer.setOutlineColor(labelOutlineColor);
+				
+				//draw all the labels that are on the screen
+				float yVal = (float)y + yOffset;
+				for(int i=0; i<xs.size(); i++){
+					float xVal = xs.get(i).floatValue() + xOffset;
+					fRenderer.paintLabel(g2s, label, xVal, yVal);
+				}
 			}
 		} catch (ClassCastException ex) {
 			ex.printStackTrace();
@@ -314,16 +274,6 @@ public class ShapeRenderer implements ProjectionListener {
 	}
 	
 	/**
-	 * Shared vertex box used for various drawing functions.
-	 * 
-	 * @see #getSharedVertexBox(Graphics2D)
-	 * @see #drawVertices(Graphics2D, GeneralPath)
-	 * @see #fillVertices(Graphics2D, GeneralPath)
-	 * @see #projectionChanged(ProjectionEvent)
-	 */
-	private Map sharedVertexBoxes = new HashMap();
-
-	/**
 	 * Returns the shared instance of vertex box used for various drawing
 	 * routines. The vetex box is constructed using the LView's current
 	 * projection and the preset defaultVertexBoxSide.
@@ -332,75 +282,97 @@ public class ShapeRenderer implements ProjectionListener {
 	 * 
 	 * @see #sharedVertexBoxes
 	 * @see #defaultVertexBoxSide
-	 * @see #drawVertices(Graphics2D, GeneralPath)
-	 * @see #fillVertices(Graphics2D, GeneralPath)
+	 * @see #drawVertices(Graphics2D, Path2D)
+	 * @see #fillVertices(Graphics2D, Path2D)
 	 */
-	private Rectangle2D.Float getSharedVertexBox(int width) {
-		Rectangle2D.Float sharedVertexBox = (Rectangle2D.Float)sharedVertexBoxes.get(new Integer(width));
+	private Rectangle2D.Double getSharedVertexBox(int width) {
+		Rectangle2D.Double sharedVertexBox = sharedVertexBoxes.get(width);
+		
 		if (sharedVertexBox == null) {
-			sharedVertexBox = new Rectangle2D.Float();
-			if (lView == null || lView.getProj() == null)
-				sharedVertexBox.setFrame(-width / 2, -width / 2, width, width);
-			else
-				sharedVertexBox.setFrame(lView.getProj().getClickBox(
-						new Point2D.Float(), width));
-			
-			sharedVertexBoxes.put(new Integer(width), sharedVertexBox);
+			double size = width*1.0/ppd;
+			sharedVertexBox = new Rectangle2D.Double(-size, -size, size*2, size*2);
+			sharedVertexBoxes.put(width, sharedVertexBox);
 		}
 		
 		return sharedVertexBox;
 	}
-
+	
+	private Stroke getStroke(double width, LineType type) {
+		Map<Double,Stroke> typeCache = strokeCaches.get(type.getType());
+		if (typeCache == null) {
+			typeCache = new HashMap<Double,Stroke>();
+			strokeCaches.put(type.getType(), typeCache);
+		}
+		Stroke stroke = typeCache.get(width);
+		if (stroke == null) {
+			if (typeCache.size() > 1000) {
+				typeCache.clear();
+			}
+			float[] pattern = type.getDashPattern();
+			if (pattern != null) {
+				float[] newPat = new float[pattern.length];
+				for (int i = 0; i < newPat.length; i++) {
+					newPat[i] = pattern[i] / ppd;
+				}
+				pattern = newPat;
+			}
+			stroke = new BasicStroke((float)width/ppd, defaultStrokeCapStyle,
+				defaultStrokeJoinStyle, defaultMiterLimit, pattern, 0);
+			typeCache.put(width, stroke);
+		}
+		return stroke;
+	}
+	
 	/**
-	 * Draws exagerated vertices for the given GeneralPath. The vertices are
+	 * Draws exagerated vertices for the given Path2D. The vertices are
 	 * drawn with the help of shared vertex box created by
 	 * {@linkplain #getSharedVertexBox()}.
 	 * 
 	 * @param g2w
 	 *            World graphics context in which the drawing takes place.
 	 * @param p
-	 *            GeneralPath for which exagerated vertices are drawn.
+	 *            Path2D for which exagerated vertices are drawn.
 	 * @throws IllegalArgumentException
-	 *             if the GeneralPath contains quadratic/cubic segments.
+	 *             if the Path2D contains quadratic/cubic segments.
 	 */
-	private void drawVertices(Graphics2D g2w, GeneralPath p, int width) {
-		float[] coords = new float[6];
-		Rectangle2D.Float v = getSharedVertexBox(width);
+	private void drawVertices(Graphics2D g2w, Shape p, int width) {
+		double[] coords = new double[6];
+		Rectangle2D.Double v = getSharedVertexBox(width);
 
 		PathIterator pi = p.getPathIterator(null);
 		while (!pi.isDone()) {
 			switch (pi.currentSegment(coords)) {
 			case PathIterator.SEG_MOVETO:
 			case PathIterator.SEG_LINETO:
-				v.x = coords[0] - v.width / 2.0f;
-				v.y = coords[1] - v.height / 2.0f;
+				v.x = coords[0] - v.width / 2.0;
+				v.y = coords[1] - v.height / 2.0;
 				g2w.draw(v);
 				break;
 			case PathIterator.SEG_CLOSE:
 				break;
 			default:
 				throw new IllegalArgumentException(
-						"drawVertices() called with a GeneralPath with quadratic/cubic segments.");
+						"drawVertices() called with a Path2D with quadratic/cubic segments.");
 			}
 			pi.next();
 		}
 	}
 
 	/**
-	 * Draws filled exagerated vertices for the given GeneralPath. The vertices
+	 * Draws filled exagerated vertices for the given Path2D. The vertices
 	 * are drawn with the help of shared vertex box created by
 	 * {@linkplain #getSharedVertexBox()}.
 	 * 
 	 * @param g2w
 	 *            World graphics context in which the drawing takes place.
 	 * @param p
-	 *            GeneralPath for which exagerated vertices are drawn.
+	 *            Path2D for which exagerated vertices are drawn.
 	 * @throws IllegalArgumentException
-	 *             if the GeneralPath contains quadratic/cubic segments.
+	 *             if the Path2D contains quadratic/cubic segments.
 	 */
-	private void fillVertices(Graphics2D g2w, GeneralPath p, int pointWidth) {
-		float[] coords = new float[6];
-		Rectangle2D.Float v = getSharedVertexBox(pointWidth);
+	private void fillVertices(Graphics2D g2w, Shape p, int pointWidth) {
+		double[] coords = new double[6];
+		Rectangle2D.Double v = getSharedVertexBox(pointWidth);
 
 		PathIterator pi = p.getPathIterator(null);
 		while (!pi.isDone()) {
@@ -415,58 +387,10 @@ public class ShapeRenderer implements ProjectionListener {
 				break;
 			default:
 				throw new IllegalArgumentException(
-						"drawVertices() called with a GeneralPath with quadratic/cubic segments.");
+						"drawVertices() called with a Path2D with quadratic/cubic segments.");
 			}
 			pi.next();
 		}
-	}
-
-	/**
-	 * Draw all Features from the given FeatureCollection onto the specified
-	 * World Graphics2D. On each draw registered ProgressListeners are notified.
-	 * 
-	 * @param g2w
-	 *            World Graphics2D to draw into.
-	 * @param fc
-	 *            Collection of Feature objects to draw.
-	 */
-	public void drawAll(Graphics2D g2w, Collection fc) {
-		// TODO: group features by associated styles so we only set things once
-		
-		isDrawing = true;
-
-		int i = 0, n = fc.size();
-		int count = defaultStopDrawingCheckCount;
-
-		Iterator fi = fc.iterator();
-		while (fi.hasNext()) {
-			// We check every so often to see if the user has requested
-			// that the drawing be stopped. Checking on volatile
-			// stopDrawing is slow.
-			if (++count >= defaultStopDrawingCheckCount) {
-				count = 0;
-				if (stopDrawing) {
-					stopDrawing = false;
-					isDrawing = false;
-					return;
-				}
-			}
-
-			draw(g2w, (Feature) fi.next());
-			fireProgressEvent(i++, n);
-		}
-
-		stopDrawing = false;
-		isDrawing = false;
-	}
-
-	/**
-	 * Tells the Renderer to abandon the drawAll() method. Has no effect when
-	 * the Renderer is currently not drawing.
-	 */
-	public void stopDrawing() {
-		if (isDrawing)
-			stopDrawing = true;
 	}
 
 	/**
@@ -478,9 +402,8 @@ public class ShapeRenderer implements ProjectionListener {
 	 *            Line segment for which an arrow is desired.
 	 * @return Arrow ending at the second point of the line segment.
 	 */
-	protected GeneralPath makeArrowHead(Line2D lineSeg) {
-		final int magnification = getMagnification();
-		GeneralPath ah = (GeneralPath) arrowHead.clone();
+	protected Path2D makeArrowHead(Line2D lineSeg) {
+		Path2D ah = (Path2D)arrowHead.clone();
 
 		double x = lineSeg.getX2() - lineSeg.getX1();
 		double y = lineSeg.getY2() - lineSeg.getY1();
@@ -494,15 +417,19 @@ public class ShapeRenderer implements ProjectionListener {
 		AffineTransform at = new AffineTransform();
 
 		// Translate it to the end point of the line-segment.
-		at.concatenate(AffineTransform.getTranslateInstance(lineSeg.getX2(),
-				lineSeg.getY2()));
+		at.concatenate(AffineTransform.getTranslateInstance(lineSeg.getX2(), lineSeg.getY2()));
 
 		// Rotate arrow to align with the given line-segment.
 		at.concatenate(AffineTransform.getRotateInstance(theta));
 
 		// Scale according to projection
-		at.concatenate(AffineTransform.getScaleInstance(1.0 / magnification,
-				1.0 / magnification));
+		double scale = 1f/ppd;
+		
+		if (HighResExport.exporting) {
+			scale = 1f/(ppd/HighResExport.zoomFactor);
+		}
+		
+		at.concatenate(AffineTransform.getScaleInstance(scale, scale));
 
 		// Apply rotation and translation.
 		ah.transform(at);
@@ -511,23 +438,23 @@ public class ShapeRenderer implements ProjectionListener {
 	}
 
 	/**
-	 * Returns the last line segment from a given GeneralPath. The GeneralPath
+	 * Returns the last line segment from a given Path2D. The Path2D
 	 * must have such a segment, otherwise, an IllegalArgumentException is
 	 * thrown.
 	 * 
 	 * @param p
-	 *            GeneralPath for which the last segment is to be returned.
+	 *            Path2D for which the last segment is to be returned.
 	 * @return The last line segment.
 	 * @throws {@link IllegalArgumentException}
 	 *             if cubic or quadratic coordinates are encountered, or the
 	 *             polygon is a closed polygon or it does not contain enough
 	 *             vertices.
 	 */
-	protected static Line2D getLastSegment(GeneralPath p) {
+	protected static Line2D getLastSegment(Shape p) {
 		PathIterator pi = p.getPathIterator(null);
 		Point2D p1 = new Point2D.Double();
 		Point2D p2 = new Point2D.Double();
-		float[] coords = new float[6];
+		double[] coords = new double[6];
 		int nSegVertices = 0;
 
 		while (!pi.isDone()) {
@@ -556,116 +483,5 @@ public class ShapeRenderer implements ProjectionListener {
 		}
 
 		return new Line2D.Double(p1, p2);
-	}
-
-	/**
-	 * Returns first point from the given GeneralPath.
-	 * 
-	 * @param p
-	 *            GeneralPath for which the first point is to be returned.
-	 * @return The first point from the GeneralPath.
-	 * @throws {@link IllegalArgumentException}
-	 *             if there is no such point in the linear segmented input
-	 *             GeneralPath.
-	 */
-	protected static Point2D getFirstPoint(GeneralPath p) {
-		PathIterator pi = p.getPathIterator(null);
-		float[] coords = new float[6];
-
-		while (!pi.isDone()) {
-			switch (pi.currentSegment(coords)) {
-			case PathIterator.SEG_MOVETO:
-			case PathIterator.SEG_LINETO:
-				return new Point2D.Float(coords[0], coords[1]);
-			default:
-				break;
-			}
-			pi.next();
-		}
-
-		throw new IllegalArgumentException(
-				"getFirstPoint() called with a path with no points.");
-	}
-	
-	/**
-	 * Returns LView that this Renderer is attached to.
-	 * 
-	 * @return The LView this Renderer is attached to.
-	 */
-	public Layer.LView getLView() {
-		return lView;
-	}
-	
-	/**
-	 * Register a ProgressListener with this Renderer.
-	 * 
-	 * @param l
-	 *            The ProgressListener to add.
-	 */
-	public void addProgressListener(ProgressListener l) {
-		listeners.add(l);
-	}
-	
-	/**
-	 * Deregister a ProgressListener with this Renderer. Returns true if the
-	 * listeners list contained this listener.
-	 * 
-	 * @param l
-	 *            The ProgressListener to remove.
-	 * @return True if the specified listener was found, false otherwise.
-	 */
-	public boolean removeProgressListener(ProgressListener l) {
-		return listeners.remove(l);
-	}
-	
-	/**
-	 * Fires a progress update event. This event is transmitted to all the
-	 * ProgressListeners.
-	 * 
-	 * @param i
-	 *            Zero-based serial number of the element currently being
-	 *            processed.
-	 * @param n
-	 *            Total number of elements.
-	 */
-	protected void fireProgressEvent(int i, int n) {
-		for (ProgressListener pl: listeners) {
-			pl.finished(i, n);
-		}
-	}
-	
-	/**
-	 * Listen to projection change events.
-	 * 
-	 * @param e
-	 *            The ProjectionEvent.
-	 */
-	public synchronized void projectionChanged(ProjectionEvent e) {
-		// TODO Flush various caches that are on a per projection basis
-
-		// Discard the shared vertex box. We'll build it again when we need it.
-		sharedVertexBoxes.clear();
-	}
-	
-	/**
-	 * Returns current magnification.
-	 * 
-	 * @return The current magnification as pixels per degree.
-	 */
-	private int getMagnification() {
-		// TODO: See if MultiProjection object can be linked in directly instead
-		// of LView.
-		if (lView == null)
-			return 1;
-		return lView.getProj().getPPD();
-	}
-	
-	/**
-	 * Dispose off various object references such that object finalization may
-	 * happen correctly.
-	 */
-	public void dispose() {
-		listeners.clear();
-		Main.removeProjectionListener(this);
 	}
 }

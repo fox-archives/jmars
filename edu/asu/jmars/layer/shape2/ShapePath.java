@@ -1,23 +1,3 @@
-// Copyright 2008, Arizona Board of Regents
-// on behalf of Arizona State University
-// 
-// Prepared by the Mars Space Flight Facility, Arizona State University,
-// Tempe, AZ.
-// 
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-// 
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU General Public License for more details.
-// 
-// You should have received a copy of the GNU General Public License
-// along with this program.  If not, see <http://www.gnu.org/licenses/>.
-
-
 package edu.asu.jmars.layer.shape2;
 
 import java.io.Serializable;
@@ -35,14 +15,26 @@ import edu.asu.jmars.layer.util.features.FPath;
  * storage to store other things for e.g. support of multi-part shapes.
  */
 public final class ShapePath implements Serializable {
+	private static final long serialVersionUID = 7859835588616991463L;
 	private boolean closed;
 	private float[] coords;
+	private double[] coordsDouble;
 	public ShapePath(FPath path) {
 		this.closed = path.getClosed();
-		this.coords = path.getSpatialEast().getCoords(false);
+		this.coordsDouble = path.getSpatialEast().getCoords(false);
 	}
 	public FPath getPath() {
-		return new FPath(coords, false, FPath.SPATIAL_EAST, closed);
+		
+		if (coords != null && coords.length > 0) {
+			//coords could be set if there were old sessions files that used the float[] being loaded into 
+			//the newer version of JMARS
+			coordsDouble = new double[coords.length];
+			for(int i=0; i<coords.length; i++) {
+				coordsDouble[i] = coords[i];
+			}
+			coords = null;
+		} 
+		return new FPath(coordsDouble, false, FPath.SPATIAL_EAST, closed);
 	}
 }
 

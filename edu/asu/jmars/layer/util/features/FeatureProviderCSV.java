@@ -1,26 +1,11 @@
-// Copyright 2008, Arizona Board of Regents
-// on behalf of Arizona State University
-// 
-// Prepared by the Mars Space Flight Facility, Arizona State University,
-// Tempe, AZ.
-// 
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-// 
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU General Public License for more details.
-// 
-// You should have received a copy of the GNU General Public License
-// along with this program.  If not, see <http://www.gnu.org/licenses/>.
-
-
 package edu.asu.jmars.layer.util.features;
 
+import java.awt.Color;
+import java.awt.geom.AffineTransform;
+import java.awt.geom.Path2D;
 import java.awt.geom.Point2D;
+import java.io.BufferedReader;
+import java.io.BufferedWriter;
 import java.io.File;
 import java.io.FileReader;
 import java.io.FileWriter;
@@ -33,12 +18,17 @@ import java.util.Scanner;
 
 import com.csvreader.CsvReader;
 import com.csvreader.CsvWriter;
+import com.vividsolutions.jts.geom.Geometry;
+import com.vividsolutions.jts.geom.GeometryFactory;
+import com.vividsolutions.jts.io.WKTReader;
+import com.vividsolutions.jts.io.WKTWriter;
 
+import edu.asu.jmars.util.LineType;
 import edu.asu.jmars.util.Util;
 
 public class FeatureProviderCSV implements FeatureProvider {
 	public String getDescription() {
-		return "CSV points file";
+		return "CSV shape file";
 	}
 	
 	public File[] getExistingSaveToFiles(FeatureCollection fc, String baseName) {
@@ -65,9 +55,11 @@ public class FeatureProviderCSV implements FeatureProvider {
 	}
 	
 	/** the names of longitude columns, in ascending order of preference */
-	private static final List<String> lonAliases = Arrays.asList("lon","long","longitude");
+	private static final List<String> lonAliases = Arrays.asList("lon","long","longitude (deg e)","longitude (e)","longitude");
 	/** the names of latitude columns, in ascending order of preference */
-	private static final List<String> latAliases = Arrays.asList("lat","latitude");
+	private static final List<String> latAliases = Arrays.asList("lat","latitude (deg n)","latitude (n)","latitude");
+	/** the names of full geometry columns, one of which takes the place of lon/lat columns */
+	private static final List<String> geomAliases = Arrays.asList("wkt","geometry");
 	/** the names under which polar radius can be found */
 	private static final String[] polarRadiusLabels = {"polar_radius", "c_axis_radius"};
 	/** the names under which equat radius can be found */
@@ -76,18 +68,70 @@ public class FeatureProviderCSV implements FeatureProvider {
 	private static final String[] lonDirLabels = {"lon_dir", "longitude_direction", "positive_longitude_direction"};
 	
 	private enum Type {
-		INT(Integer.class), DBL(Double.class), STR(String.class);
+		INT(Integer.class),
+		DBL(Double.class),
+		STR(String.class),
+		BOO(Boolean.class),
+		LIN(LineType.class),
+		COL(Color.class);
 		public final Class<?> c;
+		public final String suffix;
 		Type(Class<?> c) {
 			this.c = c;
+			String s = c.getName();
+			int idx = s.lastIndexOf('.');
+			if (idx >= 0) {
+				s = s.substring(idx+1);
+			}
+			suffix = s.toLowerCase();
 		}
 		public Object fromString(String s) {
 			switch (this) {
+			case BOO: return new Scanner(s).nextBoolean();
 			case INT: return new Scanner(s).nextInt();
 			case DBL: return new Scanner(s).nextDouble();
 			case STR: return s;
+			case LIN: return new LineType(new Scanner(s).nextInt());
+			case COL:
+				Scanner sc = new Scanner(s);
+				return new Color(
+					sc.nextInt(), sc.nextInt(), sc.nextInt(),
+					sc.hasNext() ? sc.nextInt() : 255);
 			default: return null;
 			}
+		}
+		public String toString(Object value) {
+			switch (this) {
+			case BOO:
+			case INT:
+			case DBL:
+			case STR: return value.toString();
+			case LIN: return ""+((LineType)value).getType();
+			case COL:
+				Color col = (Color)value;
+				return col.getRed() + " " +
+					col.getGreen() + " " +
+					col.getBlue() +
+					(col.getAlpha() == 255 ? "" : " " + col.getAlpha());
+			default: return null;
+			}
+		}
+		public static Type getMinType(String cell) {
+			Scanner s = new Scanner(cell);
+			Type type;
+			if (s.hasNextBoolean()) {
+				type = Type.BOO;
+			} else if (s.hasNextInt()) {
+				type = Type.INT;
+			} else if (s.hasNextDouble()) {
+				type = Type.DBL;
+			} else {
+				type = Type.STR;
+			}
+			// LineType and Color are not primitive types, but are rather
+			// another interpretation of existing types, so there is no
+			// point in checking for them here.
+			return type;
 		}
 	}
 	
@@ -96,6 +140,7 @@ public class FeatureProviderCSV implements FeatureProvider {
 		try {
 			int lonCol = -1;
 			int latCol = -1;
+			int geomCol = -1;
 			String[] names = null;
 			int[] otherFields = null;
 			int otherCount = 0;
@@ -105,7 +150,7 @@ public class FeatureProviderCSV implements FeatureProvider {
 			for (char d: new char[]{',','\t','|'}) {
 				lonCol = latCol = -1;
 				otherCount = 0;
-				csv = new CsvReader(new FileReader(fileName), d);
+				csv = new CsvReader(new BufferedReader(new FileReader(fileName)), d);
 				csv.setUseComments(true);
 				csv.readHeaders();
 				names = csv.getHeaders();
@@ -114,6 +159,10 @@ public class FeatureProviderCSV implements FeatureProvider {
 				// find most articulate lon and lat column names
 				for (int i = 0; i < names.length; i++) {
 					String name = names[i].trim().toLowerCase();
+					int sep = name.indexOf(':');
+					if (sep >= 0) {
+						name = name.substring(0, sep);
+					}
 					if (lonAliases.contains(name)) {
 						if (lonCol < 0 || lonAliases.indexOf(csv.getHeader(lonCol)) < lonAliases.indexOf(name)) {
 							lonCol = i;
@@ -122,6 +171,10 @@ public class FeatureProviderCSV implements FeatureProvider {
 						if(latCol < 0 || latAliases.indexOf(csv.getHeader(latCol)) < latAliases.indexOf(name)) {
 							latCol = i;
 						}
+					} else if (geomAliases.contains(name)) {
+						if (geomCol < 0 || geomAliases.indexOf(csv.getHeader(geomCol)) < geomAliases.indexOf(name)) {
+							geomCol = i;
+						}
 					} else {
 						otherFields[otherCount++] = i;
 					}
@@ -129,7 +182,7 @@ public class FeatureProviderCSV implements FeatureProvider {
 				csv.close();
 				
 				// if we found our geometry, then stop, otherwise try another delimiter
-				if (lonCol >= 0 && latCol >= 0) {
+				if (geomCol >= 0 || (lonCol >= 0 && latCol >= 0)) {
 					delim = d;
 					break;
 				}
@@ -139,9 +192,21 @@ public class FeatureProviderCSV implements FeatureProvider {
 				throw new IllegalArgumentException("Could not find geometry columns");
 			}
 			
+			// only use one or the other of geomCol and lonCol/latCol
+			if (geomCol >= 0) {
+				if (lonCol >= 0) {
+					otherFields[otherCount++] = lonCol;
+					lonCol = -1;
+				}
+				if (latCol >= 0) {
+					otherFields[otherCount++] = latCol;
+					latCol = -1;
+				}
+			}
+			
 			// parse the header comments and types in each cell
 			Type[] types = new Type[otherCount];
-			Arrays.fill(types, Type.INT);
+			Arrays.fill(types, null);
 			csv = new CsvReader(new FileReader(fileName), delim);
 			double polarRadius = 1;
 			double equatRadius = 1;
@@ -173,39 +238,58 @@ public class FeatureProviderCSV implements FeatureProvider {
 				}
 			}
 			
-			double scalar;
+			final double scalar;
 			if (polarRadius == equatRadius) {
 				scalar = 1;
 			} else {
 				scalar = Math.pow(polarRadius / equatRadius, 2);
 			}
 			
-			// read data records, ignoring all comments
-			csv.setUseComments(true);
-			int rows = 0;
-			while (csv.readRecord()) {
-				if (names.length != csv.getColumnCount()) {
-					throw new IllegalArgumentException("CSV header count does not match row " + csv.getCurrentRecord());
-				}
-				for (int i = 0; i < otherCount; i++) {
-					Type lastType = types[i];
-					if (lastType.compareTo(Type.STR) < 0) {
-						String cell = csv.get(otherFields[i]).trim();
-						Scanner s = new Scanner(cell);
-						Type type;
-						if (s.hasNextInt()) {
-							type = Type.INT;
-						} else if (s.hasNextDouble()) {
-							type = Type.DBL;
-						} else {
-							type = Type.STR;
-						}
-						if (lastType.compareTo(type) < 0) {
-							types[i] = type;
+			// check header fields for types as well as names
+			for (int i = 0; i < otherCount; i++) {
+				// parse column names like name:type to avoid guessing types later
+				String name = names[otherFields[i]];
+				String[] bits = name.split(":");
+				if (bits.length == 2) {
+					String type = bits[1].toLowerCase();
+					for (Type t: Type.values()) {
+						if (t.suffix.equals(type)) {
+							types[i] = t;
+							names[otherFields[i]] = bits[0];
+							break;
 						}
 					}
 				}
-				rows ++;
+			}
+			
+			// count unknown types so we can avoid investigating records if we don't have to
+			int unknownTypes = 0;
+			for (Type type: types) {
+				if (type == null) {
+					unknownTypes ++;
+				}
+			}
+			
+			// read data records, ignoring all comments
+			csv.setUseComments(true);
+			if (unknownTypes > 0) {
+				while (csv.readRecord()) {
+					if (names.length != csv.getColumnCount()) {
+						throw new IllegalArgumentException("CSV header count does not match row " + csv.getCurrentRecord());
+					}
+					for (int i = 0; i < otherCount; i++) {
+						Type lastType = types[i];
+						// if no known type yet, or this column is more
+						// restrictive than a string so we must still check
+						// values to make sure none violate that restriction
+						if (lastType == null || lastType.compareTo(Type.STR) < 0) {
+							Type type = Type.getMinType(csv.get(otherFields[i]).trim());
+							if (lastType == null || lastType.compareTo(type) < 0) {
+								types[i] = type;
+							}
+						}
+					}
+				}
 			}
 			csv.close();
 			
@@ -214,32 +298,68 @@ public class FeatureProviderCSV implements FeatureProvider {
 			for (int i = 0; i < otherCount; i++) {
 				fc.addField(new Field(names[otherFields[i]], types[i].c));
 			}
-			List<Field> fields = fc.getSchema();
 			
+			Field[] fields = fc.getSchema().toArray(new Field[fc.getSchema().size()]);
 			List<Feature> features = new ArrayList<Feature>();
+			
+			/** hackery to modify the latitude values without copying the shape yet again */
+			AffineTransform at = scalar == 1 ? null : new AffineTransform() {
+				public void transform(float[] srcPts, int srcOff,
+						float[] dstPts, int dstOff,
+						int numPts) {
+					// move up one to address the latitude values
+					dstOff += 1;
+					srcOff += 1;
+					for (int i = 0; i < numPts; i++) {
+						// convert geographic values to geocentric
+						dstPts[dstOff] = (float)Util.atanD(Util.tanD(srcPts[srcOff]) * scalar);
+						// move up to the next latitude value
+						dstOff += 2;
+						srcOff += 2;
+					}
+				}
+			};
+			
+			// create the reader only if we actually need it, since it will trigger a lot of classes to init
+			WKTReader wktReader = null;
+			FPath.GeometryAdapter adapter = null;
 			
 			csv = new CsvReader(new FileReader(fileName), delim);
 			csv.setUseComments(true);
 			csv.readHeaders();
 			while (csv.readRecord()) {
+				String[] row = csv.getValues();
 				Feature f = new Feature();
 				for (int i = 0; i < otherCount; i++) {
-					String cell = csv.get(otherFields[i]).trim();
-					Object o = types[i].fromString(cell);
-					f.setAttribute(fields.get(i), o);
+					String cell = row[otherFields[i]].trim();
+					if (cell.length() > 0) {
+						Object o = types[i].fromString(cell);
+						f.setAttribute(fields[i], o);
+					}
 				}
-				float[] coords = {
-					(float)parseLon(csv.get(lonCol), west),
-					(float)parseLat(csv.get(latCol), true, scalar)
-				};
-				f.setPath(new FPath(coords, false, FPath.SPATIAL_EAST, false));
+				if (geomCol >= 0) {
+					if (wktReader == null) {
+						wktReader = new WKTReader(new GeometryFactory());
+						adapter = new FPath.GeometryAdapter();
+					}
+					Geometry geom = wktReader.read(row[geomCol]);
+					Path2D.Double path = adapter.getPath(geom);
+					if (at != null) {
+						path.transform(at);
+					}
+					f.setPath(new FPath(path, FPath.SPATIAL_EAST).getSpatialWest());
+				} else {
+					double[] coords = {
+						parseLon(row[lonCol], west),
+						parseLat(row[latCol], true, scalar)};
+					f.setPath(new FPath(coords, false, FPath.SPATIAL_EAST, false));
+				}
 				features.add(f);
 			}
 			fc.addFeatures(features);
 			return fc;
 		} catch (Exception e) {
-			e.printStackTrace();
-			throw new IllegalArgumentException(e.getMessage());
+			throw e instanceof RuntimeException ? (RuntimeException)e : new RuntimeException(e);
 		} finally {
 			if (csv != null) {
 				csv.close();
@@ -247,17 +367,18 @@ public class FeatureProviderCSV implements FeatureProvider {
 		}
 	}
 	
-	private static final DecimalFormat fmt = new DecimalFormat("#.#####");
+	// Do NOT make this static.  If it is static, it is no longer thread-safe, due to the use of the ParsePosition parameter
+	private final DecimalFormat fmt = new DecimalFormat("#.#####");
 	
 	/**
 	 * returns the east longitude from the given string, handling 'E' and 'W'
 	 * suffixes, and using the given value of 'west' as the default when no
 	 * suffix is present.
 	 */
-	private static double parseLon(String lon, boolean west) {
+	private float parseLon(String lon, boolean west) {
 		lon = lon.toLowerCase();
 		ParsePosition pos = new ParsePosition(0);
-		double f = fmt.parse(lon, pos).doubleValue();
+		float f = fmt.parse(lon, pos).floatValue();
 		if (west && lon.indexOf("e", pos.getIndex()) >= 0) {
 			west = false;
 		} else if (!west && lon.indexOf("w", pos.getIndex()) >= 0) {
@@ -274,10 +395,10 @@ public class FeatureProviderCSV implements FeatureProvider {
 	 * suffixes if present, converting the value from ographic to ocentric with
 	 * the given ellipsoidal scalar.
 	 */
-	private static double parseLat(String lat, boolean north, double scalar) {
+	private float parseLat(String lat, boolean north, double scalar) {
 		lat = lat.toLowerCase();
 		ParsePosition pos = new ParsePosition(0);
-		double f = fmt.parse(lat, pos).doubleValue();
+		float f = fmt.parse(lat, pos).floatValue();
 		if (north && lat.indexOf("s", pos.getIndex()) >= 0) {
 			north = false;
 		} else if (!north && lat.indexOf("n", pos.getIndex()) >= 0) {
@@ -287,7 +408,7 @@ public class FeatureProviderCSV implements FeatureProvider {
 			f = -f;
 		}
 		if (scalar != 1) {
-			f = Util.atanD(Util.tanD(f) * scalar);
+			f = (float)Util.atanD(Util.tanD(f) * scalar);
 		}
 		return f;
 	}
@@ -338,39 +459,91 @@ public class FeatureProviderCSV implements FeatureProvider {
 		try {
 			List<Field> fields = new ArrayList<Field>(fc.getSchema());
 			fields.remove(Field.FIELD_PATH);
-			String[] otherFields = new String[2 + fields.size()];
+			
+			// check whether we can get away with lon/lat columns (preferred) or must use wkt
+			boolean allPoints = true;
+			for (Feature f: fc.getFeatures()) {
+				if (f.getPath().getType() != FPath.TYPE_POINT) {
+					allPoints = false;
+					break;
+				}
+			}
 			
 			// write header
-			csv = new CsvWriter(new FileWriter(fileName), '\t');
-			otherFields[0] = lonAliases.get(lonAliases.size()-1);
-			otherFields[1] = latAliases.get(latAliases.size()-1);
+			csv = new CsvWriter(new BufferedWriter(new FileWriter(fileName)), ',');
+			int geomCount = allPoints ? 2 : 1;
+			String[] otherFields = new String[geomCount + fields.size()];
+			if (allPoints) {
+				otherFields[0] = lonAliases.get(lonAliases.size()-1);
+				otherFields[1] = latAliases.get(latAliases.size()-1);
+			} else {
+				otherFields[0] = geomAliases.get(geomAliases.size()-1);
+			}
 			for (int i = 0; i < fields.size(); i++) {
-				otherFields[i+2] = fields.get(i).name;
+				Field f = fields.get(i);
+				otherFields[i+geomCount] = f.name;
+				for (Type type: Type.values()) {
+					if (type.c == f.type) {
+						otherFields[i+geomCount] += ":" + type.suffix;
+						break;
+					}
+				}
 			}
 			csv.writeRecord(otherFields);
 			
+			// get types for each field, defaulting to string
+			Type[] types = new Type[fields.size()];
+			Arrays.fill(types, Type.STR);
+			int typeCount = 0;
+			for (Field f: fields) {
+				for (Type type: Type.values()) {
+					if (type.c == f.type) {
+						types[typeCount++] = type;
+						break;
+					}
+				}
+			}
+			
+			FPath.GeometryAdapter adapter = null;
+			WKTWriter writer = null;
+			if (!allPoints) {
+				adapter = new FPath.GeometryAdapter();
+				writer = new WKTWriter(2);
+			}
+			
 			// write rows
 			int rows = 0;
-			DecimalFormat fmt = new DecimalFormat("#.########");
-			for (Feature f: (List<Feature>)fc.getFeatures()) {
-				Point2D p = f.getPath().getSpatialEast().getCenter();
-				otherFields[0] = fmt.format(p.getX());
-				otherFields[1] = fmt.format(p.getY());
-				int i = 2;
+			for (Feature f: fc.getFeatures()) {
+				int column = 0;
+				FPath path = f.getPath().getSpatialEast();
+				if (allPoints) {
+					Point2D p = path.getCenter();
+					otherFields[column++] = fmt.format(p.getX());
+					otherFields[column++] = fmt.format(p.getY());
+				} else {
+					Geometry geom = adapter.getGeometry(path);
+					otherFields[column++] = writer.write(geom);
+				}
 				for (Field field: fields) {
 					Object o = f.getAttribute(field);
-					otherFields[i++] = o == null ? "" : o.toString();
+					otherFields[column] = o == null ? "" : types[column-geomCount].toString(o);
+					column++;
 				}
 				csv.writeRecord(otherFields);
 				rows ++;
 			}
 			return rows;
 		} catch (Exception e) {
-			throw new IllegalArgumentException(e);
+			throw new RuntimeException(e);
 		} finally {
 			if (csv != null) {
 				csv.close();
 			}
 		}
 	}
+
+    @Override
+    public boolean setAsDefaultFeatureCollection() {
+        return false;
+    }
 }

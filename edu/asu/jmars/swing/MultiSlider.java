@@ -1,23 +1,3 @@
-// Copyright 2008, Arizona Board of Regents
-// on behalf of Arizona State University
-// 
-// Prepared by the Mars Space Flight Facility, Arizona State University,
-// Tempe, AZ.
-// 
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-// 
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU General Public License for more details.
-// 
-// You should have received a copy of the GNU General Public License
-// along with this program.  If not, see <http://www.gnu.org/licenses/>.
-
-
 package edu.asu.jmars.swing;
 
 import edu.asu.jmars.util.*;
@@ -130,7 +110,7 @@ public class MultiSlider extends JSlider
 	 **/
 	public int getLeftPadding()
 	 {
-		return  ((MetalMultiSliderUI) ui).getLeftPadding();
+		return  ((NonMetalMultiSliderUI) ui).getLeftPadding();
 	 }
 
 	/**
@@ -139,7 +119,7 @@ public class MultiSlider extends JSlider
 	 **/
 	public int getRightPadding()
 	 {
-		return  ((MetalMultiSliderUI) ui).getRightPadding();
+		return  ((NonMetalMultiSliderUI) ui).getRightPadding();
 	 }
 
 	/**
@@ -148,7 +128,7 @@ public class MultiSlider extends JSlider
 	 **/
 	public int locationToTab(int x)
 	 {
-		return  ((MetalMultiSliderUI) ui).locationToTab(x);
+		return  ((NonMetalMultiSliderUI) ui).locationToTab(x);
 	 }
 
 	/**
@@ -158,7 +138,7 @@ public class MultiSlider extends JSlider
 	 **/
 	public int locationToValue(int x)
 	 {
-		return  ((MetalMultiSliderUI) ui).locationToValue(x);
+		return  ((NonMetalMultiSliderUI) ui).locationToValue(x);
 	 }
 
 	/**
@@ -166,7 +146,7 @@ public class MultiSlider extends JSlider
 	 **/
 	public int getTabLocation()
 	 {
-		return  ((MetalMultiSliderUI) ui).getTabLocation();
+		return  ((NonMetalMultiSliderUI) ui).getTabLocation();
 	 }
 
 	/**
@@ -319,19 +299,10 @@ public class MultiSlider extends JSlider
 		return  values[tab-1]+1;
 	 }
 
-	/**
-	 ** Overridden to force the use of our custom {@link
-	 ** MetalMultiSliderUI} class.
-	 **
-	 ** <p>There's probably a better "right way" to do this, but the
-	 ** java look and feel stuff involves factories of factories of
-	 ** factories of UIs, and it was just too damn hard to decipher
-	 ** how to properly register a UI for the MultiSlider component
-	 ** through all those layers of indirection.
-	 **/
+	
     public void updateUI()
 	 {
         updateLabelUIs();
-        setUI(MetalMultiSliderUI.createUI(this));
+        setUI(NonMetalMultiSliderUI.createUI(this));
 	 }
  }

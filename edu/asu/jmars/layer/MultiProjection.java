@@ -1,23 +1,3 @@
-// Copyright 2008, Arizona Board of Regents
-// on behalf of Arizona State University
-// 
-// Prepared by the Mars Space Flight Facility, Arizona State University,
-// Tempe, AZ.
-// 
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-// 
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU General Public License for more details.
-// 
-// You should have received a copy of the GNU General Public License
-// along with this program.  If not, see <http://www.gnu.org/licenses/>.
-
-
 package edu.asu.jmars.layer;
 
 import java.awt.BasicStroke;
@@ -33,9 +13,9 @@ import java.awt.geom.Rectangle2D;
 import java.util.HashMap;
 import java.util.Map;
 
-import edu.asu.jmars.LocationManager;
 import edu.asu.jmars.Main;
 import edu.asu.jmars.ProjObj;
+import edu.asu.jmars.TestDriverLayered;
 import edu.asu.jmars.graphics.SpatialGraphics2D;
 import edu.asu.jmars.graphics.SpatialGraphicsCyl;
 import edu.asu.jmars.swing.Dimension2D_Double;
@@ -166,7 +146,7 @@ public abstract class MultiProjection
 	private static final Stroke[][] worldStrokes = createWorldStrokes();
 	private static Stroke[][] createWorldStrokes()
 	 {
-		int maxPPDLog2 = LocationManager.INITIAL_MAX_ZOOM_POWER;
+		int maxPPDLog2 = TestDriverLayered.INITIAL_MAX_ZOOM_LOG2;
 
 		Map allStrokes = new HashMap(); // from Float objects to Stroke objects
 		Stroke[][] indexed = new Stroke[WORLD_STROKE_MAX+1][maxPPDLog2];

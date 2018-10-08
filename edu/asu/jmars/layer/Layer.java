@@ -1,35 +1,46 @@
-// Copyright 2008, Arizona Board of Regents
-// on behalf of Arizona State University
-// 
-// Prepared by the Mars Space Flight Facility, Arizona State University,
-// Tempe, AZ.
-// 
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-// 
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU General Public License for more details.
-// 
-// You should have received a copy of the GNU General Public License
-// along with this program.  If not, see <http://www.gnu.org/licenses/>.
-
-
 package edu.asu.jmars.layer;
 
-import edu.asu.jmars.*;
-import edu.asu.jmars.swing.*;
-import edu.asu.jmars.util.*;
-import java.awt.*;
-import java.awt.event.*;
-import java.awt.image.*;
-import java.awt.geom.*;
-import java.util.*;
-import javax.swing.*;
-import javax.swing.event.*;
+import java.awt.AWTEvent;
+import java.awt.BorderLayout;
+import java.awt.Color;
+import java.awt.Component;
+import java.awt.Cursor;
+import java.awt.Dimension;
+import java.awt.Frame;
+import java.awt.Graphics;
+import java.awt.Graphics2D;
+import java.awt.event.ComponentAdapter;
+import java.awt.event.ComponentEvent;
+import java.awt.event.ComponentListener;
+import java.awt.event.MouseEvent;
+import java.awt.geom.Point2D;
+import java.awt.geom.Rectangle2D;
+import java.awt.image.BufferedImage;
+import java.util.HashSet;
+import java.util.Hashtable;
+import java.util.Iterator;
+import java.util.Set;
+
+import javax.swing.BorderFactory;
+import javax.swing.Icon;
+import javax.swing.JComponent;
+import javax.swing.JFrame;
+import javax.swing.JLabel;
+import javax.swing.JOptionPane;
+import javax.swing.JPanel;
+import javax.swing.JTextField;
+import javax.swing.SwingConstants;
+import javax.swing.SwingUtilities;
+import javax.swing.event.AncestorEvent;
+
+import edu.asu.jmars.Main;
+import edu.asu.jmars.ProjObj;
+import edu.asu.jmars.swing.AncestorAdapter;
+import edu.asu.jmars.swing.ColorMapOp;
+import edu.asu.jmars.swing.FancyColorMapper;
+import edu.asu.jmars.swing.OverlapLayout;
+import edu.asu.jmars.util.DebugLog;
+import edu.asu.jmars.util.Util;
 
 /**
  ** The abstract superclass for all Layers, which implements the
@@ -629,16 +640,7 @@ public abstract class Layer implements ProjectionListener
 		 ** kludge.
 		 **/
 		public LViewManager viewman;
-
-		/**
-		 ** Contains a copy of viewman that will never go null when
-		 ** the view is hidden. Kludge to fix the poor design decision
-		 ** of allowing the view manager to become null. Eventually
-		 ** hope to deprecate the original viewman's null behavior and
-		 ** merge these two.
-		 **/
-		public LViewManager viewman2;
-
+		
 		/**
 		 ** The focusPanel is one of many derived focus panels. Each
 		 ** LView will have their own and it's internal components
@@ -695,16 +697,42 @@ public abstract class Layer implements ProjectionListener
 					return(true);
 		 }
 
-		 private boolean validateDeletion()
-		 {
-		     int resp = JOptionPane.showConfirmDialog(null,"The layer you want to delete has UNSAVED information\n Do you still want to delete it?","Confirm Delete",JOptionPane.YES_NO_OPTION);
-		     
-		     if(resp != JOptionPane.YES_OPTION )
-		         return(false);
-		     else
-		         return(true);
+		 private boolean validateDeletion() {
+			return JOptionPane.YES_OPTION == JOptionPane.showConfirmDialog(
+				LManager.getDisplayFrame(),
+				"The layer you want to delete has UNSAVED information\n Do you still want to delete it?",
+				"Confirm Delete", JOptionPane.YES_NO_OPTION);
+		}
+		
+		 public void changeBody() {
+			 if (hasUnsavedData()) {
+				 displayUnsavedDataWarning();
+			 }
 		 }
-		 		 
+		
+		 private void displayUnsavedDataWarning() {
+			 JOptionPane.showMessageDialog(LManager.getDisplayFrame(), 
+					 	"There is UNSAVED information in one of the current layers. This information\n will be saved in a layers file and reloaded next time you" +
+						" switch\n to this body. However, it is not saved in an external layer specific\n file (i.e. shape file for the shape layer). If you want to preserve\n" +
+						" these changes, save the information the next time you switch back\n to this body. ", 
+						"Unsaved Information", JOptionPane.INFORMATION_MESSAGE);
+		 }
+		 
+		 public boolean loadSession() {
+			 if (hasUnsavedData()) {
+				 return displayLoadSessionUnsavedDataWarning();
+			 } else {
+				 return false;//false in this case would mean the same as hitting "yes" to continue
+			 }
+		 }
+		 
+		 private boolean displayLoadSessionUnsavedDataWarning() {
+			 //returning false means that they selected yes, they want to continue. We are checking for no
+			 return JOptionPane.NO_OPTION == JOptionPane.showConfirmDialog(LManager.getDisplayFrame(), 
+					 	"There is UNSAVED information in one of the current layers.\n Do you still want to load another session?. ", 
+						"Confirm Load Session", JOptionPane.YES_NO_OPTION);
+		 }
+		 
 		/**
 		 ** Suspends the current thread until the view is no longer
 		 ** idle. Note that the thread will therefore lose all of its
@@ -818,6 +846,9 @@ public abstract class Layer implements ProjectionListener
 				   if (getChild() != null)
 					   viewSettings.put("pannerEnabled", new Boolean(getChild().isVisible()));
 
+				   viewSettings.put("docked", new Boolean(getFocusPanel().isDocked()));
+				   viewSettings.put("selectedIndex", getFocusPanel().getSelectedIndex());
+				   
                    //call to update subclass specific settings
                    updateSettings(true);
 
@@ -851,6 +882,19 @@ public abstract class Layer implements ProjectionListener
 				   if (b != null && getChild() != null)
 					   getChild().setVisible(b.booleanValue());
 
+				   b = (Boolean)viewSettings.get("docked");
+				   if (b !=null && b)
+					   getFocusPanel().dock(false);
+				   
+				   Integer i = (Integer)viewSettings.get("selectedIndex");
+				   if ( i !=null ) {
+					   if (i.intValue() < getFocusPanel().getComponentCount()) {
+						   getFocusPanel().setSelectedIndex(i.intValue());
+					   } else {
+						   getFocusPanel().selectedIndex=i.intValue();
+					   }
+				   }
+				   
                   //call to update subclass specific settings
                    updateSettings(false);
                 }
@@ -941,7 +985,6 @@ public abstract class Layer implements ProjectionListener
 			return  getWidth() != 0
 				&&  getHeight() != 0
 				&&  isVisible()
-				&&  viewman != null
 				&&  getProj() != null
 				&&  buffers != null;
 		 }
@@ -954,6 +997,14 @@ public abstract class Layer implements ProjectionListener
 
                   return "";
 
+                }
+
+                /**
+                 * Overridden by individual views, returns information for formatting for 
+                 * Investigate mode while hovering with the cursor.
+                 */
+                public InvestigateData getInvestigateData(MouseEvent event) {
+                	return null;
                 }
 
 
@@ -987,25 +1038,39 @@ public abstract class Layer implements ProjectionListener
 		  }
 
 
-
-		JComponent light =
-			new JTextField("   ")
-			 {{
+       public JComponent getLight() {
+    	   return light;
+       }
+       
+        JComponent light= new Light();
+		
+       private class Light extends JTextField
+		{
+			public Light()
+			{
+				super("   ");
 				setEnabled(false);
 				setMaximumSize(getPreferredSize());
 				setBackground(INITIAL_STATUS_COLOR);
 				setBorder(BorderFactory.createLineBorder(Color.black));
-			 }};
+			}
+			
+			@Override
+			protected void paintComponent(Graphics g) {
+				super.paintComponent(g);
+				Color c = g.getColor();
+				g.setColor(getBackground());
+				g.fillRect(0, 0, getWidth(), getHeight());
+				g.setColor(c);
+			}
+		}
+       
 		private void privateSetStatus(Color col)
 		 {
 			light.setBackground(col);
 			light.repaint();
 
-			LManager lman = Main.getLManager();
-			if(lman != null)
-			    lman.updateStatusOf(this, light2);
-			else
-			    log.println("lman is null for " + getClass());
+			LManager.getLManager().repaint();
 		 }
 
 		Icon light2 =
@@ -1085,13 +1150,21 @@ public abstract class Layer implements ProjectionListener
 		                            {
 		                                log.println("LView shown caught");
 		                                
-		                                if(getParent() instanceof LViewManager)
-		                                    viewman2 = viewman = (LViewManager) getParent();
-		                                else
+		                                if(getParent() instanceof LViewManager) {
+		                                    //without the following code, viewman is null when the view is added to the viewlist. For layers that 
+		                                    //have propertyChange listeners, this ends up failing because of a NullPointerException. The Exception makes it
+		                                    //so that we do not even get to the code that sets the viewman in LManager. 
+		                                    if (viewman == null) {
+			                                    viewman = (LViewManager) getParent();
+			                                    if (getChild() != null) {
+			                        				getChild().viewman = viewman.getChild();
+			                        			}
+		                                    }
+		                                } else {
 		                                    log.aprintln("PROGRAMMER WARNING: LView object " +
 		                                                 "added to something that isn't an " +
 		                                                 "LViewManager");
-		                                
+		                                }
 		                                if(layer != null)
 		                                    layer.registerDataReceiver(LView.this);
 		                                
@@ -1107,8 +1180,6 @@ public abstract class Layer implements ProjectionListener
 		                            public void ancestorRemoved(AncestorEvent e)
 		                            {
 		                                log.println("LView hidden caught");
-		                                
-		                                viewman = null;
 		                                
 		                                if(layer != null)
 		                                    layer.unregisterDataReceiver(LView.this);
@@ -1267,7 +1338,7 @@ public abstract class Layer implements ProjectionListener
 		 ** Creates a graphics context that paints to off-screen
 		 ** buffer zero in screen coordinates (pixels).
 		 **/
-		protected Graphics2D getOffScreenG2Direct()
+		public Graphics2D getOffScreenG2Direct()
 		 {
 			return  getOffScreenG2Direct(0);
 		 }
@@ -1276,7 +1347,7 @@ public abstract class Layer implements ProjectionListener
 		 ** Creates a graphics context that paints to a particular
 		 ** off-screen buffer in screen coordinates (pixels).
 		 **/
-		protected Graphics2D getOffScreenG2Direct(int i)
+		public Graphics2D getOffScreenG2Direct(int i)
 		 {
 			if (buffers == null || buffers[i] == null){
 				// If buffers haven't been readied as yet, return null
@@ -1417,7 +1488,7 @@ public abstract class Layer implements ProjectionListener
 			realPaintComponent(g);
 		 }
 
-		private ColorMapOp colorMapOp = new ColorMapOp();
+		private ColorMapOp colorMapOp = new ColorMapOp(null);
 		public void setColorMapOp(ColorMapOp colorMapOp)
 		 {
 			this.colorMapOp = colorMapOp;
@@ -1486,7 +1557,11 @@ public abstract class Layer implements ProjectionListener
 
 		public MultiProjection getProj()
 		 {
-			return  viewman2.getProj();
+			//this check is just in case viewman is null (it should never be)
+			if (viewman == null) {
+				return null;
+			}
+			return  viewman.getProj();
 		 }
 
 		private static int id = 0;
@@ -1555,15 +1630,15 @@ public abstract class Layer implements ProjectionListener
 
 			// If we're hidden and a viewchanged is issued, we
 			// invalidate our current offscreen buffer.
-			if(viewman == null  ||  !isVisible()  &&  !dirty)
+			if(viewman == null || (!isVisible()  &&  !dirty)) {//@since remove viewman2
 				clearOffScreen();
+			}
 			dirty = true;
 
 			// Cut down on useless viewChanges that will die later or
 			// should never have happened.
 			if(getWidth() == 0  ||
 				getHeight() == 0  ||
-				viewman == null  ||
 				getProj() == null  ||
 				!isVisible())
 				return;
@@ -1639,8 +1714,8 @@ public abstract class Layer implements ProjectionListener
 
 			dirty = true;
 
-			if(viewman == null) {
-				log.println("VIEWMAN is NULL, leaving");
+			if(viewman == null) {//remove viewman2
+				log.println("view is not enabled, leaving");
 				return;
 			}
 
@@ -1775,12 +1850,17 @@ public abstract class Layer implements ProjectionListener
 			return  focusPanel;
 		 }
 
+		public FocusPanel getFocusPanel(JFrame frame)
+		{
+			return getFocusPanel();
+		}
+
         // temporary setCursor function.
         public void setCursor(Cursor c)
          {
 			if(currentCursor != c)
 			 {
-				if(viewman != null)
+				if(viewman != null)//@since remove viewman2
 				 {
 					currentCursor = c;
 					viewman.setCursor(c);
@@ -1871,7 +1951,7 @@ public abstract class Layer implements ProjectionListener
 			public DelayedFocusPanel()
 			 {
 				super(Layer.LView.this);
-				setLayout(new OverlapLayout());
+		//		setLayout(new OverlapLayout());
 
 				JLabel lbl = new JLabel("Still loading " + parent.getName() +
 										", please wait...");
@@ -1904,7 +1984,7 @@ public abstract class Layer implements ProjectionListener
 			 **     return  focusPanel;
 			 **  }</code>
 			 **/
-			abstract public JPanel createFocusPanel();
+			abstract public FocusPanel createFocusPanel();
 
 			public void componentHidden(ComponentEvent e)
 			 { }
@@ -1924,14 +2004,38 @@ public abstract class Layer implements ProjectionListener
 			 {
 				SwingUtilities.invokeLater(new Runnable() {
 					public void run() {
-						JPanel fp = createFocusPanel();
-						removeAll();
-						setLayout(new BorderLayout());
-						add(fp, BorderLayout.CENTER);
+						FocusPanel fp = createFocusPanel();
+						add("Adjustments",fp);
 						Util.expandSize((Frame)fp.getTopLevelAncestor());
 					}
 				});
 			 }
 		 }
+		
+	//The following four methods are used to query for the
+	 // info panel fields (description, citation, etc)	
+		String layerKey = "";
+		public String getLayerKey() {
+	 		if(layerKey==null){
+	 			if(layerParams!=null)
+	 				return layerParams.name;
+	 		}
+	 		return layerKey;
+	 	}
+	 	
+	 	public String getLayerType(){
+	 		if(layerParams!=null)
+	 			return layerParams.type;
+	 		return "stamp";
+	 	}
+	 	
+	 	protected LayerParameters layerParams=null;
+	 	public LayerParameters getLayerParameters(){
+	 		return layerParams;
+	 	}
+	 	
+	 	public void setLayerParameters(LayerParameters lp){
+	 		layerParams=lp;
+	 	}
 	 }
  }

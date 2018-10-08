@@ -1,23 +1,3 @@
-// Copyright 2008, Arizona Board of Regents
-// on behalf of Arizona State University
-// 
-// Prepared by the Mars Space Flight Facility, Arizona State University,
-// Tempe, AZ.
-// 
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-// 
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU General Public License for more details.
-// 
-// You should have received a copy of the GNU General Public License
-// along with this program.  If not, see <http://www.gnu.org/licenses/>.
-
-
 package edu.asu.jmars.layer.map2.stages;
 
 import java.awt.GridBagConstraints;
@@ -32,6 +12,7 @@ import java.beans.PropertyChangeListener;
 import java.text.DecimalFormat;
 import java.text.ParseException;
 
+import javax.swing.JButton;
 import javax.swing.JCheckBox;
 import javax.swing.JLabel;
 import javax.swing.JPanel;
@@ -51,9 +32,28 @@ public class GrayscaleStageView implements StageView, PropertyChangeListener {
 	private JTextField minValField;
 	private JTextField maxValField;
 	private JCheckBox autoMinMaxCheckBox;
-	private JTextField ignoreValField;
+	private JButton resetButton;
 	private JPanel stagePanel;
+	private boolean minValueFlag = false;
+	private boolean maxValueFlag = false;
 	
+	
+	public boolean isMinValueFlag() {
+		return minValueFlag;
+	}
+
+	public void setMinValueFlag(boolean minValueFlag) {
+		this.minValueFlag = minValueFlag;
+	}
+
+	public boolean isMaxValueFlag() {
+		return maxValueFlag;
+	}
+
+	public void setMaxValueFlag(boolean maxValueFlag) {
+		this.maxValueFlag = maxValueFlag;
+	}
+
 	public GrayscaleStageView(GrayscaleStageSettings settings){
 		this.settings = settings;
 		stagePanel = buildUI();
@@ -63,6 +63,7 @@ public class GrayscaleStageView implements StageView, PropertyChangeListener {
 	private void updateMinValFromField(){
 		try {
 			settings.setMinValue(getFieldValue(minValField, VAL_UNKNOWN, Double.POSITIVE_INFINITY));
+			this.minValueFlag = true;
 		} catch(ParseException ex){
 			log.println(ex);
 			minValField.selectAll();
@@ -73,6 +74,7 @@ public class GrayscaleStageView implements StageView, PropertyChangeListener {
 	private void updateMaxValFromField(){
 		try {
 			settings.setMaxValue(getFieldValue(maxValField, VAL_UNKNOWN, Double.NEGATIVE_INFINITY));
+			this.maxValueFlag = true;
 		}
 		catch(ParseException ex){
 			log.println(ex);
@@ -83,16 +85,6 @@ public class GrayscaleStageView implements StageView, PropertyChangeListener {
 	
 	private void updateAutoMinMaxFromCheckBox(){
 		settings.setAutoMinMax(autoMinMaxCheckBox.isSelected());
-	}
-	
-	private void updateIgnoreFromField() {
-		try {
-			settings.setIgnore(getFieldValue(ignoreValField, "", Double.NaN));
-		} catch (ParseException e) {
-			log.println(e);
-			ignoreValField.selectAll();
-			ignoreValField.requestFocus();
-		}
 	}
 	
 	private JPanel buildUI() {
@@ -132,18 +124,16 @@ public class GrayscaleStageView implements StageView, PropertyChangeListener {
 			}
 		});
 		
-		ignoreValField = new JTextField(6);
-		ignoreValField.setFocusable(true);
-		updateIgnoreFieldFromSettings();
-		ignoreValField.addActionListener(new ActionListener() {
-			public void actionPerformed(ActionEvent e) {
-				updateIgnoreFromField();
+		resetButton = new JButton("Reset min/max");
+		resetButton.addActionListener(new ActionListener(){
+			public void actionPerformed(ActionEvent e){
+				settings.setMinValue(Double.POSITIVE_INFINITY);
+				settings.setMaxValue(Double.NEGATIVE_INFINITY);
 			}
 		});
 		
 		JLabel minLbl = new JLabel("Min:");
 		JLabel maxLbl = new JLabel("Max:");
-		JLabel ignoreLbl = new JLabel("Null Value");
 		
 		JPanel out = new JPanel(new GridBagLayout());
 		Insets in = new Insets(gap,gap,gap,gap);
@@ -152,9 +142,7 @@ public class GrayscaleStageView implements StageView, PropertyChangeListener {
 		out.add(minValField, new GridBagConstraints(1,1,1,1,0,0,GridBagConstraints.WEST,GridBagConstraints.HORIZONTAL,in,gap,gap));
 		out.add(maxLbl, new GridBagConstraints(0,2,1,1,0,0,GridBagConstraints.WEST,GridBagConstraints.HORIZONTAL,in,gap,gap));
 		out.add(maxValField, new GridBagConstraints(1,2,1,1,0,0,GridBagConstraints.WEST,GridBagConstraints.HORIZONTAL,in,gap,gap));
-		out.add(ignoreLbl, new GridBagConstraints(0,3,1,1,0,0,GridBagConstraints.WEST,GridBagConstraints.HORIZONTAL,in,gap,gap));
-		out.add(ignoreValField, new GridBagConstraints(1,3,1,1,0,0,GridBagConstraints.WEST,GridBagConstraints.HORIZONTAL,in,gap,gap));
-		out.add(new JLabel(""), new GridBagConstraints(2,0,1,4,1,0,GridBagConstraints.NORTHWEST,GridBagConstraints.HORIZONTAL,in,gap,gap));
+		out.add(resetButton, new GridBagConstraints(1,3,1,1,0,0,GridBagConstraints.WEST,GridBagConstraints.HORIZONTAL,in,gap,gap));
 		return out;
 	}
 	
@@ -186,16 +174,6 @@ public class GrayscaleStageView implements StageView, PropertyChangeListener {
 		minValField.setCaretPosition(0);
 	}
 	
-	private void updateIgnoreFieldFromSettings() {
-		double ignore = settings.getIgnore();
-		if (Double.isNaN(ignore)) {
-			ignoreValField.setText("");
-		} else synchronized(nf) {
-			ignoreValField.setText(nf.format(ignore));
-		}
-		ignoreValField.setCaretPosition(0);
-	}
-	
 	private static double getFieldValue(JTextField textField, String unknownString, double unknownValue) throws ParseException {
 		String text = textField.getText().trim();
 		if (unknownString.equals(text)) {
@@ -215,8 +193,6 @@ public class GrayscaleStageView implements StageView, PropertyChangeListener {
 			autoMinMaxCheckBox.setSelected(((Boolean)e.getNewValue()).booleanValue());
 			updateMinFieldFromSettings();
 			updateMaxFieldFromSettings();
-		} else if (prop.equals(GrayscaleStageSettings.propIgnore)) {
-			updateIgnoreFieldFromSettings();
 		}
 	}
 }

@@ -1,30 +1,16 @@
-// Copyright 2008, Arizona Board of Regents
-// on behalf of Arizona State University
-// 
-// Prepared by the Mars Space Flight Facility, Arizona State University,
-// Tempe, AZ.
-// 
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-// 
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU General Public License for more details.
-// 
-// You should have received a copy of the GNU General Public License
-// along with this program.  If not, see <http://www.gnu.org/licenses/>.
-
-
 package edu.asu.jmars.samples.layer.map2.stages.threshold;
 
+import java.awt.Transparency;
+import java.awt.color.ColorSpace;
 import java.awt.geom.Area;
 import java.awt.image.BufferedImage;
+import java.awt.image.ColorModel;
+import java.awt.image.ComponentColorModel;
+import java.awt.image.DataBuffer;
 import java.awt.image.Raster;
 import java.awt.image.WritableRaster;
 import java.io.Serializable;
+import java.util.Hashtable;
 
 import edu.asu.jmars.layer.map2.AbstractStage;
 import edu.asu.jmars.layer.map2.MapAttr;
@@ -70,7 +56,7 @@ public class ThresholdStage extends AbstractStage implements Cloneable, Serializ
 		int w = inImage.getWidth();
 		int h = inImage.getHeight();
 
-		BufferedImage outImage = Util.createGrayscaleImage(w, h, true, BufferedImage.OPAQUE, null);
+		BufferedImage outImage = createGrayscaleImage(w, h, true, BufferedImage.OPAQUE, null);
 		WritableRaster outRaster = outImage.getRaster();
 		
 		// Fill output image via thresholding
@@ -87,9 +73,20 @@ public class ThresholdStage extends AbstractStage implements Cloneable, Serializ
 		
 		// Finally return a safe output image that the receiver can 
 		// modify with impunity.
-		return data.getDeepCopyShell(outImage);
+		return data.getDeepCopyShell(outImage, null);
 	}
 
+    private static final BufferedImage createGrayscaleImage(int w, int h, boolean linearColorSpace, int transparency, Hashtable properties){
+    	ColorSpace destCS = linearColorSpace? Util.getLinearGrayColorSpace(): ColorSpace.getInstance(ColorSpace.CS_GRAY);
+    	ColorModel destCM;
+    	if (transparency == Transparency.OPAQUE) 
+    		destCM = new ComponentColorModel(destCS, false, false, transparency, DataBuffer.TYPE_BYTE);
+    	else
+    		destCM = new ComponentColorModel(destCS, true, false, transparency, DataBuffer.TYPE_SHORT);
+    	
+		return new BufferedImage(destCM, destCM.createCompatibleWritableRaster(w, h), destCM.isAlphaPremultiplied(), properties);
+    }
+    
 	public String getStageName(){
 		return getSettings().getStageName();
 	}

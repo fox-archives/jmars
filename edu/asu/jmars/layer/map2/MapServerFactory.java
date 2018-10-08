@@ -1,23 +1,3 @@
-// Copyright 2008, Arizona Board of Regents
-// on behalf of Arizona State University
-// 
-// Prepared by the Mars Space Flight Facility, Arizona State University,
-// Tempe, AZ.
-// 
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-// 
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU General Public License for more details.
-// 
-// You should have received a copy of the GNU General Public License
-// along with this program.  If not, see <http://www.gnu.org/licenses/>.
-
-
 package edu.asu.jmars.layer.map2;
 
 import java.util.ArrayList;
@@ -29,8 +9,10 @@ import java.util.concurrent.CountDownLatch;
 import javax.swing.SwingUtilities;
 
 import edu.asu.jmars.Main;
+import edu.asu.jmars.layer.LManager;
 import edu.asu.jmars.util.Config;
 import edu.asu.jmars.util.DebugLog;
+import edu.asu.jmars.util.Util;
 
 /** MapServer cache and retrieval. This data is shared amongst all map2 layers. */
 public class MapServerFactory {
@@ -43,7 +25,7 @@ public class MapServerFactory {
 	/** Cached MapServer objects */
 	private static List<MapServer> mapServers;
 	
-	private static List<MapServer> _mapServersInternal;
+	private static List<MapServer> _mapServersInternal = new ArrayList<MapServer>();
 	
 	/** Held reference to the custom map server, or null if there isn't one */
 	private static CustomMapServer customServer;
@@ -81,7 +63,7 @@ public class MapServerFactory {
 		if (mapServers == null && loaderThread == null) {
 			loaderThread = new Thread(new Runnable() {
 				public void run() {
-					_mapServersInternal = _getMapServersImpl();
+					_mapServersInternal.addAll(_getMapServersImpl());
 					mapServers = Collections.unmodifiableList(_mapServersInternal);
 					synchronized(lock) {
 						for (Runnable r: whenReady) {
@@ -108,6 +90,14 @@ public class MapServerFactory {
 	}
 	
 	/**
+	* @since change bodies
+	*/
+	public static void disposeOfMapServerReferences() {
+		mapServers = null;
+		loaderThread = null;
+		customServer = null;
+	}
+	/**
 	 * <p>
 	 * Finds each named server in the config file, and loads its capabilities
 	 * document. Since each server could take awhile to load each document, this
@@ -119,7 +109,7 @@ public class MapServerFactory {
 	private static List<MapServer> _getMapServersImpl() {
 		log.println("Loading map sources");
 		final List<MapServer> servers = new ArrayList<MapServer>();
-		String serverLines[] = Config.getChildKeys(MapServer.prefix);
+		String serverLines[] = Config.getChildKeys(Util.getProductBodyPrefix() + MapServer.prefix);// @since change bodies - added prefix
 		final CountDownLatch latch = new CountDownLatch(serverLines.length);
 		for(final String name: serverLines) {
 			new Thread(new Runnable() {
@@ -127,10 +117,11 @@ public class MapServerFactory {
 					try {
 						MapServer newServer = null;
 						if (name.equals(CustomMapServer.customMapServerName)) {
-							if (Main.USER.length() > 0 && Main.PASS.length() > 0) {
+							if (Main.USER != null && Main.USER.length() > 0 && Main.PASS.length() > 0) {
 								// create the custom server based on JMARS user/password
 								// and rebuild "Add New Layer" menus when it changes
-								newServer = customServer = new CustomMapServer(name, Main.USER, Main.PASS);
+								newServer = customServer = new CustomMapServer(name, Main.USER, Main.PASS,
+										Main.AUTH_DOMAIN, Main.PRODUCT, Main.getBody());// @since change bodies - added getBody()
 							}
 						} else {
 							// TODO: This code will change when we have multiple types of
@@ -143,7 +134,7 @@ public class MapServerFactory {
 							newServer.addListener(new MapServerListener() {
 								public void mapChanged(MapSource source, Type changeType) {
 									// rebuild menus
-									Main.testDriver.getLManager().refreshAddMenu();
+									LManager.getLManager().refreshAddMenu();
 								}
 							});
 							synchronized(servers) {
@@ -179,27 +170,53 @@ public class MapServerFactory {
 	}
 	
 	/**
-	 * Returns the default map in the default map server, or null if not found.
+	 * Returns the default map in the default map source, or null if not found.
 	 * 
-	 * @see MapServer.DEFAULT_NAME
 	 * @see MapSource.DEFAULT_NAME
 	 */
 	public static MapSource getDefaultMapSource() {
-		MapServer server = MapServerFactory.getServerByName(MapServer.DEFAULT_NAME);
+		MapServer server = MapServerFactory.getServerByName(MapServerDefault.DEFAULT_NAME);
 		if (server == null)
 			return null;
-		return server.getSourceByName(MapSource.DEFAULT_NAME);
+		return server.getSourceByName(MapSourceDefault.DEFAULT_NAME);
 	}
+
+	/**
+	 * Returns the default map in the default map server, or null if not found.
+	 * 
+	 * @see MapSource.DEFAULT_PLOT
+	 */
+	public static MapSource getDefaultPlotSource() {
+		MapServer server = MapServerFactory.getServerByName(MapServerDefault.DEFAULT_NAME);
+		if (server == null)
+			return null;
+		return server.getSourceByName(MapSourceDefault.DEFAULT_PLOT);
+	}
+
 	
 	/**
 	 * Returns the MapServer with the given URL, or null if it cannot be found.
 	 */
 	public synchronized static MapServer getServerByName(String name) {
-		for (MapServer server: getMapServers()) {
-			if (server.getName().equals(name)) {
-				return server;
-			}
-		}
+	    //bug 2203
+	    int count = 0;
+	    List<MapServer> servers = getMapServers();
+	    while (servers == null && count < 3) {
+	        try {
+                Thread.sleep(3000);
+            } catch (InterruptedException e) {
+                e.printStackTrace();
+            }
+	        servers = getMapServers();
+	        count++;
+	    }
+	    if (servers != null) {
+    		for (MapServer server: servers) {
+    			if (server.getName().equals(name)) {
+    				return server;
+    			}
+    		}
+	    }
 		return null;
 	}
 }

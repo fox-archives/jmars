@@ -1,23 +1,3 @@
-// Copyright 2008, Arizona Board of Regents
-// on behalf of Arizona State University
-// 
-// Prepared by the Mars Space Flight Facility, Arizona State University,
-// Tempe, AZ.
-// 
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-// 
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU General Public License for more details.
-// 
-// You should have received a copy of the GNU General Public License
-// along with this program.  If not, see <http://www.gnu.org/licenses/>.
-
-
 package edu.asu.jmars.layer.stamp;
 
 import java.awt.Color;
@@ -31,10 +11,14 @@ import java.io.InputStream;
 import java.io.ObjectInputStream;
 import java.io.PrintStream;
 import java.io.RandomAccessFile;
-import java.net.URL;
-import java.net.URLEncoder;
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
+import java.util.HashMap;
 
+import edu.asu.jmars.Main;
+import edu.asu.jmars.layer.stamp.projection.Unprojected;
 import edu.asu.jmars.util.DebugLog;
+import edu.asu.jmars.util.HVector;
 
 
 /**
@@ -59,10 +43,15 @@ public class PdsImage extends StampImage
     protected double dataScaleOffset;
     protected double dataScaleFactor;
     
-    protected PdsImage(StampShape s, File cacheFile, String newFilename, String imageType, Instrument newInstrument)
+    public int nullConstant=Integer.MIN_VALUE;
+    
+    protected String sampleType;
+    protected int sampleBits;
+    
+    protected PdsImage(StampShape s, File cacheFile, String newFilename, String imageType, String newInstrument, HashMap<String,String> projectionParams)
     throws IOException
     {
-    	super(s, s.getId(), "themis", imageType);
+    	super(s, s.getId(), newInstrument, imageType, null, projectionParams);
     	
     	raf = new RandomAccessFile(cacheFile, "r");
     	
@@ -74,7 +63,6 @@ public class PdsImage extends StampImage
         FileInputStream fin = new FileInputStream(cacheFile);
         
         // Read the entire file into a memory buffer
-        log.println("Reading file...");
         try
         {
             int count;
@@ -89,13 +77,9 @@ public class PdsImage extends StampImage
             throw  e;
         }
         
-        log.println("Constructing it as a byte array...");
-        
         // The entire data buffer
         byte[] dataBuffer;
         dataBuffer = buffer.toByteArray();
-        
-        log.println("Determining parameters...");
         
         // The sizes of things
         int recordBytes;
@@ -114,31 +98,54 @@ public class PdsImage extends StampImage
         // Determine the dimensions of the image data
         sampleCount = intValue(label, "LINE_SAMPLES");
         lineCount = intValue(label, "LINES");
-//        bandNumber = intValue(label, "BAND_NUMBER");
+        // bandNumber = intValue(label, "BAND_NUMBER");
+        
+        // Determine the datatype and size of the image data
+        sampleType = strValue(label, "SAMPLE_TYPE");
+        sampleBits = intValue(label, "SAMPLE_BITS");
                 
         // Determine data scaling factors for IR images only,
-        // not for VIS.
-        if (productID.startsWith("I"))
+        // not for VIS. -- except for the new ALB product
+        if (productID.startsWith("I") || imageType.startsWith("ALB"))
         {
             dataScaleOffset = doubleValue(label, "   OFFSET");
             dataScaleFactor = doubleValue(label, "SCALING_FACTOR");
+            if (label.contains("MINIMUM_BRIGHTNESS_TEMPERATURE")) {   // BTR, PBT
+            	minValue = doubleValue(label, "MINIMUM_BRIGHTNESS_TEMPERATURE");
+            } else if (label.contains("MINIMUM_ALBEDO")) {
+            	minValue = doubleValue(label, "MINIMUM_ALBEDO");            	
+            }
+            if (label.contains("MAXIMUM_BRIGHTNESS_TEMPERATURE")) {
+            	maxValue = doubleValue(label, "MAXIMUM_BRIGHTNESS_TEMPERATURE");
+            } else if (label.contains("MAXIMUM_ALBEDO")) {
+            	maxValue = doubleValue(label, "MAXIMUM_ALBEDO");            	
+            }
+            if (label.contains("NULL_CONSTANT")) {
+            	nullConstant = intValue(label, "NULL_CONSTANT");
+            }
         }
         
         if (productID.startsWith("V"))
             spatialSumming = intValue(label, "SPATIAL_SUMMING");
         else
             spatialSumming = 0;
-        
-        log.println("recordBytes = " + recordBytes);
-        log.println("labelRecords = " + labelRecords);
-        log.println("imageRecords = " + imageRecords);
-        log.println("sampleCount = " + sampleCount);
-        log.println("lineCount = " + lineCount);
-        
+                
         imageBytes = sampleCount * lineCount;
+        
+        // TODO: What is the implication of having to do this again in here?
+        // We don't know numLines and numSamples before parsing this in the constructor above
+        // Shouldn't be...
+        if (imageProjection==null) {
+        	imageProjection = new Unprojected(getNumLines(), getNumSamples(), pts[pts.length-2], pts[pts.length-1], pts[0], pts[1]);
+        }
     }
 
-    
+    /**
+     * Override to indicate that we have the entire image locally, not just subscampled frames.
+     */
+    public boolean isFullImageLocal() {
+    	return true;
+    }
     
     protected static String strValue(String lines, String key)
     {
@@ -204,19 +211,17 @@ public class PdsImage extends StampImage
         }
     }  
             
-    protected Point2D[] getPoints()
+    public Point2D[] getPoints()
     {
     	if (pts==null) {
 			try {
-				String urlStr = StampLayer.stampURL+"PointFetcher?id="+productID+"&instrument="+getInstrument()+StampLayer.versionStr;
+				String urlStr = "PointFetcher?id="+productID+"&instrument="+getInstrument();
 				
     			if (imageType!=null && imageType.length()>0) {
-    				urlStr+="&imageType="+URLEncoder.encode(imageType);
+                    urlStr+="&imageType="+imageType;
     			}
     			
-				URL url = new URL(urlStr);
-				
-				ObjectInputStream ois = new ObjectInputStream(url.openStream());
+				ObjectInputStream ois = new ObjectInputStream(StampLayer.queryServer(urlStr));
 				
 				double dpts[] = (double[])ois.readObject();
 				
@@ -224,7 +229,10 @@ public class PdsImage extends StampImage
 		        
 	    	    for (int i=0; i<pts.length; i++) {
 	    	    	pts[i]=new Point2D.Double(dpts[2*i], dpts[2*i+1]);
-	    	    }	    	    
+	    	    }
+	    	    
+	    	    ois.close();
+	    	    
 			} catch (Exception e) {
 				e.printStackTrace();
 			}
@@ -251,7 +259,7 @@ public class PdsImage extends StampImage
     	return sampleCount;
     }
 
-    public long getNumLines() {
+    public int getNumLines() {
     	return lineCount;
     }
     
@@ -271,26 +279,11 @@ public class PdsImage extends StampImage
 		int b = raf.readByte() & 0xFF;
 		return new Color(b, b, b).getRGB();
     }
-        
-    protected int getFrameSize()
-    {
-        return productID.startsWith("V") ? (192/spatialSumming) : 256;
-    }
-    
-    protected int getFrameSize(int frame)
-    {
-        if (!productID.startsWith("V") && frame == frames.length-1) {
-             return getHeight() % 256;
-        }
-        else {
-            return getFrameSize();
-        }
-    }
-    
+            
     protected double getMaxRenderPPD()
     {
         if (productID == null)
-            return 512;
+            return 512.0;
         else
             return productID.startsWith("V") ? 2048/spatialSumming : 512;
     }
@@ -340,23 +333,46 @@ public class PdsImage extends StampImage
      */
     public double getTemp(int x, int y)
     {
-        int dataIndex = x + sampleCount * y + imageOffset;
+    	if (x<0 || y<0 || x>=sampleCount || y>=lineCount) return Double.NaN;
+
+    	int dataSize = sampleBits/8;
+    	
+        int dataIndex = x*dataSize + sampleCount * y * dataSize + imageOffset;
         
-        byte pixelVal;
+        float pixelVal = 0;
         
         try {
         	raf.seek(dataIndex);
-        	pixelVal = raf.readByte();
+
+        	// Assume PC_REAL
+        	if (dataSize > 1) {
+        		byte bytes[] = new byte[dataSize];
+
+        		raf.read(bytes);
+        	        	
+        		pixelVal = ByteBuffer.wrap(bytes).order(ByteOrder.LITTLE_ENDIAN).getFloat();
+        	} else { // Assume UNSIGNED_INTEGER
+        		byte byteVal = raf.readByte();
+        		
+        		pixelVal = (int)(byteVal & 0xFF);
+        	}
+
         } catch (IOException ioe) {
         	ioe.printStackTrace();
-        	return -1;
+        	return Double.NaN;
+        }
+
+        if (pixelVal==nullConstant) {
+        	return Double.NaN;
         }
         
         // Make sure in calculation below that 'pixelVal' is
         // effectively treated as an unsigned value, 0-255 in range.
-        double temp = dataScaleFactor * ((int)(pixelVal & 0xFF)) + dataScaleOffset;
+        double temp = dataScaleFactor * pixelVal + dataScaleOffset;
         
-        log.println("data index = " + dataIndex + ", temp(K) = " + temp);
+        if (temp==0.0) {
+        	return Double.NaN;
+        }
         
         return temp;
     }
@@ -368,9 +384,43 @@ public class PdsImage extends StampImage
      *
      * Note: this method is only useful for BTR images and PBT images.
      */
-    public double getTemp(Point2D imagePt)
+    public double getTemp(HVector ptVect)
     {
-        return getTemp( (int)imagePt.getX(), (int)imagePt.getY() );
+        Point2D.Double imagePt = null;
+
+        if (frames==null) {
+        	recreateImageFrames();
+        }
+        
+        for (int i = 0; i < frames.length; i++)
+        {
+            Point2D.Double unitPt = new Point2D.Double();
+            
+            if (frames[i]==null || frames[i].cell==null) {
+            	return Double.NaN; 
+            }
+            
+            frames[i].cell.uninterpolate(ptVect, unitPt);
+            
+            // Check whether point falls within cell.
+            if (unitPt.x >= 0  &&  unitPt.x <= 1  &&
+                unitPt.y >= 0  &&  unitPt.y <= 1  )
+            {
+                imagePt = new Point2D.Double();
+                imagePt.x = unitPt.x * frames[i].getWidth() + frames[i].getX();
+                
+                // Might need to be inverted, ie 1-blah
+                imagePt.y = (1-unitPt.y) * frames[i].getHeight() + frames[i].getY();
+
+                break;
+            } 
+        }
+        
+        if (imagePt == null) {
+        	return Double.NaN;
+        }
+        
+        return getTemp( (int)Math.floor(imagePt.getX()), (int)Math.floor(imagePt.getY()) );
     }
  
     

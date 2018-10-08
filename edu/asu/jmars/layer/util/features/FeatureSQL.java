@@ -1,34 +1,27 @@
-// Copyright 2008, Arizona Board of Regents
-// on behalf of Arizona State University
-// 
-// Prepared by the Mars Space Flight Facility, Arizona State University,
-// Tempe, AZ.
-// 
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-// 
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU General Public License for more details.
-// 
-// You should have received a copy of the GNU General Public License
-// along with this program.  If not, see <http://www.gnu.org/licenses/>.
-
-
 package edu.asu.jmars.layer.util.features;
 
 import java.awt.Color;
-import java.sql.*;
-import java.util.*;
-import java.awt.geom.*;
-import javax.swing.*;
+import java.awt.geom.AffineTransform;
+import java.awt.geom.GeneralPath;
+import java.awt.geom.Point2D;
+import java.io.File;
+import java.io.IOException;
+import java.sql.Connection;
+import java.sql.DriverManager;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.sql.Statement;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.Iterator;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
 
-import edu.asu.jmars.util.*;
-
-
+import edu.asu.jmars.util.DebugLog;
+import edu.asu.jmars.util.LineType;
 
 /**
  * A class for manipulating Features via SQL-like commands.
@@ -52,131 +45,140 @@ import edu.asu.jmars.util.*;
  *     // deletes the features dictated by the predicate from the FeatureTableModel.
  *     public static void delete( FeatureCollection fc, String where) {
  *
- */     
+ */
 public class FeatureSQL {
-
 	private static DebugLog log = DebugLog.instance();
-
-
-
-	private final int SET_COMMAND    = 1;
-	private final int MOVE_COMMAND   = 2;
-	private final int SELECT_COMMAND = 3;
-	private final int DELETE_COMMAND = 4;
 	
+	static {
+		// causes the driver to register itself with jdbc
+		try {
+			Class.forName("org.hsqldb.jdbcDriver");
+		} catch(ClassNotFoundException cnfe){
+			log.aprintln(cnfe);
+		}
+	}
+	private static final String featureTable = "foobar";
+	private static final String keyColumnName = "key";
+	
+	private static final int SET_COMMAND    = 1;
+	private static final int MOVE_COMMAND   = 2;
+	private static final int SELECT_COMMAND = 3;
+	private static final int DELETE_COMMAND = 4;
+	
+	private final String dbUrl;
+	{
+		String file = "test";
+		try {
+			file = File.createTempFile("jmars", ".hsqldb").getAbsolutePath();
+		} catch (IOException e) {
+			log.aprintln(e);
+		}
+		dbUrl = "jdbc:hsqldb:" + file;
+	}
 	
 	private LexicalAnalyzer  lex          = null;
-	private JLabel statusBar = null;
+	private String resultStr;
+	private String statusStr;
 	
-	
-	
-	static String     resultStr;
-	public static String  getResultString(){
+	public String getResultString() {
 		return resultStr;
 	}
 	
+	public String getStatusString() {
+		return statusStr;
+	}
 	
 	/**
 	 * the calling program must define how result  messages are displayed.
 	 */
-	void printResult( String message){
-		if (statusBar !=null){
-			statusBar.setText( message);
-		}
-	}
-	
-	static {
-		// load the hyper-sql class.
-		try {
-			Class.forName("org.hsqldb.jdbcDriver");
-		} catch(ClassNotFoundException cnfe){}
+	void printResult(String message) {
+		statusStr = message;
 	}
 	
 	/**
 	 * constructor: class attributes are set, the line is parsed out, and the 
 	 * actions defined by the line performed.
 	 */
-	public FeatureSQL( String line, FeatureCollection fc, Set<Feature> selections, JLabel statusBar){
-		this.statusBar = statusBar;
+	public FeatureSQL(String line, FeatureCollection fc,
+			MemoryFeatureIndex index, Set<Feature> selections) {
 		if (line!=null && fc!=null){
 			this.lex  = new LexicalAnalyzer( line);
-			parseLine(fc, selections);
+			parseLine(fc, index, selections);
 		}
 	}
-
-
-	/** 
-	 * moves the selected rows by the given delta.
-	 */
-	public static void move( FeatureCollection fc, Point2D delta, String where) {
-		Connection conn       = null;
+	
+	private static void cleanup(Connection conn) {
+		try {
+			cleanTable(conn);
+		} catch (Exception e) {
+			log.println(e);
+		}
+		try {
+			conn.close();
+		} catch (Exception e){
+			log.println(e);
+		}
+	}
+	
+	/** moves the selected rows by the given world coordinate offset. */
+	public void move(FeatureCollection fc, MemoryFeatureIndex index, Point2D delta, String where) {
+		Connection conn = null;
 		
 		try {
-			conn = DriverManager.getConnection("jdbc:hsqldb:test");
+			AffineTransform at = AffineTransform.getTranslateInstance(delta.getX(), delta.getY());
+			
+			conn = DriverManager.getConnection(dbUrl);
 			Statement  st = conn.createStatement();
-		
-			makeTempTable( conn, st, fc);
-
+			
+			makeTempTable(conn, st, fc);
+			
 			// run the query
-			String query = "select key from foobar " + filterSQL( where);
+			String query = "select "+keyColumnName+" from "+featureTable+" "+ filterSQL( where);
 			
 			ResultSet rs = st.executeQuery( query );
 			
 			// get the resulting key values and move the appropriate features.
-			Map featureValues = new HashMap();
+			Map<Feature,Object> featureValues = new HashMap<Feature,Object>();
 			while (rs.next()) {
-				int key = rs.getInt(1);
+				int key = rs.getInt(keyColumnName);
 				Feature feature = fc.getFeature(key);
-				FPath path = (FPath) feature.getAttribute(Field.FIELD_PATH);
-				// We assume that delta is in the same coodrinate system as the path.
-				// For example, spatial East leading coordinates.
-				path = path.translate(delta);
-				featureValues.put(feature, path);
+				FPath path = index.getWorldPath(feature);
+				GeneralPath nudged = new GeneralPath();
+				nudged.append(path.getShape().getPathIterator(at), false);
+				FPath nudgedPath = new FPath(nudged,FPath.WORLD).convertTo(path.getCoordSystem());
+				featureValues.put(feature, nudgedPath);
 			}
-
-			conn.close();
-
+			
 			// do all the setting of the path fields at once.
 			fc.setAttributes(Field.FIELD_PATH, featureValues);
-
+			
 			resultStr = featureValues.size() + " rows moved";
-		} 
-		catch (SQLException sqle){
+		}  catch (SQLException sqle){
 			resultStr = "SQL error moving rows: " + sqle.getMessage();
 			System.out.println( resultStr );
-		}
-		catch (Exception e){
+		} catch (Exception e){
 			resultStr = "Error moving rows: " + e.getMessage();
 			System.out.println( resultStr );
-		} 
-		
-		// clean up.  (odd...we get a warning if we try to put a finally block here.)
-		try{
-			if (conn != null){
-				conn.close();
+		} finally {
+			if (conn != null) {
+				cleanup(conn);
 			}
-		}catch (Exception e1){}
-		
+		}
 	}
 	
-
-
 	/** 
 	 * returns an array of row indices that correspond to the inputted where clause.
 	 */
-	public static void select(FeatureCollection fc, Set<Feature> selections, String where) {
-
-		int featuresSelected=0;
+	public void select( FeatureCollection fc, Set<Feature> selections, String where) {
 		Connection conn = null;
-
 		try {
-			conn = DriverManager.getConnection("jdbc:hsqldb:test");
+			conn = DriverManager.getConnection(dbUrl);
 			Statement  st = conn.createStatement();
 
-			makeTempTable( conn, st, fc);
+			makeTempTable(conn, st, fc);
 
 			// run the query
-			String query = "select key from foobar " + filterSQL( where);
+			String query = "select "+keyColumnName+" from "+featureTable+" "+ filterSQL( where);
 			ResultSet rs = st.executeQuery( query );
 
 			// first off, set all the Features to unselected.
@@ -184,59 +186,55 @@ public class FeatureSQL {
 
 			// get the resulting key values and set selection on for those rows
 			Set<Feature> selectedFeatures = new HashSet<Feature>(); 
-			while(rs.next()){
-				int key = rs.getInt(1);
+			while(rs.next()) {
+				int key = rs.getInt(keyColumnName);
 				Feature feature = fc.getFeature( key);
 				selectedFeatures.add(feature);
-				featuresSelected++;
 			}
 			selections.addAll(selectedFeatures);
 			
-			conn.close();
-
-			resultStr = featuresSelected + " rows selected";
-		}
-		catch (SQLException sqle){
-			resultStr = "SQL error selecting rows: " +   sqle.getMessage();
-			System.out.println( resultStr);
-		}
-		catch (Exception e){
+			resultStr = selectedFeatures.size() + " rows selected";
+		} catch (SQLException sqle) {
+			resultStr = "SQL error selecting rows: " + sqle.getMessage();
+			System.out.println(resultStr);
+		} catch (Exception e) {
 			resultStr = "error selecting rows: " + e.getMessage();
-			log.println( resultStr);
-		} 
-
-		// clean up.  (odd, we get a warning if we try to put a finally block here.)
-		try{
-			if (conn != null){
-				conn.close();
+			log.println(resultStr);
+		}
+		finally {
+			if (conn != null) {
+				cleanup(conn);
 			}
-		}catch (Exception e1){}
+		}
 	}
 
 
 	/**
 	 * runs the inputted "update" command on the inputted table.
 	 */
-	public static void update( FeatureCollection fc, String setString) {
+	public void update(FeatureCollection fc, String setString) {
+		Connection conn = null;
+		Map featureMap = new HashMap();
 
-		Connection  conn     = null;
-		Map       featureMap = new HashMap();
-	    
+		Field field = null;
+		Class cl = null;
+		String name = null;
+
 		try {
-			conn = DriverManager.getConnection("jdbc:hsqldb:test");
-		    
+			conn = DriverManager.getConnection(dbUrl);
+
 			Statement  st = conn.createStatement();
-		    
+
 			// make temp table 
-			makeTempTable( conn, st, fc);
-		    
+			makeTempTable(conn, st, fc);
+
 			// run the update
-			String updateString = "update foobar set " + filterSQL( setString);
+			String updateString = "update "+featureTable+" set " + filterSQL( setString);
 			int rowsChanged = st.executeUpdate( updateString);
 
 			// get every row and check if a change has been made.
 			// Note that a query after an update is apparently not stable.
-		        String query  = "select * from foobar";
+			String query  = "select * from "+featureTable;
 			ResultSet rs     = st.executeQuery( query);
 
 			// We can't do a selection then an update on JUST THAT SELECTION.
@@ -246,272 +244,218 @@ public class FeatureSQL {
 
 			// TODO: Only add features to the feature-changed list if
 			// at least one attribute was changed in the update command.
-			java.util.List  schema = fc.getSchema();
+			List  schema = fc.getSchema();
 			while(rs.next()){
-				int row = rs.getInt( "key");
+				int row = rs.getInt(keyColumnName);
 				Feature feature = fc.getFeature( row);
 				Map fieldMap = new HashMap();
 				Iterator si = schema.iterator();
 				while (si.hasNext()){
-					Field field = (Field)si.next();
-					String name = getSQLname( field.name);
-					if (field.editable==true){
-						Class cl = field.type;
-						if (cl==Integer.class || 
-						    cl==Double.class  ||
-						    cl==String.class){
-							fieldMap.put( field, rs.getObject(name));
-						} 
-						else if (cl==Color.class){
-							Integer result = (Integer)rs.getObject(name);
-							if (result==null){
-								fieldMap.put( field, null);
-							} else {
-								fieldMap.put( field, new Color( result.intValue()));
-							}
+					field = (Field)si.next();
+					name = getSQLname( field.name);
+					if (!field.editable || field == Field.FIELD_PATH)
+						continue;
+
+					cl = field.type;
+					if (cl==Integer.class || 
+							cl==Double.class  ||
+							cl==String.class){
+						fieldMap.put( field, rs.getObject(name));
+					} 
+					else if (cl==Float.class){
+						fieldMap.put(field, Float.valueOf(rs.getFloat(name)));
+					}
+					else if (cl==Color.class){
+						Integer result = (Integer)rs.getObject(name);
+						if (result==null){
+							fieldMap.put( field, null);
+						} else {
+							fieldMap.put( field, new Color( result.intValue()));
 						}
-						else if (cl==LineType.class){
-							Integer result = (Integer)rs.getObject(name);
-							if (result==null){
-								fieldMap.put( field, null);
-							} else {
-								fieldMap.put( field, new LineType( result.intValue()));
-							}
+					}
+					else if (cl==LineType.class){
+						Integer result = (Integer)rs.getObject(name);
+						if (result==null){
+							fieldMap.put( field, null);
+						} else {
+							fieldMap.put( field, new LineType( result.intValue()));
 						}
-						else if (cl==Boolean.class){
-							String b  = (String)rs.getObject( name);
-							if (b==null){
-								fieldMap.put( field, null);
-							} else if (b.equals("true")){
-								fieldMap.put( field, Boolean.valueOf(true));
-							} else {
-								fieldMap.put( field, Boolean.valueOf(false));
-							}
-						} 
+					}
+					else if (cl==Boolean.class){
+						String b  = (String)rs.getObject( name);
+						if (b==null){
+							fieldMap.put( field, null);
+						} else if (b.equals("true")){
+							fieldMap.put( field, Boolean.valueOf(true));
+						} else {
+							fieldMap.put( field, Boolean.valueOf(false));
+						}
 					}
 				}
 				featureMap.put( feature, fieldMap);
 			}
 
-
 			// everything is fine. Put all the stuff into the fc.
 			fc.setAttributes( featureMap);
 			resultStr = rowsChanged + " rows updated";
-		    
-			conn.close();
-			conn = null;
-		    
-
-		}  catch (SQLException sqle){
-			resultStr = "SQL error updating: " +   sqle.getMessage();
-			System.out.println( resultStr);
-		} catch (Exception e){
-			resultStr = "error updating: " + e.getMessage();
-			log.println( resultStr);
-		} 
-
-		// clean up, in case of exception.
-		try{
-			if (conn != null){
-				conn.close();
+		} catch (SQLException sqle) {
+			resultStr = "SQL error while updating: " + sqle.getMessage();
+			log.aprintln( resultStr);
+		} catch (Exception e) {
+			resultStr = "Error while updating: " + e.getMessage();
+			if (field != null)
+				resultStr += " [field="+field.name+","+"class="+field.type.getClass().getName()+"]";
+			
+			log.aprintln( resultStr);
+		} finally {
+			if (conn != null) {
+				cleanup(conn);
 			}
-		}catch (Exception e1){}
-	    
+		}
 	}
-
-
 
 	/** 
 	 * returns an array of row indices that correspond to the inputted where clause.
 	 */
-	public static void delete( FeatureCollection fc, String where) {
-
+	public void delete( FeatureCollection fc, String where) {
 		Connection conn = null;
 
 		try {
-			conn = DriverManager.getConnection("jdbc:hsqldb:test");
+			conn = DriverManager.getConnection(dbUrl);
 			Statement  st = conn.createStatement();
 
-			makeTempTable( conn, st, fc);
+			makeTempTable(conn, st, fc);
 
 			// run the query
-			String query = "select key from foobar " + filterSQL( where);
+			String query = "select "+keyColumnName+" from "+featureTable+" "+ filterSQL( where);
 			ResultSet rs = st.executeQuery( query );
 
-
 			// get the resulting key values and set selection on for those rows
-			List removeRows = new ArrayList();
+			List<Feature> removeRows = new ArrayList<Feature>();
 			while(rs.next()){
-				int key = rs.getInt(1);
-				removeRows.add( fc.getFeature(key));
+				int key = rs.getInt(keyColumnName);
+				removeRows.add(fc.getFeature(key));
 			}
 			fc.removeFeatures( removeRows);
 
-			conn.close();
-
 			resultStr = removeRows.size() + " rows deleted";
-		} 
-		catch (SQLException sqle){
+		} catch (SQLException sqle) {
 			resultStr = "SQL error selecting rows: " +   sqle.getMessage();
 			System.out.println( resultStr);
-		}
-		catch (Exception e){
+		} catch (Exception e) {
 			resultStr = "error selecting rows: " + e.getMessage();
 			log.println( resultStr);
-		} 
-
-		// clean up.  (odd, we get a warning if we try to put a finally block here.)
-		try{
-			if (conn != null){
-				conn.close();
+		} finally {
+			if (conn != null) {
+				cleanup(conn);
 			}
-		}catch (Exception e1){}
+		}
 	
 	}
-
-
-
+	
 	//  Make a temporary table that is a copy of the feature table for the sql statements 
 	// to work off of.
-	private static void makeTempTable( Connection conn, Statement st, FeatureCollection fc) throws SQLException {
+	private static void makeTempTable(Connection conn, Statement st, FeatureCollection fc) throws SQLException {
+		cleanTable(conn);
 		
-		// make temp table 
-		String query = "create temp table foobar (";
-		String columnName;
-		String columnType;
-		java.util.List schema = fc.getSchema();
-		Iterator si = schema.iterator();
-		while (si.hasNext()){
-			Field field = (Field)si.next();
-			columnName = getSQLname( field.name);
-			columnType = getSQLtype( field.type);
-			query += columnName + " " + columnType + ", ";
+		// make temporary table
+		String createSql = "create table "+featureTable+" (";
+		String insertSql = "insert into "+featureTable+" values (";
+		List<Field> schema = fc.getSchema();
+		for (Field field: schema) {
+			String columnName = getSQLname( field.name);
+			String columnType = getSQLtype( field.type);
+			createSql += columnName + " " + columnType + ", ";
+			insertSql += "?,";
 		}
-		query += " key int)";
-		st.execute( query); //"create temp table foobar (a int, b char(10), key int)");
-			
+		createSql += " "+keyColumnName + " " + getSQLtype(Integer.class) + ")";
+		insertSql += "?)";
+		st.execute(createSql);
+		
 		// populate the temp table
-		for (int i=0; i< fc.getFeatures().size(); i++){
-			query ="insert into foobar values " + getSQLvalueString( schema, fc.getFeature(i), i);
-			st.execute( query); 
+		int[] errorCounts = new int[schema.size()];
+		Throwable[] errors = new Exception[schema.size()];
+		PreparedStatement ps = conn.prepareStatement(insertSql);
+		try {
+			for (int i=0; i< fc.getFeatures().size(); i++) {
+				ps.clearParameters();
+				Feature f = fc.getFeature(i);
+				for (int j = 1; j <= schema.size(); j++) {
+					Field field = schema.get(j-1);
+					Object val = f.getAttribute(field);
+					try {
+						if (field.type == FPath.class) {
+							// do nothing
+						} else if (val == null) {
+							// the prepared statement should default all fields to null, so do nothing
+						} else if ( field.type == Integer.class) {
+							ps.setInt(j, (Integer)val);
+						} else if ( field.type == Float.class ) {
+							ps.setFloat(j, (Float)val);
+						} else if ( field.type == Double.class ) {
+							ps.setDouble(j, (Double)val);
+						} else if ( field.type == Color.class ) {
+							Color colorObj = (Color)val;
+							ps.setInt(j, colorObj.getRGB());
+						} else if ( field.type == LineType.class ) {
+							LineType lineObj = (LineType)val;
+							ps.setInt(j, lineObj.getType());
+						} else if ( field.type == Boolean.class ) {
+							ps.setBoolean(j, (Boolean)val);
+						} else if ( field.type == String.class ) {
+							ps.setString(j, (String)val);
+						} else {
+							throw new IllegalStateException("Unrecognized field class " + field.type);
+						}
+					} catch (Exception e) {
+						errors[j-1] = e;
+						errorCounts[j-1] ++;
+					}
+				}
+				ps.setInt(schema.size()+1, i);
+				ps.execute();
+			}
+		} finally {
+			ps.close();
+		}
+		for (int i = 0; i < schema.size(); i++) {
+			if (errors[i] != null) {
+				while(errors[i].getCause() != null) {
+					errors[i] = errors[i].getCause();
+				}
+				log.aprintln("Field " + i + " (" + schema.get(i).name + ") could not be set " + errorCounts[i] + " times, last error was:");
+				log.aprintln(errors[i]);
+			}
 		}
 	}
 	
-
 	// returns an SQL-compatible version of the inputted ID.
 	private static String getSQLname( String name){
-		return name.replace(' ','_').replace('[', ' ').replace(']', ' ');
+		return name.replaceAll(" ","_").replaceAll("\\[", " ").replaceAll("\\]", " ");
 	}
 	
+	private static void cleanTable(Connection conn) throws SQLException {
+		conn.createStatement().execute("drop table " + featureTable + " if exists cascade");
+	}
 	
 	// returns the SQL-compatible string of the inputted class.
-	private static String getSQLtype( Class cl){
+	private static String getSQLtype(Class<?> cl) {
 		if (cl == Integer.class) {
 			return "int";
-		} 
-		else if (cl==Float.class || cl==Double.class){
+		} else if (cl == Float.class) {
 			return "float";
-		} 
-		else if (cl==Color.class){
+		} else if (cl == Double.class) {
+			return "double precision";
+		} else if (cl == Color.class) {
 			return "int";
-		} 
-		else if (cl==LineType.class){
+		} else if (cl == LineType.class) {
 			return "int";
-		}
-		else {
-			return "char(30)";
+		} else if (cl == Boolean.class) {
+			return "boolean";
+		} else {
+			return "varchar";
 		}
 	}
-	
-
-	// returns the values of the columns in SQL format.
-	private static String getSQLvalueString( java.util.List sc, Feature f, int key){
-		StringBuffer str = new StringBuffer();
-		str.append("( ");
-		Iterator si = sc.iterator();
-		while (si.hasNext()){
-			Field field = (Field)si.next();
-			if ( field.type == Integer.class ){
-				Integer intObj = (Integer)f.getAttribute(field);
-				if (intObj==null){
-					str.append( "null" );
-				} else {
-					str.append( String.valueOf( intObj));
-				}
-			}
-			else if ( field.type == Float.class ){
-				Float floatObj = (Float)f.getAttribute(field);
-				if (floatObj==null){
-					str.append( "null" );
-				} else {
-					str.append( String.valueOf( floatObj));
-				}
-				str.append( String.valueOf( (Float)f.getAttribute( field)));
-			}
-			else if ( field.type == Double.class ){
-				Double doubleObj = (Double)f.getAttribute(field);
-				if (doubleObj==null){
-					str.append( "null" );
-				} else {
-					str.append( String.valueOf( doubleObj));
-				}
-			}
-			else if ( field.type == Color.class ){
-				Color colorObj = (Color)f.getAttribute(field);
-				if (colorObj==null){
-					str.append( "null" );
-				} else {
-					str.append( String.valueOf( colorObj.getRGB()));
-				}
-			}
-			else if ( field.type == LineType.class ){
-				LineType lineObj = (LineType)f.getAttribute(field);
-				if (lineObj==null){
-					str.append( "null" );
-				} else {
-					str.append( String.valueOf( lineObj.getType()));
-				}
-			}
-			else if ( field.type == Boolean.class ){
-				Boolean boolObj = (Boolean)f.getAttribute(field);
-				if (boolObj==null){
-					str.append( "null" );
-				} else if ( boolObj == Boolean.FALSE){
-					str.append( "'false'");
-				} else {
-					str.append( "'true'");
-				}
-			}
-			else if ( field.type == String.class ){
-				String stringObj = (String)f.getAttribute(field);
-				if (stringObj==null){
-					str.append( "null" );
-				} else {
-					str.append( "'" + filterString( stringObj) + "'" );
-				}
-			}
-			else {
-				str.append( "null" );
-			}
-			str.append( ", ");
-		}
-		
-		str.append( key + " )");
-		return str.toString();
-	}
-	
-	
-	// summarily dismisses any apostrophes in the string.
-	static private String filterString( String s){
-		StringBuffer sb = new StringBuffer();
-		for (int i=0; i< s.length(); i++){
-			if (s.charAt(i)!='\''){
-				sb.append(s.charAt(i));
-			}
-		}
-		return sb.toString();
-	}
-	
 
 	// replaces invalid IDs with valid ones in the inputted string.
 	private static String filterSQL( String where){
@@ -535,20 +479,18 @@ public class FeatureSQL {
 	}
 
 	// parses out the line that was input and runs the specified action.
-	private void parseLine( FeatureCollection fc, Set<Feature> selections) {
+	private void parseLine(FeatureCollection fc, MemoryFeatureIndex index, Set<Feature> selections){
 		Point2D param;
 		String endClause;
-		
 		int command = getCommand();
-
-		switch (command) 
-			{
+		
+		switch (command) {
 			case SET_COMMAND:
 				endClause = getEndClause();
 				if (endClause == null){
 					return;
 				}
-				FeatureSQL.update( fc, endClause);
+				update( fc, endClause);
 				printResult( getResultString());
 				return;
 			case SELECT_COMMAND:
@@ -556,7 +498,7 @@ public class FeatureSQL {
 				if (endClause == null){
 					return;
 				}
-				FeatureSQL.select(fc, selections, endClause);
+				select(fc, selections, endClause);
 				printResult( getResultString());
 				return;
 			case MOVE_COMMAND:
@@ -568,7 +510,7 @@ public class FeatureSQL {
 				if (endClause == null){
 					return;
 				}
-				FeatureSQL.move( fc, param, endClause);
+				move(fc, index, param, endClause);
 				printResult( getResultString());
 				return;
 			case DELETE_COMMAND:
@@ -576,7 +518,7 @@ public class FeatureSQL {
 				if (endClause == null){
 					return;
 				}
-				FeatureSQL.delete( fc, endClause);
+				delete( fc, endClause);
 				printResult( getResultString());
 				return;
 				
@@ -587,7 +529,6 @@ public class FeatureSQL {
 			}
 	}
 	
-
 	// get the entire remaining line, replacing any color specification with
 	// its integer equivalent.
 	private String getEndClause(){
@@ -657,7 +598,6 @@ public class FeatureSQL {
 		return 0;
 	}
 	
-
 	private int getColorSpec(){
 		LexicalAnalyzer.Token token;
 		

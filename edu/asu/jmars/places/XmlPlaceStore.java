@@ -1,23 +1,3 @@
-// Copyright 2008, Arizona Board of Regents
-// on behalf of Arizona State University
-// 
-// Prepared by the Mars Space Flight Facility, Arizona State University,
-// Tempe, AZ.
-// 
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-// 
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU General Public License for more details.
-// 
-// You should have received a copy of the GNU General Public License
-// along with this program.  If not, see <http://www.gnu.org/licenses/>.
-
-
 package edu.asu.jmars.places;
 
 import java.io.File;
@@ -46,7 +26,15 @@ public class XmlPlaceStore extends AbstractSet<Place> implements PlaceStore {
 		}
 	};
 	private static final String PLACE_EXT = ".jpf";
-	private static final File placesRoot = new File(Main.getJMarsPath() + "places");
+	private static File placesRoot = new File(Main.getJMarsPath() + "places" + File.separatorChar + Util.toProperCase(Main.getCurrentBody()));//@since change bodies, add body to path and remove final so that it can be changed
+	
+	/**
+	 * Update the places root after a body change
+	 * @since body change
+	 */
+	public static void updatePlacesRoot() {
+		placesRoot = new File(Main.getJMarsPath() + "places" + File.separatorChar + Util.toProperCase(Main.getCurrentBody()));
+	}
 	/** Returns the file for a given place */
 	private static File getFile(Place place) {
 		if (place.getName().contains(File.separator)) {
@@ -72,7 +60,10 @@ public class XmlPlaceStore extends AbstractSet<Place> implements PlaceStore {
 	public Comparator<? super Place> getComparator() {
 		return places.comparator();
 	}
-	
+	public void reloadPlaces() {
+		updatePlacesRoot();
+		load();
+	}
 	private void load() {
 		if (placesRoot.exists()) {
 			if (!placesRoot.isDirectory()) {

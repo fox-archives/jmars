@@ -1,33 +1,13 @@
-// Copyright 2008, Arizona Board of Regents
-// on behalf of Arizona State University
-// 
-// Prepared by the Mars Space Flight Facility, Arizona State University,
-// Tempe, AZ.
-// 
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-// 
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU General Public License for more details.
-// 
-// You should have received a copy of the GNU General Public License
-// along with this program.  If not, see <http://www.gnu.org/licenses/>.
-
-
 package edu.asu.jmars.util.stable;
 
+import java.awt.Color;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.Comparator;
-import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
-import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -59,9 +39,9 @@ public class Sorter {
 
 	// Map of TableColumn to Integer (-1 descending sort, +1 ascending sort)
 	// Key order determines primacy, most signicant column first
-	private Map sorts = new LinkedHashMap();
+	private Map<TableColumn,Integer> sorts = new LinkedHashMap<TableColumn,Integer>();
 
-	private Set listeners = new LinkedHashSet();
+	private Set<Listener> listeners = new LinkedHashSet<Listener>();
 
 	/**
 	 * Sets the TableModel, and calls clearSorts()
@@ -108,7 +88,7 @@ public class Sorter {
 	/**
 	 * Remove all TableColumn objects in the given Collection, and call sort()
 	 */
-	public void removeSorts(Collection c) {
+	public void removeSorts(Collection<TableColumn> c) {
 		sorts.keySet().removeAll(c);
 		sort();
 	}
@@ -117,8 +97,8 @@ public class Sorter {
 	 * Returns an unmodifiable List of the TableColumn sorts, in descending
 	 * order of primacy.
 	 */
-	public List getSorts() {
-		return Collections.unmodifiableList(new LinkedList(sorts.keySet()));
+	public List<TableColumn> getSorts() {
+		return Collections.unmodifiableList(new ArrayList<TableColumn>(sorts.keySet()));
 	}
 	
 	/**
@@ -126,7 +106,7 @@ public class Sorter {
 	 * @return -1 if sorted descending, 0 if not sorted, 1 if sorted ascending.
 	 */
 	public int getDirection(TableColumn column) {
-		Integer dir = (Integer) sorts.get(column);
+		Integer dir = sorts.get(column);
 		return (dir == null ? 0 : dir.intValue());
 	}
 	
@@ -166,13 +146,23 @@ public class Sorter {
 	public int sortRow(int row) {
 		return u2s[row];
 	}
-
+	
 	/**
 	 * @param row The sorted index to unsort.
 	 * @return The unsorted equivalent of <code>row</code>.
 	 */
 	public int unsortRow(int row) {
 		return s2u[row];
+	}
+	
+	/** @return a lookup table to map from unsorted array indices to sorted order. */
+	public int[] getSortArray() {
+		return (int[])u2s.clone();
+	}
+	
+	/** @return a lookup table to map from sorted array indices to unsorted order. */
+	public int[] getUnsortArray() {
+		return (int[])s2u.clone();
 	}
 	
 	/**
@@ -227,8 +217,9 @@ public class Sorter {
 	 */
 	public void sort() {
 		// notify all listeners that a sort change is about to occur
-		for (Iterator it = listeners.iterator(); it.hasNext(); )
-			((Listener)it.next()).sortChangePre();
+		for (Listener l: listeners) {
+			l.sortChangePre();
+		}
 
 		// rebuild the entire sorting map
 
@@ -247,8 +238,9 @@ public class Sorter {
 		}
 
 		// notify all listeners that a sort change has finished
-		for (Iterator it = listeners.iterator(); it.hasNext(); )
-			((Listener)it.next()).sortChanged();
+		for (Listener l: listeners) {
+			l.sortChanged();
+		}
 	}
 
 	/**
@@ -286,9 +278,9 @@ public class Sorter {
 	 * Compares two row ids using the TableColumn sorts applied when this
 	 * object is constructed.
 	 */
-	class RowComparator implements Comparator {
+	final class RowComparator implements Comparator<Integer> {
 		private int columnCount;
-		private Comparator[] comps;
+		private Comparator<Object>[] comps;
 		private int[] columns;
 		private boolean[] ascends;
 
@@ -303,15 +295,13 @@ public class Sorter {
 			columns = new int[sorts.size()];
 			ascends = new boolean[sorts.size()];
 			columnCount = 0;
-			for (Iterator it = sorts.keySet().iterator(); it.hasNext();) {
-				TableColumn column = (TableColumn) it.next();
+			for (TableColumn column: sorts.keySet()) {
 				int dir = ((Integer) sorts.get(column)).intValue();
 				if (dir != 0) {
 					ascends[columnCount] = (dir == 1);
 					columns[columnCount] = column.getModelIndex();
 					if (column instanceof ComparableTableColumn)
-						comps[columnCount] = ((ComparableTableColumn) column)
-								.getComparator();
+						comps[columnCount] = ((ComparableTableColumn) column).getComparator();
 					else
 						comps[columnCount] = null;
 					columnCount++;
@@ -323,7 +313,7 @@ public class Sorter {
 		 * Uses data cached at construction time to compare each cell in each
 		 * row.
 		 */
-		public int compare(Object o1, Object o2) {
+		public int compare(Integer o1, Integer o2) {
 			return compare (((Integer)o1).intValue(), ((Integer)o2).intValue());
 		}
 		public final int compare(int row1, int row2) {
@@ -337,7 +327,12 @@ public class Sorter {
 					result = cell1 == null ? 0 : 1;
 				} else if (comps[i] != null) {
 					result = comps[i].compare(cell1, cell2);
-				} else if (cell1 instanceof Comparable) {
+				} else if (cell1 instanceof String && cell2 instanceof String) {
+                    result = String.CASE_INSENSITIVE_ORDER.compare((String)cell1, (String)cell2);
+				} else if (cell1 instanceof Color && cell2 instanceof Color) {
+					result = ((Color)cell1).getRGB()-((Color)cell2).getRGB();
+				}
+				else if (cell1 instanceof Comparable) {
 					result = ((Comparable) cell1).compareTo(cell2);
 				}
 				if (result != 0)

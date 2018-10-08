@@ -1,23 +1,3 @@
-// Copyright 2008, Arizona Board of Regents
-// on behalf of Arizona State University
-// 
-// Prepared by the Mars Space Flight Facility, Arizona State University,
-// Tempe, AZ.
-// 
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-// 
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU General Public License for more details.
-// 
-// You should have received a copy of the GNU General Public License
-// along with this program.  If not, see <http://www.gnu.org/licenses/>.
-
-
 package edu.asu.jmars.layer.groundtrack;
 
 import java.awt.Color;
@@ -38,6 +18,8 @@ import edu.asu.jmars.layer.SerializedParameters;
 import edu.asu.jmars.util.Config;
 import edu.asu.jmars.util.DebugLog;
 import edu.asu.jmars.util.HVector;
+import edu.asu.jmars.util.HttpRequestType;
+import edu.asu.jmars.util.JmarsHttpRequest;
 
 public class GroundTrackLayer
  extends Layer
@@ -246,14 +228,29 @@ public class GroundTrackLayer
 	private synchronized Line2D[] readSection(URL url)
 	 {
 		log.println("Using url " + url);
+		
 
 		// Create a connection to that url
 		BufferedReader fin;
 		try
 		 {
-			fin = new BufferedReader(new InputStreamReader(url.openStream()));
+		     String urlStr = url.getProtocol() + "://" + url.getHost() + url.getPath();		     
+		     String params = url.getQuery();
+             JmarsHttpRequest request = new JmarsHttpRequest(urlStr, HttpRequestType.GET);
+//             request.setRequestHeader("Content-Type", "application/x-www-form-urlencoded");
+             request.addOutputData(params);
+             request.setConnectionTimeout(10*1000);
+             request.setReadTimeout(1*10*1000);
+             boolean status = request.send();
+             if (!status) {
+                 int httpStatus = request.getStatus();
+                 System.out.println(httpStatus);
+             }
+		     
+//			 fin = new BufferedReader(new InputStreamReader(url.openStream()));
+             fin = new BufferedReader(new InputStreamReader(request.getResponseAsStream()));
 		 }
-		catch(IOException e)
+		catch(Exception e)
 		 {
 			log.aprintln("ERROR OPENING URL " + url);
 			log.print(e);

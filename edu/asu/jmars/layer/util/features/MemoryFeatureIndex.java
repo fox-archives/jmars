@@ -1,33 +1,22 @@
-// Copyright 2008, Arizona Board of Regents
-// on behalf of Arizona State University
-// 
-// Prepared by the Mars Space Flight Facility, Arizona State University,
-// Tempe, AZ.
-// 
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-// 
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU General Public License for more details.
-// 
-// You should have received a copy of the GNU General Public License
-// along with this program.  If not, see <http://www.gnu.org/licenses/>.
-
-
 package edu.asu.jmars.layer.util.features;
 
 import java.awt.geom.Rectangle2D;
 import java.util.ArrayList;
-import java.util.Collection;
+import java.util.Collections;
+import java.util.ConcurrentModificationException;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.Iterator;
-import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
+import com.vividsolutions.jts.geom.Envelope;
+import com.vividsolutions.jts.index.quadtree.Quadtree;
+
+import edu.asu.jmars.Main;
+import edu.asu.jmars.layer.ProjectionEvent;
+import edu.asu.jmars.layer.ProjectionListener;
 import edu.asu.jmars.util.Util;
 
 /**
@@ -42,48 +31,123 @@ import edu.asu.jmars.util.Util;
  * This index adds itself as a listener to the given feature collection and keeps
  * itself up to date with changes.  This does prevent querying while FeatureEvent
  * objects are being dispatched, and disconnect() should be called when this index
- * is no longer in use so it may be garbage collection.
+ * is no longer in use so it may be garbage collected.
  */
-public final class MemoryFeatureIndex implements FeatureIndex, FeatureListener {
+public final class MemoryFeatureIndex implements FeatureIndex, WorldCache, FeatureListener, ProjectionListener {
 	public static final Iterator<Feature> emptyIter = new ArrayList<Feature>(0).iterator();
 	private final FeatureCollection fc;
-	private final Set<Feature> features = new LinkedHashSet<Feature>();
+	private final Style<FPath> geomStyle;
+	private Quadtree tree;
 	
-	public MemoryFeatureIndex(FeatureCollection fc) {
+	public MemoryFeatureIndex(Style<FPath> geomStyle, FeatureCollection fc) {
 		this.fc = fc;
+		this.geomStyle = geomStyle;
+		
 		fc.addListener(this);
+		Main.addProjectionListener(this);
 	}
 	
 	public void disconnect() {
 		fc.removeListener(this);
+		Main.removeProjectionListener(this);
+	}
+	
+	/**
+	 * Index of feature to FPath, maintained to ensure the spatial index
+	 * elements can always be removed.
+	 */
+	private final Map<Feature,FPath> feat2path = new HashMap<Feature,FPath>();
+	
+	public FPath getWorldPath(Feature f) {
+		try {
+			startReader();
+			return feat2path.get(f);
+		} finally {
+			stopReader();
+		}
 	}
 	
 	private volatile int numReaders = 0;
 	private volatile int numWriters = 0;
 	
-	/** Blocks until there are no write operations, then starts a read operation */
-	private synchronized void startReader() throws InterruptedException {
+	/**
+	 * Blocks until there are no write operations, then starts a read operation
+	 * and if the tree has not been created, it creates a new one and inserts
+	 * all features in the fc.
+	 */
+	private synchronized void startReader() {
 		while (numWriters > 0) {
-			wait();
+			try {
+				wait();
+			} catch (InterruptedException e) {
+				throw new RuntimeException(e);
+			}
+		}
+		if (tree == null) {
+			// If the tree has yet to be created then start a writer thread
+			// tolerant of the reader we already have, and insert all the
+			// features.
+			startWriter();
+			try {
+				tree = new Quadtree();
+				for (Feature f: fc.getFeatures()) {
+					add(f);
+				}
+			} catch (ConcurrentModificationException e) {
+				tree = null;
+				feat2path.clear();
+				throw e;
+			} catch (Exception e) {
+				e.printStackTrace();
+			} finally {
+				stopWriter();
+			}
 		}
 		numReaders ++;
 	}
+	
 	/** Stops a read operation and notifies all waiting operations */
 	private synchronized void stopReader() {
 		numReaders --;
 		notifyAll();
 	}
-	/** Blocks until there are no write or read operations, then starts a write operation */
-	private synchronized void startWriter() throws InterruptedException {
+	
+	/**
+	 * Blocks until there are no write or read operations, then starts a write
+	 * operation. May set 'one' to true to allow one reader to remain, which
+	 * should only be done by a thread which has previously called
+	 * {@link #startReader()} and not yet called {@link #stopReader()}.
+	 */
+	private synchronized void startWriter() {
 		while (numReaders > 0 || numWriters > 0) {
-			wait();
+			try {
+				wait();
+			} catch (InterruptedException e) {
+				throw new RuntimeException(e);
+			}
 		}
 		numWriters ++;
 	}
+	
 	/** Stops a write operation and notifies all waiting operations */
 	private synchronized void stopWriter() {
 		numWriters --;
 		notifyAll();
+	}
+	
+	private void add(Feature f) {
+		FPath path = geomStyle.getValue(f).getWorld();
+		feat2path.put(f, path);
+		for (Envelope env: Util.rect2env(path.getShape().getBounds2D())) {
+			tree.insert(env, f);
+		}
+	}
+	
+	private void remove(Feature f) {
+		FPath path = feat2path.remove(f);
+		for (Envelope env: Util.rect2env(path.getShape().getBounds2D())) {
+			tree.remove(env, f);
+		}
 	}
 	
 	/**
@@ -94,31 +158,27 @@ public final class MemoryFeatureIndex implements FeatureIndex, FeatureListener {
 	public Iterator<Feature> queryUnwrappedWorld(Rectangle2D rect) {
 		try {
 			startReader();
-			Rectangle2D[] rects = Util.toWrappedWorld(rect);
-			List<Feature> matches = new ArrayList<Feature>();
-			for (Feature f: features) {
-				for (Rectangle2D r: rects) {
-					// TODO: cache bounds on FPath instead of using GeneralPath's, which is computed every time
-					Rectangle2D bound = f.getPath().getWorld().getGeneralPath().getBounds2D();
-					if (overlap(r, bound)) {
-						matches.add(f);
-						break;
+			
+			// get possible matches
+			Set<Feature> matches = new HashSet<Feature>();
+			for (Envelope env: Util.rect2env(rect)) {
+				matches.addAll((List<Feature>)tree.query(env));
+			}
+			
+			// if we have any possible matches, get them into FeatureCollection
+			// order and ensure we have exact hits
+			List<Feature> results = new ArrayList<Feature>();
+			if (!matches.isEmpty()) {
+				for (Feature f: fc.getFeatures()) {
+					if (matches.contains(f) && feat2path.get(f).intersects(rect)) {
+						results.add(f);
 					}
 				}
 			}
-			return matches.iterator();
-		} catch (InterruptedException e) {
-			e.printStackTrace();
-			return emptyIter;
+			return results.iterator();
 		} finally {
 			stopReader();
 		}
-	}
-	
-	/** Returns true if these unwrapped world coordinate rectangles overlap modulo 360 */
-	private static boolean overlap(Rectangle2D a, Rectangle2D b) {
-		return a.getMinX() < b.getMaxX() && a.getMaxX() > b.getMinX() &&
-			a.getMinY() < b.getMaxY() && a.getMaxY() > b.getMinY();
 	}
 	
 	public void receive(final FeatureEvent e) {
@@ -127,75 +187,75 @@ public final class MemoryFeatureIndex implements FeatureIndex, FeatureListener {
 		case FeatureEvent.ADD_FEATURE:
 			task = new Runnable() {
 				public void run() {
-					features.addAll(e.features);
+					if (tree != null) {
+						for (Feature f: e.features) {
+							add(f);
+						}
+					}
 				}
 			};
 			break;
 		case FeatureEvent.REMOVE_FEATURE:
 			task = new Runnable() {
 				public void run() {
-					for (Feature f: (List<Feature>)e.features) {
-						features.remove(f);
+					// It's faster to recreate the tree if the feature
+					// collection has fewer remaining features than were just
+					// removed
+					if (fc.getFeatureCount() < e.features.size()) {
+						tree = null;
+						feat2path.clear();
+					} else if (tree != null) {
+						for (Feature f: e.features) {
+							remove(f);
+						}
 					}
 				}
 			};
 			break;
 		case FeatureEvent.CHANGE_FEATURE:
-			if (e.fields.contains(Field.FIELD_PATH)) {
+			if (!Collections.disjoint(e.fields, geomStyle.getSource().getFields())) {
 				task = new Runnable() {
 					public void run() {
-						for (Feature f: (Collection<Feature>)e.valuesBefore.values()) {
-							features.remove(f);
+						// It's faster to recreate the tree if more than
+						// half of the features were just affected
+						if (e.valuesBefore == null || fc.getFeatureCount() / 2 < e.valuesBefore.size()) {
+							tree = null;
+							feat2path.clear();
+						} else if (tree != null) {
+							for (Feature f: e.valuesBefore.keySet()) {
+								remove(f);
+							}
+							for (Feature f: e.valuesBefore.keySet()) {
+								add(f);
+							}
 						}
-						features.addAll(e.valuesBefore.keySet());
 					}
 				};
 			}
 			break;
 		}
 		if (task != null) {
-			// TODO: need to put this into a serial execution threadpool
-			// and make queries block unless the queue is empty; that
-			// will allow a fast return from this method without the
-			// risk of drawing the wrong features or features in the wrong
-			// state.
 			try {
 				startWriter();
 				task.run();
-			} catch (InterruptedException ex) {
-				ex.printStackTrace();
 			} finally {
 				stopWriter();
 			}
 		}
 	}
-}
-
-/*
-// TODO: start on dot product index
-// Returns [mindots, maxdots] where mindots is the minimum dot product
-// between each axis and this feature, and maxdots is the maximum dot
-// product between this axis and the feature.
-//
-private static final int[][] getIndexValues(Feature f) {
-	float[] coords = f.getPath().getSpatialWest().getCoords(false);
-	HVector temp = new HVector();
-	int[] minDots = new int[axes.length];
-	int[] maxDots = new int[axes.length];
-	for (int i = 0; i < coords.length; i+=2) {
-		temp.fromLonLat(coords[i], coords[i+1]);
-		for (int j = 0; j < axes.length; j++) {
-			double dot = axes[j].separation(temp);
-			minDots[j] = Math.min(minDots[j], (int)Math.floor(dot));
-			maxDots[j] = Math.max(maxDots[j], (int)Math.ceil(dot));
+	
+	public void reindex() {
+		try {
+			startWriter();
+			tree = null;
+			feat2path.clear();
+		} finally {
+			stopWriter();
 		}
 	}
-	return new int[][]{minDots,maxDots};
+	
+	public void projectionChanged(ProjectionEvent e) {
+		reindex();
+	}
 }
 
-private static final HVector[] axes = {
-	HVector.X_AXIS,
-	HVector.Y_AXIS,
-	HVector.Z_AXIS
-};
-*/

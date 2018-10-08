@@ -1,28 +1,9 @@
-// Copyright 2008, Arizona Board of Regents
-// on behalf of Arizona State University
-// 
-// Prepared by the Mars Space Flight Facility, Arizona State University,
-// Tempe, AZ.
-// 
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-// 
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU General Public License for more details.
-// 
-// You should have received a copy of the GNU General Public License
-// along with this program.  If not, see <http://www.gnu.org/licenses/>.
-
-
 package edu.asu.jmars.layer.shape2;
 
-import java.awt.BorderLayout;
 import java.awt.Color;
+import java.awt.Component;
 import java.awt.Container;
+import java.awt.Dimension;
 import java.awt.Frame;
 import java.awt.GridBagConstraints;
 import java.awt.GridBagLayout;
@@ -31,19 +12,23 @@ import java.awt.event.ActionEvent;
 import java.awt.event.ActionListener;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 import javax.swing.Box;
+import javax.swing.DefaultComboBoxModel;
 import javax.swing.DefaultListModel;
 import javax.swing.JButton;
 import javax.swing.JCheckBox;
-import javax.swing.JColorChooser;
 import javax.swing.JComboBox;
 import javax.swing.JDialog;
 import javax.swing.JLabel;
@@ -55,70 +40,247 @@ import javax.swing.JSeparator;
 import javax.swing.JTable;
 import javax.swing.JTextField;
 import javax.swing.ListSelectionModel;
-import javax.swing.border.EmptyBorder;
 import javax.swing.event.DocumentEvent;
 import javax.swing.event.DocumentListener;
 import javax.swing.event.ListSelectionEvent;
 import javax.swing.event.ListSelectionListener;
-import javax.swing.table.TableCellEditor;
-import javax.swing.table.TableCellRenderer;
+import javax.swing.table.DefaultTableModel;
 
 import org.jdesktop.swingx.combobox.ListComboBoxModel;
 
+import edu.asu.jmars.Main;
 import edu.asu.jmars.layer.util.features.CalculatedField;
 import edu.asu.jmars.layer.util.features.Feature;
 import edu.asu.jmars.layer.util.features.FeatureCollection;
 import edu.asu.jmars.layer.util.features.Field;
 import edu.asu.jmars.layer.util.features.FieldArea;
 import edu.asu.jmars.layer.util.features.FieldBearing;
+import edu.asu.jmars.layer.util.features.FieldList;
 import edu.asu.jmars.layer.util.features.FieldFactory;
 import edu.asu.jmars.layer.util.features.FieldLat;
 import edu.asu.jmars.layer.util.features.FieldLength;
 import edu.asu.jmars.layer.util.features.FieldLon;
 import edu.asu.jmars.layer.util.features.FieldMap;
+import edu.asu.jmars.layer.util.features.FieldFormula;
+import edu.asu.jmars.layer.util.features.LookupTable;
+import edu.asu.jmars.util.FunctionMap;
 import edu.asu.jmars.util.LineType;
+import edu.asu.jmars.util.Tarjan;
 import edu.asu.jmars.util.Util;
+import edu.asu.jmars.util.FunctionMap.Function;
 
 public class ColumnEditor {
-	private final ShapeLayer shapeLayer;
-	
-	public ColumnEditor(ShapeLayer shapeLayer) {
-		this.shapeLayer = shapeLayer;
+	public static final Map<String,Class<?>> basicTypes = new LinkedHashMap<String,Class<?>>();
+	static {
+		basicTypes.put("Integer Number", Integer.class);
+		basicTypes.put("Real Number", Double.class);
+		basicTypes.put("String", String.class);
+		basicTypes.put("Color", Color.class);
+		basicTypes.put("Line Type", LineType.class);
+		basicTypes.put("Boolean", Boolean.class);
 	}
 	
+	// this set should contain only one field for each 'type', except for calculated fields
+	public static final List<FieldFactory<?>> types = new ArrayList<FieldFactory<?>>();
+	static {
+		for (String name: basicTypes.keySet()) {
+			types.add(new BasicField.Factory(name, basicTypes.get(name)));
+		}
+		types.add(new FieldLon.Factory());
+		types.add(new FieldLat.Factory());
+		types.add(new FieldArea.Factory());
+		types.add(new FieldLength.Factory());
+		types.add(new FieldBearing.Factory());
+		types.add(new FieldMap.Factory());
+		types.add(new LookupTable.Factory());
+		types.add(new FieldFormula.Factory());
+		types.add(new FieldList.Factory());
+	}
+	
+	// state of this editing session
+	private final DefaultListModel model = new DefaultListModel();
+	private final DefaultComboBoxModel model1=new DefaultComboBoxModel();//1787
+	private final DefaultTableModel aliasTableModel = new DefaultTableModel(new Object[]{"Alias name","Field name"},0);//1787
+
+	private final Map<Field,CalculatedField> calculatedFields = new LinkedHashMap<Field,CalculatedField>();
+	private final Set<Field> toUpdate = new LinkedHashSet<Field>();
+	
+	//1787 Hashmap to store the alias names and corresponding column names
+	private Map<String,String> aliasMap=new HashMap<String,String>();
+	//Hashmap to store the filename and corresponding alias names mapping
+	public static Map<String, Map<String,String>> fileMap=new HashMap<String,Map<String,String>>();
+	private String fileName;
+	//end 1787
+	
+	// other instance fields
+	private final ShapeLayer shapeLayer;
+	private final FeatureCollection fc;
+	private final JList fieldList = new JList(model);
+	
+	//1787 start 
+	private final JComboBox columnName = new JComboBox(model1);
+	private final JTable aliasNames=new JTable(aliasTableModel){
+		private static final long serialVersionUID = 1L;
+		public boolean isCellEditable(int rowIndex,int colIndex){
+			return false;
+		}
+	};
+	//1787 end
+	private final JLabel errorField = new JLabel();
+	private final JButton okPB = new JButton("Okay");
+	private final Frame parent;
+	private final Set<Field> oldFields = new LinkedHashSet<Field>();
+	
+	public ColumnEditor(ShapeLayer shapeLayer, FeatureCollection fc, Frame parent) {
+		this.shapeLayer = shapeLayer;
+		this.fc = fc;
+		this.parent = parent;
+	}
+	
+	/**
+	 * Called to report any problems with duplicates, missing dependencies, or
+	 * cyclic dependencies, and to enable/disable the OK button based on whether
+	 * the state is ok.
+	 */
+	public void validate() {
+		List<String> errors = new ArrayList<String>();
+		List<String> warnings = new ArrayList<String>();
+		
+		// report duplicate name/type
+		Set<Field> fields = new HashSet<Field>();
+		for (Field f: getModelFields()) {
+			if (fields.contains(f)) {
+				errors.add("Duplicate field " + s(f));
+			} else {
+				fields.add(f);
+			}
+		}
+		
+		// Use a FunctionMap to express the Map<Field,CalculatedField> as a
+		// graph, and have the Tarjan code give us our components
+		Map<Field,Collection<Field>> graph = new FunctionMap<Field,Collection<Field>>(
+				calculatedFields.keySet(),
+				new Function<Field,Collection<Field>>() {
+			public Collection<Field> calculate(Field key) {
+				return calculatedFields.get(key).getFields();
+			}
+		});		
+		Tarjan<Field> tarjan = new Tarjan<Field>(graph);
+		for (Collection<Field> scc: tarjan.getComponents()) {
+			if (scc.size() > 1) {
+				List<String> sccText = new ArrayList<String>();
+				for (Field f: scc) {
+					sccText.add(s(f));
+				}
+				// any strongly connected component with multiple elements has a cycle
+				errors.add("Cyclic dependency with fields " + Util.join(", ", sccText));
+			}
+		}
+		
+		
+		// report self-reference
+		for (Field key: graph.keySet()) {
+			if (graph.get(key).contains(key)) {
+				errors.add("Field " + s(key) + " depends on itself");
+			}
+		}
+		
+		// report missing dependencies, but ignore FIELD_PATH since it is hidden
+		// at the start of this editor
+		for (Field key: graph.keySet()) {
+			for (Field dep: graph.get(key)) {
+				if (!dep.equals(Field.FIELD_PATH)&& !fields.contains(dep)) {
+					errors.add("Field " + s(key) + " depends on missing field " + s(dep));
+				}
+			}
+		}
+		
+		// ensure target fields can be assigned values produced by the field calculators
+		for (Field key: calculatedFields.keySet()) {
+			CalculatedField calc = calculatedFields.get(key);
+			if (!key.type.isAssignableFrom(calc.type)) {
+				errors.add("Field " + s(key) + " not assignable from " + s(calc));
+			}
+		}
+		
+		List<String> issues = new ArrayList<String>();
+		for (String error: errors) {
+			issues.add("Error: " + error);
+		}
+		for (String warn: warnings) {
+			issues.add("Warning: " + warn);
+		}
+		
+		errorField.setText("<html><body>" + Util.join("<br>", issues) + "</body></html>");
+		okPB.setEnabled(errors.isEmpty());
+	}
+	
+	private static String s(Field f) {
+		return f.name + " (" + f.type.getSimpleName() + ")";
+	}
+
 	/** shows a modal dialog for editing the columns in a selected shape layer */
-	public void showColumnEditor(final Frame parent, final FeatureCollection fc) {
-		// this set should contain only one field for each 'type', except for calculated fields
-		final List<FieldFactory<?>> types = new ArrayList<FieldFactory<?>>();
-		types.add(new BasicField.Factory("Integer Number", Integer.class));
-		types.add(new BasicField.Factory("Real Number", Double.class));
-		types.add(new BasicField.Factory("String", String.class));
-		types.add(new BasicField.Factory("Color", Color.class));
-		types.add(new BasicField.Factory("Line Type", LineType.class));
-		types.add(new BasicField.Factory("Boolean", Boolean.class));
-		types.add(new FieldLon.Factory("Center Longitude"));
-		types.add(new FieldLat.Factory("Center Latitude"));
-		types.add(new FieldArea.Factory("Enclosed Area"));
-		types.add(new FieldLength.Factory("Perimeter"));
-		types.add(new FieldBearing.Factory("Line Direction"));
-		types.add(new FieldMap.Factory("Map Sampling", fc));
+	public void showColumnEditor() {
 		
-		final Map<Field,CalculatedField> calculatedFields = new HashMap<Field,CalculatedField>(shapeLayer.calcFieldMap.get(fc).getCalculatedFields());
-		
-		Set<Field> oldFields = new LinkedHashSet<Field>(fc.getSchema());
+		oldFields.clear();
+		oldFields.addAll(fc.getSchema());
+		oldFields.addAll(shapeLayer.getStyles().getFields());
 		oldFields.remove(Field.FIELD_PATH);
 		
-		final DefaultListModel model = new DefaultListModel();
+		calculatedFields.clear();
+		calculatedFields.putAll(shapeLayer.calcFieldMap.get(fc).getCalculatedFields());
+		
+		//1787 It appears that calc fields were never added to the fieldset. They never really worked anyway,
+		//so it probably did not matter. Now that they do work, we need them to be in the list of fields
+		//in order for them to be found and be able to be compiled when needed.
+		oldFields.addAll(calculatedFields.keySet());
+		
+		model.removeAllElements();
+		model1.removeAllElements();//1787
 		for (Field f: oldFields) {
 			model.addElement(new FieldWrapper(f));
+			model1.addElement(f);//1787
 		}
-		final JList fieldList = new JList(model);
+		//1787 start		
+		aliasNames.setPreferredScrollableViewportSize(new Dimension(50,220));
+		
+		//get the name of the file for which alias names are to be displayed
+		int r=shapeLayer.fileTable.getSelectedRow();
+		fileName=(String)shapeLayer.fileTable.getValueAt(r, 1);
+		
+		if(!(fileMap.containsKey(fileName))){
+			fileMap.put(fileName, aliasMap);
+		}
+		
+		/*To describe how this has been setup - There is a Map called fileMap. It stores a filename
+		 * and another Map. When building the Edit Columns page, we loop through the fileMap
+		 * and look for the correct file name as the key, to get the associated Map containing
+		 * alias names. Once the correct one is found, the Map is used to set the aliasMap
+		 * in FieldFormula and the aliasTableModel. I am not sure why there are so many Maps being used, 
+		 * but if this comment is still here, I did not find a better way of doing it. 
+		 */
+		
+		if (fileMap.containsKey(fileName)) {
+			FieldFormula.aliasMap.clear();
+			aliasTableModel.setRowCount(0);
+			for(Map.Entry<String,String> temporaryMapOfAliases: fileMap.get(fileName).entrySet()){
+				String tempKey = temporaryMapOfAliases.getKey();
+				String tempValue = temporaryMapOfAliases.getValue();
+				FieldFormula.aliasMap.put(tempKey, tempValue);
+				aliasTableModel.addRow(new String[] {tempKey, tempValue});
+			}
+		}
+		
+		aliasNames.setSelectionMode(ListSelectionModel.MULTIPLE_INTERVAL_SELECTION);
+		//1787 end
+		validate();
+		
 		fieldList.setSelectionMode(ListSelectionModel.MULTIPLE_INTERVAL_SELECTION);
+		errorField.setForeground(Color.red);
 		
 		final JComboBox valueCB = new JComboBox();
 		valueCB.setEnabled(false);
 		
-		final Set<Field> toUpdate = new LinkedHashSet<Field>();
 		final JCheckBox replaceCB = new JCheckBox("Update All Rows");
 		replaceCB.setToolTipText("Updates all rows with the value set above; this can take some time for calculated fields");
 		replaceCB.setEnabled(false);
@@ -135,33 +297,86 @@ public class ColumnEditor {
 		
 		final JButton delPB = new JButton("Delete Column");
 		delPB.setEnabled(false);
+		
 		delPB.addActionListener(new ActionListener() {
 			public void actionPerformed(ActionEvent e) {
 				int[] rows = fieldList.getSelectedIndices();
-				for (int i = rows.length-1; i >= 0; i --) {
+					for (int i = rows.length-1; i >= 0; i --) {
 					Field field = ((FieldWrapper)model.remove(rows[i])).f;
+					model1.removeElement(field);//1787
+					//Need to remove from aliasMap
+					for(String aliasKey: FieldFormula.aliasMap.keySet()) {
+						String aliasValue = FieldFormula.aliasMap.get(aliasKey);
+						if (aliasValue.equals(field.name)) {
+							FieldFormula.aliasMap.remove(aliasKey);//1787
+						}
+					}
+					
 					calculatedFields.remove(field);
 					toUpdate.remove(field);
 				}
+				validate();
+				//1787
+				aliasTableModel.setRowCount(0);
+				for(Map.Entry<?,?> entry:FieldFormula.aliasMap.entrySet()){
+					aliasTableModel.addRow(new Object[] {entry.getKey(),entry.getValue()});
+				}
+				//1787 end
 			}
 		});
 		
+		//1787 start
+		final JButton delAliasPB=new JButton("Delete Alias name");
+		delAliasPB.setEnabled(false);
+		aliasNames.getSelectionModel().addListSelectionListener(new ListSelectionListener(){
+
+			public void valueChanged(ListSelectionEvent e) {
+				// TODO Auto-generated method stub
+				if (e.getValueIsAdjusting()) {
+					return;
+				}
+				int selectCount=aliasNames.getSelectedRowCount();
+				delAliasPB.setEnabled(selectCount>0);
+			}});
+		
+		delAliasPB.addActionListener(new ActionListener(){
+			public void actionPerformed(ActionEvent e){
+				int[] rows = aliasNames.getSelectedRows();
+				for(int i=rows.length-1; i>=0; i--){
+					int selectedIndex = rows[i];
+					String str = (String) aliasTableModel.getValueAt(selectedIndex, 0);
+					aliasTableModel.removeRow(selectedIndex);
+					FieldFormula.aliasMap.remove(str);
+					aliasMap.remove(str);
+					Map<String, String> tempMap = fileMap.get(fileName);//get the aliasMap in fileMap
+					tempMap.remove(str);
+				}
+				validate();
+			}
+		});
+		//1787 end
+		
 		final JScrollPane calcEditorPane = new JScrollPane();
+		//set the scroll increment to something more useful
+		calcEditorPane.getVerticalScrollBar().setUnitIncrement(15);
 		valueCB.addActionListener(new ActionListener() {
 			public void actionPerformed(ActionEvent e) {
 				Object item = valueCB.getSelectedItem();
 				calcEditorPane.setViewportView(null);
-				if (item instanceof FieldFactory) {
+				if (item instanceof FieldFactory<?>) {
 					FieldFactory<?> fac = (FieldFactory<?>)item;
 					Field target = ((FieldWrapper)fieldList.getSelectedValue()).f;
 					Field source = calculatedFields.get(target);
 					if (source == null || fac.getFieldType() != source.getClass()) {
-						source = fac.createField(fc, target);
+						source = fac.createField(new LinkedHashSet<Field>(getModelFields()), (Component)e.getSource());
 						if (source instanceof CalculatedField) {
-							calculatedFields.put(target, (CalculatedField)source);
+							CalculatedField calc = (CalculatedField)source;
+							calculatedFields.put(target, calc);
+						} else if (calculatedFields.containsKey(target)) {
+							calculatedFields.remove(target);
 						}
 					}
-					JPanel editor = fac.createEditor(source);
+					JPanel editor = fac.createEditor(ColumnEditor.this, source);
 					if (editor != null) {
 						Box v = Box.createVerticalBox();
 						v.add(editor);
@@ -170,10 +385,13 @@ public class ColumnEditor {
 						h.add(v);
 						h.add(Box.createGlue());
 						calcEditorPane.setViewportView(h);
-						calcEditorPane.invalidate();
-						calcEditorPane.validate();
+					} else {
+						calcEditorPane.setViewportView(new JLabel(""));
 					}
+					calcEditorPane.invalidate();
+					calcEditorPane.validate();
 				}
+				validate();
 			}
 		});
 		
@@ -194,14 +412,9 @@ public class ColumnEditor {
 					replaceCB.setEnabled(field.editable);
 					replaceCB.setSelected(toUpdate.contains(field));
 					List<FieldFactory<?>> calcFields = new ArrayList<FieldFactory<?>>();
-//					ReplaceField.Factory replaceAll = new ReplaceField.Factory(
-//						featureTable.getDefaultEditorsByColumnClass(),
-//						featureTable.getDefaultRenderersByColumnClass());
-//					calcFields.add(replaceAll);
-//					FieldFactory<?> selected = replaceAll;
 					FieldFactory<?> selected = null;
 					for (FieldFactory<?> fac: types) {
-						if (field.type.isAssignableFrom(fac.getDataType())) {
+						if (fac.getDataType() == null || field.type.isAssignableFrom(fac.getDataType())) {
 							calcFields.add(fac);
 							if (!(fac instanceof BasicField.Factory)) {
 								if (fac.getFieldType().isInstance(calculatedFields.get(field))) {
@@ -221,8 +434,12 @@ public class ColumnEditor {
 				}
 			}
 		});
-		
+				
 		final JTextField nameText = new JTextField();
+		
+		final JTextField aliasText=new JTextField();//1787
+		columnName.setSelectedItem(null);//1787
+					
 		final JComboBox typeCombo = new JComboBox(new ListComboBoxModel<FieldFactory<?>>(types));
 		typeCombo.setSelectedItem(null);
 		
@@ -254,48 +471,123 @@ public class ColumnEditor {
 				addEnabler.check();
 			}
 		});
-		
+				
 		addPB.addActionListener(new ActionListener() {
 			public void actionPerformed(ActionEvent e) {
 				// warn if column is already present, otherwise schedule for addition
 				try {
 					String name = nameText.getText();
 					FieldFactory<?> fac = (FieldFactory<?>)typeCombo.getSelectedItem();
-					Field newField = new Field(name, fac.getDataType(), true);
-					for (int i = 0; i < model.getSize(); i++) {
-						if (newField.equals(((FieldWrapper)model.get(i)).f)) {
-							JOptionPane.showMessageDialog(parent, "Column already exists", "Error adding column", JOptionPane.WARNING_MESSAGE);
+					// create a field from the factory first, to get the exact target type
+					Field field = fac.createField(new LinkedHashSet<Field>(getModelFields()), (Component)e.getSource());
+					if (field != null) {//1787
+						Field target = new Field(name, field.type, true);
+						FieldWrapper wrapper = new FieldWrapper(target);
+						model.addElement(wrapper);
+						model1.addElement(target);//1787
+						if (field instanceof CalculatedField) {
+							CalculatedField calcField = (CalculatedField)field;
+							toUpdate.add(target);
+							calculatedFields.put(target, calcField);
 						}
-					}
-					FieldWrapper wrapper = new FieldWrapper(newField);
-					model.addElement(wrapper);
-					Field field = fac.createField(fc, newField);
-					if (field instanceof CalculatedField) {
-						calculatedFields.put(newField, (CalculatedField)field);
-					}
-					fieldList.setSelectedValue(wrapper, true);
-					nameText.setText("");
-					typeCombo.setSelectedIndex(-1);
+						fieldList.setSelectedValue(wrapper, true);
+						nameText.setText("");
+						typeCombo.setSelectedIndex(-1);
+					}//1787
 				} catch (Exception ex) {
 					ex.printStackTrace();
 					JOptionPane.showMessageDialog(
 						parent,
 						ex.getMessage(), "Error adding column",
 						JOptionPane.ERROR_MESSAGE);
+				} finally {
+					validate();
 				}
 			}
 		});
+		
+		//1787 start
+		final JButton addAliasPB=new JButton("Set Alias name");
+		addAliasPB.setEnabled(false);
+		
+		class EnableAddAlias{
+			public void check(){
+				addAliasPB.setEnabled(aliasText.getText().length()>0 && columnName.getSelectedItem()!=null);
+			}
+		}
+		
+		final EnableAddAlias enableAlias=new EnableAddAlias();
+		
+		aliasText.getDocument().addDocumentListener(new DocumentListener(){
+			public void changedUpdate(DocumentEvent e){
+				enableAlias.check();
+			}
+			public void removeUpdate(DocumentEvent e){
+				enableAlias.check();
+			}
+			public void insertUpdate(DocumentEvent e){
+				enableAlias.check();
+			}
+		});
+		
+		columnName.addActionListener(new ActionListener(){
+			public void actionPerformed(ActionEvent e){
+				enableAlias.check();
+			}
+		});
+		
+		addAliasPB.addActionListener(new ActionListener(){
+			public void actionPerformed(ActionEvent e){
+				try{
+					String alName=aliasText.getText();
+					Pattern p=Pattern.compile("[a-zA-Z0-9]");
+					Matcher m=p.matcher(alName);
+					Pattern p1=Pattern.compile("[^a-zA-Z0-9]");
+					Matcher m1=p1.matcher(alName);
+					
+					if (alName != null && alName.length() > 0) {
+						if((!alName.contains(" "))&&(m.find())&&(!m1.find())||(alName.contains("_"))) {
+							Field colNameField=(Field)columnName.getSelectedItem();
+							String colName=colNameField.name;
+							if (fileMap.containsKey(fileName)) {
+								aliasMap = fileMap.get(fileName);
+								aliasMap.put(alName, colName);
+								FieldFormula.aliasMap.clear();
+								aliasTableModel.setRowCount(0);
+								for(Map.Entry<String, String> entry1:	aliasMap.entrySet()){
+									FieldFormula.aliasMap.put(entry1.getKey(), entry1.getValue());
+									aliasTableModel.addRow(new Object[] {entry1.getKey(),entry1.getValue()});
+								}
+							}
+							
+	                    } else {
+							JOptionPane.showMessageDialog(parent,"Alias name does not conform to specifications. Cannot add alias name","Error adding name",JOptionPane.WARNING_MESSAGE);
+							aliasText.setText("");
+						}
+					}
+					aliasText.setText("");
+					columnName.setSelectedItem(null);
+				}
+				catch(Exception exc){
+					exc.printStackTrace();
+					JOptionPane.showMessageDialog(parent,exc.getMessage(),"Error adding alias name",JOptionPane.ERROR_MESSAGE);
+				}
+			}
+		});
+		//1787 end
 		
 		final JDialog dlg = new JDialog(parent, "Edit Columns...", true);
 		dlg.setDefaultCloseOperation(JDialog.DISPOSE_ON_CLOSE);
 		Util.addEscapeAction(dlg);
 		
 		final boolean[] ok = {false};
-		JButton okPB = new JButton("Okay");
 		okPB.addActionListener(new ActionListener() {
 			public void actionPerformed(ActionEvent e) {
-				ok[0] = true;
-				dlg.setVisible(false);
+				validate();
+				if (okPB.isEnabled()) {
+					ok[0] = true;
+					dlg.setVisible(false);
+				}
 			}
 		});
 		
@@ -317,40 +609,54 @@ public class ColumnEditor {
 		content.add(nameText, new GridBagConstraints(2,0,1,1,1,0,GridBagConstraints.NORTHWEST,GridBagConstraints.HORIZONTAL,in,p,p));
 		content.add(new JLabel("Type"), new GridBagConstraints(1,1,1,1,0,0,GridBagConstraints.NORTHWEST,GridBagConstraints.NONE,in,p,p));
 		content.add(typeCombo, new GridBagConstraints(2,1,1,1,1,0,GridBagConstraints.NORTHWEST,GridBagConstraints.HORIZONTAL,in,p,p));
+		
+		//for bug 1787
+		content.add(new JLabel("Set alias name"),new GridBagConstraints(0,3,1,1,1,0,GridBagConstraints.NORTHWEST,GridBagConstraints.HORIZONTAL,in,p,p));
+		content.add(delAliasPB,new GridBagConstraints(3,10,1,1,0,0,GridBagConstraints.SOUTH,GridBagConstraints.HORIZONTAL,in,p,p));
+		content.add(new JLabel("Enter alias name"),new GridBagConstraints(1,3,1,1,1,0,GridBagConstraints.NORTHWEST,GridBagConstraints.HORIZONTAL,in,p,p));
+		content.add(aliasText,new GridBagConstraints(2,3,1,1,1,0,GridBagConstraints.NORTHWEST,GridBagConstraints.HORIZONTAL,in,p,p));
+		content.add(new JLabel("Choose column name"),new GridBagConstraints(1,4,1,1,1,0,GridBagConstraints.NORTHWEST,GridBagConstraints.HORIZONTAL,in,p,p));
+		content.add(columnName,new GridBagConstraints(2,4,1,1,1,0,GridBagConstraints.NORTHWEST,GridBagConstraints.HORIZONTAL,in,p,p));
+		content.add(addAliasPB,new GridBagConstraints(3,3,1,1,1,0,GridBagConstraints.NORTHWEST,GridBagConstraints.HORIZONTAL,in,p,p));
+		
+		content.add(new JSeparator(JSeparator.HORIZONTAL),new GridBagConstraints(0,5,4,1,1,0,GridBagConstraints.CENTER,GridBagConstraints.HORIZONTAL,in,p,p));
+		//1787 end
+		
 		content.add(addPB, new GridBagConstraints(3,0,1,2,0,0,GridBagConstraints.NORTHEAST,GridBagConstraints.HORIZONTAL,in,p,p));
 		content.add(new JSeparator(JSeparator.HORIZONTAL), new GridBagConstraints(0,2,4,1,1,0,GridBagConstraints.CENTER,GridBagConstraints.HORIZONTAL,in,p,p));
 		
 		// left and right section, for showing and removing fields
-		content.add(new JScrollPane(fieldList), new GridBagConstraints(0,3,1,11,1,1,GridBagConstraints.NORTHWEST,GridBagConstraints.BOTH,in,p,p));
-		content.add(delPB, new GridBagConstraints(3,3,1,3,0,0,GridBagConstraints.NORTHEAST,GridBagConstraints.HORIZONTAL,in,p,p));
-		
+		content.add(new JScrollPane(fieldList), new GridBagConstraints(0,6,1,8,1,1,GridBagConstraints.NORTHWEST,GridBagConstraints.BOTH,in,p,p));
+		content.add(delPB, new GridBagConstraints(3,6,1,3,0,0,GridBagConstraints.NORTHEAST,GridBagConstraints.HORIZONTAL,in,p,p));
+		content.add(new JLabel("Alias names mapping"),new GridBagConstraints(3,7,1,1,1,0,GridBagConstraints.NORTHWEST,GridBagConstraints.HORIZONTAL,in,p,p));//1787
+		content.add(new JScrollPane(aliasNames),new GridBagConstraints(3,8,1,2,1,1,GridBagConstraints.NORTHEAST,GridBagConstraints.BOTH,in,p,p));//1787
+	
 		// middle section, for showing the selected field
-		content.add(new JLabel("Value"), new GridBagConstraints(1,3,1,1,0,0,GridBagConstraints.NORTHWEST,GridBagConstraints.NONE,in,p,p));
-		content.add(valueCB, new GridBagConstraints(2,3,1,1,1,0,GridBagConstraints.NORTHWEST,GridBagConstraints.HORIZONTAL,in,p,p));
-		content.add(calcEditorPane, new GridBagConstraints(1,4,2,9,1,1,GridBagConstraints.NORTHWEST,GridBagConstraints.BOTH,in,p,p));
+		content.add(new JLabel("Value"), new GridBagConstraints(1,6,1,1,0,0,GridBagConstraints.NORTHWEST,GridBagConstraints.NONE,in,p,p));
+		content.add(valueCB, new GridBagConstraints(2,6,1,1,1,0,GridBagConstraints.NORTHWEST,GridBagConstraints.HORIZONTAL,in,p,p));
+		content.add(calcEditorPane, new GridBagConstraints(1,7,2,6,1,1,GridBagConstraints.NORTHWEST,GridBagConstraints.BOTH,in,p,p));
 		content.add(replaceCB, new GridBagConstraints(1,13,2,1,1,0,GridBagConstraints.NORTHWEST,GridBagConstraints.HORIZONTAL,in,p,p));
-		
 		// exit buttons
-		content.add(okPB, new GridBagConstraints(3,12,1,1,0,0,GridBagConstraints.SOUTHEAST,GridBagConstraints.HORIZONTAL,in,p,p));
-		content.add(cancelPB, new GridBagConstraints(3,13,1,1,0,0,GridBagConstraints.SOUTHEAST,GridBagConstraints.HORIZONTAL,in,p,p));
+		content.add(new JSeparator(JSeparator.HORIZONTAL),new GridBagConstraints(3,11,4,1,1,0,GridBagConstraints.CENTER,GridBagConstraints.HORIZONTAL,in,p,p));
+		content.add(okPB, new GridBagConstraints(3,12,1,1,0,0,GridBagConstraints.SOUTH,GridBagConstraints.HORIZONTAL,in,p,p));
+		content.add(cancelPB, new GridBagConstraints(3,13,1,1,0,0,GridBagConstraints.SOUTH,GridBagConstraints.HORIZONTAL,in,p,p));
+		// errors
+		content.add(errorField, new GridBagConstraints(0, 14, 4, 1, 1, 0, GridBagConstraints.NORTHWEST, GridBagConstraints.BOTH, in,p,p));
 		
 		dlg.pack();
-		dlg.setSize(500, 500);
+		dlg.setSize(700,680);
+		dlg.setLocationRelativeTo(Main.mainFrame);
 		dlg.setVisible(true);
 		
 		if (ok[0]) {
-			Set<Field> f1 = oldFields;
-			Set<Field> f2 = new LinkedHashSet<Field>();
-			for (int i = 0; i < model.getSize(); i++) {
-				f2.add(((FieldWrapper)model.get(i)).f);
-			}
+			Set<Field> f2 = new LinkedHashSet<Field>(getModelFields());
 			
 			// add and remove fields to match new model
-			Set<Field> toRemove = new LinkedHashSet<Field>(f1);
+			Set<Field> toRemove = new LinkedHashSet<Field>(oldFields);
 			toRemove.removeAll(f2);
 			
 			Set<Field> toAdd = new LinkedHashSet<Field>(f2);
-			toAdd.removeAll(f1);
+			toAdd.removeAll(oldFields);
 			
 			// TODO: move merging of results back into ShapeLayer
 			
@@ -358,7 +664,7 @@ public class ColumnEditor {
 					!shapeLayer.calcFieldMap.get(fc).getCalculatedFields().equals(calculatedFields)) {
 				shapeLayer.getHistory().mark();
 				
-				// remove deleted fields
+				// remove deleted fields from the schema
 				for (Field f: toRemove) {
 					fc.removeField(f);
 				}
@@ -379,74 +685,28 @@ public class ColumnEditor {
 					columns.put(field, calculatedFields.get(field));
 				}
 				if (columns.size() > 0) {
-					// TODO: call this off the AWT thread
 					shapeLayer.calcFieldMap.get(fc).updateValues((List<Feature>)fc.getFeatures(), columns);
 				}
 			}
 		}
 	}
 	
-	static class FieldWrapper {
+	/** @return a new Set<Field> based on the contents of the model. */
+	public List<Field> getModelFields() {
+		List<Field> list = new ArrayList<Field>();
+		for (int i = 0; i < model.getSize(); i++) {
+			list.add(((FieldWrapper)model.getElementAt(i)).f);
+		}
+		return list;
+	}
+		
+	private static class FieldWrapper {
 		public final Field f;
 		public FieldWrapper(Field f) {
 			this.f = f;
 		}
 		public String toString() {
-			return f.name + " (" + f.type.getSimpleName() + ")";
-		}
-	}
-	
-	// TODO: the editors for this are just not that good yet
-	// improve them and use on the multirow set handler as well
-	private static class ReplaceField extends CalculatedField {
-		private final Field targetField;
-		private Object initialValue;
-		public ReplaceField(Field targetField) {
-			super(targetField.name, targetField.type);
-			this.targetField = targetField;
-		}
-		public Set<Field> getFields() {
-			return Collections.emptySet();
-		}
-		public Object getValue(Feature f) {
-			return initialValue;
-		}
-		public static class Factory extends FieldFactory<ReplaceField> {
-			private final Map<Class<?>, TableCellEditor> editors;
-			private final Map<Class<?>, TableCellRenderer> renderers;
-			public Factory(Map<Class<?>, TableCellEditor> editors,  Map<Class<?>,TableCellRenderer> renderers) {
-				super("Constant", Object.class, Object.class);
-				this.editors = editors;
-				this.renderers = renderers;
-			}
-			public JPanel createEditor(Field field) {
-				final ReplaceField f = (ReplaceField)field;
-				JPanel inputPanel = new JPanel(new BorderLayout());
-				inputPanel.setBorder(new EmptyBorder(4,4,4,4));
-				if (f.type.isAssignableFrom(Color.class)) {
-					JColorChooser colorChooser = new JColorChooser();
-					inputPanel.add(colorChooser, BorderLayout.NORTH);
-					if (f.initialValue instanceof Color) {
-						colorChooser.setColor((Color)f.initialValue);
-					}
-				} else {
-					Object[][] cells = {{f.initialValue}};
-					Object[] header = {"Value"};
-					final JTable table = new JTable(cells, header);
-					for (Class<?> type: editors.keySet()) {
-						table.setDefaultEditor(type, editors.get(type));
-					}
-					for (Class<?> type: renderers.keySet()) {
-						table.setDefaultRenderer(type, renderers.get(type));
-					}
-					TableCellEditor editor = table.getDefaultEditor(f.targetField.type);
-					inputPanel.add(editor.getTableCellEditorComponent(table, null, false, 0, 0), BorderLayout.NORTH);
-				}
-				return inputPanel;
-			}
-			public ReplaceField createField(FeatureCollection fc, Field f) {
-				return new ReplaceField(f);
-			}
+			return s(f);
 		}
 	}
 	
@@ -457,17 +717,17 @@ public class ColumnEditor {
 		public Set<Field> getFields() {
 			return Collections.emptySet();
 		}
-		public Object getValue(Feature f) {
+		public Object getValue(ShapeLayer layer, Feature f) {
 			return f.getAttribute(this);
 		}
 		public static class Factory extends FieldFactory<Field> {
 			public Factory(String name, Class<?> dataType) {
 				super(name, Field.class, dataType);
 			}
-			public JPanel createEditor(Field f) {
+			public JPanel createEditor(ColumnEditor editor, Field f) {
 				return null;
 			}
-			public Field createField(FeatureCollection fc, Field f) {
+			public Field createField(Set<Field> fields) {
 				return new Field(getName(), getDataType(), true);
 			}
 		}

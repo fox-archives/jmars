@@ -1,27 +1,25 @@
-// Copyright 2008, Arizona Board of Regents
-// on behalf of Arizona State University
-// 
-// Prepared by the Mars Space Flight Facility, Arizona State University,
-// Tempe, AZ.
-// 
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-// 
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU General Public License for more details.
-// 
-// You should have received a copy of the GNU General Public License
-// along with this program.  If not, see <http://www.gnu.org/licenses/>.
-
-
 package edu.asu.jmars.layer.util.features;
 
-import java.awt.geom.*;
-import java.util.*;
+import java.awt.geom.Point2D;
+import java.awt.geom.Rectangle2D;
+import java.text.DecimalFormat;
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.Iterator;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.StringTokenizer;
+
+import org.geotools.referencing.CRS;
+import org.opengis.referencing.FactoryException;
+import org.opengis.referencing.crs.CoordinateReferenceSystem;
+
+import edu.asu.jmars.util.Config;
+import edu.asu.jmars.util.DebugLog;
+import edu.asu.jmars.util.Util;
 
 /**
  * Helper methods that several classes in the Feature Framework might make use
@@ -29,6 +27,8 @@ import java.util.*;
  */
 
 public class FeatureUtil  {
+	private static DebugLog log = DebugLog.instance();
+	
 	/**
 	 * This is to prevent some ne'er-do-well from coming in and trying to
 	 * instanciate what is supposed to be class of nothing but static methods.
@@ -45,35 +45,6 @@ public class FeatureUtil  {
 			   (double)width, 
 			   (double)width);
 		return r;
-	}
-
-	/**
-	 * Returns the world-coordinate Point2D for the first vertex
-	 */
-	public static Point2D getStartPoint(Feature f) {
-		FPath path = (FPath)f.getAttribute(Field.FIELD_PATH);
-		Point2D[] vertices = path.getWorld().getVertices();
-		return (vertices == null || vertices.length < 1 ? null : vertices[0]);
-	}
-
-	/**
-	 * Return the world-coordinate Point2D for the average position
-	 * of the centers from each Feature in 'fc'.
-	 */
-	public static Point2D getCenterPoint(Collection fc){
-		Point2D.Double center = new Point2D.Double();
-		
-		for(Iterator i=fc.iterator(); i.hasNext(); ) {
-			Feature f = (Feature)i.next();
-			Point2D c = f.getPath().getWorld().getCenter();
-			center.x += c.getX(); center.y += c.getY();
-		}
-		if (fc.size() > 1) {
-			center.x /= fc.size();
-			center.y /= fc.size();
-		}
-		
-		return center;
 	}
 
 	/**
@@ -136,19 +107,16 @@ public class FeatureUtil  {
 	 * @param of Feature objects for which indices are to be determined.
 	 * @return Map<Feature,Integer>. 
 	 */
-	// TODO: put this on FeatureCollection
-	public static Map getFeatureIndices(List within, Collection of){
-		HashSet featureSet = new HashSet(of);
-		Map featureIndices = new HashMap();
-		Feature feat;
-		Iterator fi=within.iterator();
-		
-		for(int i=0; fi.hasNext(); i++){
-			feat = (Feature)fi.next();
-			if (featureSet.contains(feat))
-				featureIndices.put(feat, new Integer(i));
+	public static Map<Feature,Integer> getFeatureIndices(List<Feature> within, Collection<Feature> of){
+		Set<Feature> featureSet = new HashSet<Feature>(of);
+		Map<Feature,Integer> featureIndices = new HashMap<Feature,Integer>();
+		int i = 0;
+		for(Feature feat: within) {
+			if (featureSet.contains(feat)) {
+				featureIndices.put(feat, i);
+			}
+			i++;
 		}
-		
 		return featureIndices;
 	}
 	
@@ -164,19 +132,16 @@ public class FeatureUtil  {
 	 * @param of Fields for which indices are to be determined.
 	 * @return Map<Field,Integer>.
 	 */
-	// TODO: put this on FeatureCollection
-	public static Map getFieldIndices(List within, Collection of){
-		HashSet fieldSet = new HashSet(of);
-		Map fieldIndices = new HashMap();
-		Field field;
-		Iterator fi=within.iterator();
-		
-		for(int i=0; fi.hasNext(); i++){
-			field = (Field)fi.next();
-			if (fieldSet.contains(field))
-				fieldIndices.put(field, new Integer(i));
+	public static Map<Field,Integer> getFieldIndices(List<Field> within, Collection<Field> of){
+		Set<Field> fieldSet = new HashSet<Field>(of);
+		Map<Field,Integer> fieldIndices = new HashMap<Field,Integer>();
+		int i = 0;
+		for(Field field: within) {
+			if (fieldSet.contains(field)) {
+				fieldIndices.put(field, i);
+			}
+			i++;
 		}
-		
 		return fieldIndices;
 	}
 
@@ -226,9 +191,119 @@ public class FeatureUtil  {
      * it will return the expected result, but performance will
      * be very poor.
      */
-	public static double lonNorm (double lon) {
+	public static final double lonNorm (double lon) {
 		while (lon < 0.0) lon += 360.0;
 		while (lon >= 360.0) lon -= 360.0;
 		return lon;
 	}
+	
+	/**
+	 * @return true if the given feature is stored as a point, and has a
+	 * non-zero circle size attribute value.
+	 */
+	public static final boolean isCircle(Style<FPath> geomStyle, Feature f) {
+		FPath path = f.getPath();
+		if (path.getType() != FPath.TYPE_POINT) {
+			return false;
+		}
+		StyleSource<?> source = geomStyle.getSource();
+		if (!(source instanceof GeomSource)) {
+			return false;
+		}
+		Object size = f.getAttribute(((GeomSource)source).getRadiusField());
+		return size instanceof Number && ((Number)size).doubleValue() > 0;
+	}
+	
+	public static boolean isEllipseSource(GeomSource gs, Feature f){
+		if(f.getAttribute(gs.getAAxisField()) != null && f.getAttribute(gs.getBAxisField()) != null 
+			&& f.getAttribute(gs.getAngleField()) != null && f.getAttribute(gs.getLatField()) != null
+			&& f.getAttribute(gs.getLonField()) != null){
+			return true;
+		}
+		return false;
+	}
+
+	/**
+	 * Projection stuff common to many feature-providers
+	 */
+	private static final String KEY_MEAN_RADIUS = "mean_radius";
+	private static final String KEY_EQUAT_RADIUS = "equat_radius";
+	private static final String KEY_POLAR_RADIUS = "polar_radius";
+	private static final String KEY_BODY_NAME = "bodyname";
+	private static final String KEY_DEFAULT_OUTPUT_CRS_WKT = "shape.output.crs.wkt";
+	
+	/**
+	 * @return "WGS84" CRS for Earth products or the JMARS CRS
+	 * from {@link #getJMarsCRS()} otherwise.
+	 */
+	public static CoordinateReferenceSystem getKmlCRS() throws FactoryException {
+		String body = Config.get(Util.getProductBodyPrefix()+KEY_BODY_NAME);
+		if ("earth".equalsIgnoreCase(body))
+			return CRS.decode("EPSG:4326");
+		else
+			return getJMarsCRS();
+	}
+	
+	/**
+	 * @return The geographical coordinate system on a sphere of radius
+	 * from the {@value #KEY_MEAN_RADIUS} jmars.config key. If the key
+	 * does not exist or has an invalid value a default mean radius of 
+	 * 180/pi is assumed.
+	 */
+	public static CoordinateReferenceSystem getJMarsCRS() throws FactoryException {
+		CoordinateReferenceSystem jmarsCRS = null;
+		
+		String meanRadiusStr = Config.get(Util.getProductBodyPrefix()+KEY_MEAN_RADIUS);
+		double meanRadius;
+		if (meanRadiusStr != null){
+			log.println("Found "+KEY_MEAN_RADIUS+"="+meanRadiusStr);
+			meanRadius = Double.parseDouble(meanRadiusStr)*1000; // convert to meters
+		}
+		else {
+			meanRadius = 180.0/Math.PI; 
+			log.aprintln(KEY_MEAN_RADIUS+" was not found in the config. Assuming: "+meanRadius);
+		}
+
+		// TODO On going conversation as to whether using the mean-radius is the right
+		// thing to do or whether we should specify towgs84 parameters here.
+		jmarsCRS = CRS.parseWKT(
+				"GEOGCS[\"unknown\",DATUM[\"unknown\",SPHEROID[\"unknown\"," +
+						new DecimalFormat("#.#########").format(meanRadius) +
+						",0]],PRIMEM[\"unknown\",0],UNIT[\"Degree\"," +
+						new DecimalFormat("#.###############").format(Math.PI/180) + "]]");
+
+		return jmarsCRS;
+	}
+	
+	/**
+	 * @return The default output CRS as specified in the jmars.config file.
+	 * If there is none, one is built by using the mean radius 
+	 * (from {@value #KEY_MEAN_RADIUS}).
+	 */
+	public static CoordinateReferenceSystem getDefaultOutputCRS() throws FactoryException {
+		CoordinateReferenceSystem defaultOutputCRS = null;
+
+		String outputCrsWkt = Config.get(Util.getProductBodyPrefix()+KEY_DEFAULT_OUTPUT_CRS_WKT);
+		if (outputCrsWkt != null){
+			defaultOutputCRS = CRS.parseWKT(outputCrsWkt);
+		}
+		else {
+			// Get the body name for this version of JMARS
+			String jmarsBody = Config.get(Util.getProductBodyPrefix()+KEY_BODY_NAME);
+			
+			// Retrieve mean radius. It is specified in kilometers in the jmars.config
+			double a = Config.get(Util.getProductBodyPrefix()+KEY_MEAN_RADIUS, 1.0) * 1000.0;
+			double b = Config.get(Util.getProductBodyPrefix()+KEY_MEAN_RADIUS, 1.0) * 1000.0;
+			double invFlattening = Math.abs(a-b) < 1E-6? 0: a/(a-b);
+			String equatRadiusStr = new DecimalFormat("#.######").format(a);
+			String invFlatteningStr = new DecimalFormat("#.###############").format(invFlattening);
+			defaultOutputCRS = CRS.parseWKT(
+					"GEOGCS[\"GCS_"+jmarsBody+"\",DATUM[\"D_"+jmarsBody+"\","+
+							"SPHEROID[\"S_"+jmarsBody+"\","+equatRadiusStr+","+invFlatteningStr+"]],"+
+					"PRIMEM[\"Reference_Meridian\",0.0],UNIT[\"Degree\",0.0174532925199433]]");
+		}
+
+		return defaultOutputCRS;
+	}
+	
 } // end: class FeatureUtil

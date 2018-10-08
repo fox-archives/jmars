@@ -1,29 +1,8 @@
-// Copyright 2008, Arizona Board of Regents
-// on behalf of Arizona State University
-// 
-// Prepared by the Mars Space Flight Facility, Arizona State University,
-// Tempe, AZ.
-// 
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-// 
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU General Public License for more details.
-// 
-// You should have received a copy of the GNU General Public License
-// along with this program.  If not, see <http://www.gnu.org/licenses/>.
-
-
 package edu.asu.jmars.layer.stamp;
 
 import java.awt.geom.Rectangle2D;
 import java.awt.image.BufferedImage;
 import java.io.FileOutputStream;
-import java.net.URL;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -36,16 +15,17 @@ public class FrameFetcher {
 	int xoffset;
 	long yoffset;
 	
-	int frameWidth;
-	long frameHeight;
+	int width=0;
+	int height=0;
 	
 	int numXFrames;
 	int numYFrames;
 	
 	ImageFrame frames[][];
-	
-	StampShape myStamp;
-	StampImage srcImage;
+		
+	String instrument;
+	String imageType;
+	String id;
 	
 	public FrameFetcher(ImageFrame framesToFill[][]) {
 		ImageFrame firstFrame = framesToFill[0][0];
@@ -53,117 +33,125 @@ public class FrameFetcher {
 		this.xoffset=firstFrame.startx;
 		this.yoffset=firstFrame.starty;
 
-		srcImage = firstFrame.srcImage;
-		myStamp = srcImage.myStamp;
+		StampImage srcImage = firstFrame.wholeStamp;
+		
+		instrument = srcImage.getInstrument();
+		imageType = srcImage.imageType;
+		id = srcImage.myStamp.getId();
 		
 		frames=framesToFill;
-
-    	long totalLines = myStamp.getNumLines();
-
-    	long linesPerFrame;
-    	if (srcImage.frames.length==1) {
-    		linesPerFrame = totalLines;
-    	} else {
-        	linesPerFrame = (long)Math.ceil(totalLines*srcImage.framePct);
-    	}
     	
-		frameHeight=linesPerFrame;
-		
 		this.numXFrames=framesToFill.length;
 		this.numYFrames=framesToFill[0].length;
 		
-		frameWidth=myStamp.getNumSamples()/srcImage.horizontalSplitCnt;
-
+		for (int i=0; i<numXFrames; i++) {
+			width+=framesToFill[i][0].getWidth();
+		}
+		
+		for (int i=0; i<numYFrames; i++) {
+			height+=framesToFill[0][i].getHeight();
+		}
+	
 	}
 	
 	public void fetchFrames() {
-		int scale =Main.testDriver.mainWindow.getMagnification(); 
+		int scale = Main.testDriver.mainWindow.getZoomManager().getZoomPPD();
 
-		String instrument = srcImage.getInstrument().toString();
-		String type = srcImage.imageType;
-
-    	long totalLines = myStamp.getNumLines();
-
-    	String urlStr=StampLayer.stampURL+"ImageServer?instrument="+instrument+"&id="+myStamp.getId()+StampLayer.versionStr;
+    	String urlStr="ImageServer?instrument="+instrument+"&id="+id;
     	
-    	if (type!=null && type.length()>=0) {
-    		urlStr+="&imageType="+type;
+    	if (imageType!=null && imageType.length()>=0) {
+    		urlStr+="&imageType="+imageType;
     	}
     	
     	urlStr+="&zoom="+scale;
     	urlStr+="&startx="+xoffset;
-    	urlStr+="&starty="+yoffset;
+    	urlStr+="&starty="+yoffset;    	    	
+   		urlStr+="&height="+height;    	
+    	urlStr+="&width="+width;
+    	    	
+    	boolean numeric = frames[0][0].wholeStamp.isNumeric;
     	
-    	int lastFrameNum = frames[frames.length-1][frames[0].length-1].frameNum;
+		BufferedImage bigImage = StampImageFactory.loadImage(urlStr, numeric);
+
+		if (bigImage==null) return;
+		
+    	int realWidth = bigImage.getWidth();
+
+    	int fullResWidth = 0;
     	
-    	boolean lastRowInvolved=false;
-    	
-    	// Only used to determine the height of the last row of Frames;
-    	double lastFramePct = (totalLines * srcImage.lastFramePct)/frameHeight;
-    	
-       	if (lastFrameNum !=0 && lastFrameNum>=srcImage.frames.length-srcImage.horizontalSplitCnt) {
-       		urlStr+="&height="+Math.round((frameHeight*(numYFrames-1))+ ((totalLines * srcImage.lastFramePct)));
-       		lastRowInvolved=true;
-       	} else {
-        	urlStr+="&height="+frameHeight*numYFrames;
-        	lastRowInvolved=false;   		
-       	}
-    	
-    	urlStr+="&width="+frameWidth*numXFrames;
-    	
-    	try {
-    		BufferedImage bigImage = StampImageFactory.loadImage(new URL(urlStr));
-    		
-    	    double subWidth = bigImage.getWidth() / numXFrames;
-    		
-    	    double subHeight;
-    	    
-    	    double lastHeight=0;
-    	    
-    	    if (!lastRowInvolved) {
-    	    	subHeight = bigImage.getHeight() / numYFrames;
-    	    } else {
-    	    	subHeight = bigImage.getHeight() / (numYFrames-1 + lastFramePct);
-    	    	lastHeight = bigImage.getHeight() - ((numYFrames-1)*subHeight);
-    	    }
-    	    
-    		for (int y=0; y<numYFrames; y++) {
-    			for (int x=0; x<numXFrames; x++) {
-    				BufferedImage subImage;
-    				if (lastRowInvolved && y==numYFrames-1) {
-    					subImage = bigImage.getSubimage((int)(x*subWidth), (int)(bigImage.getHeight()-lastHeight), (int)subWidth, (int)lastHeight);
-    				} else {
-    					subImage = bigImage.getSubimage((int)(x*subWidth), (int)(y*subHeight), (int)subWidth, (int)subHeight);
-    				}
-    				
-    				saveSrcImage(frames[x][y].getUrlStr(), subImage);
-    			}
-    		}
-    	} catch (Exception e) {
-    		e.printStackTrace();
+    	for (int i=0; i<numXFrames; i++) {
+    		fullResWidth+=frames[i][0].getWidth();
     	}
+
+    	double ratio = realWidth * 1.0 / fullResWidth;
+    	
+	    int subX = 0;
+	    int subY = 0;
+	    
+		for (int y=0; y<numYFrames; y++) {
+			for (int x=0; x<numXFrames; x++) {
+				BufferedImage subImage;
+				
+				ImageFrame frame=frames[x][y];
+
+				int width = (int)Math.round(frame.getWidth()*ratio);
+				
+				// This can occur when zoomed way out with large images, ie HiRISE at 2 ppd
+				if (width>bigImage.getWidth()) {
+					width=bigImage.getWidth();
+				}
+				
+				int height = (int)(frame.getHeight()*ratio);
+				
+				if (height>bigImage.getHeight()) {
+					height=bigImage.getHeight();
+				}
+				
+				subImage = bigImage.getSubimage(subX, subY, width, height);
+				frame.image=subImage;
+
+				// Save the image asynchronously to disk
+				StampCache.writeSrc(subImage, frame.getUrlStr());
+				
+				subX+=frame.getWidth()*ratio;
+			}
+			subX=0;
+			subY+=frames[0][y].getHeight()*ratio;
+		}
 	}
 	
-	
-    protected static void saveSrcImage(String fname, BufferedImage bi) {
-        try {
-        	FileOutputStream fos = new FileOutputStream(StampImage.STAMP_CACHE+"src/"+StampImageFactory.getStrippedFilename(fname));
-        	ImageIO.write(bi, "jpg", fos);
-        	fos.close();
-        }
-        catch (Exception e) {
-        	e.printStackTrace();
-        }
-                
-    }
-
-    public static boolean frameNeedsLoading(ImageFrame f, Rectangle2D worldWin, boolean done) {
+    public static boolean frameNeedsLoading(ImageFrame f, ImageFrame leftF, ImageFrame rightF, ImageFrame topF, ImageFrame botF, Rectangle2D worldWin, boolean done, boolean expand) {
     	if (done) return false;
-    	if (f.hasImageLocally()) return false;
-    	return StampImage.doesFrameIntersect(f, worldWin);
+    	
+    	boolean intersect = false;
+    	if (!expand) {
+    		intersect = StampImage.doesFrameIntersect(f, worldWin);
+    	} else {
+    		// If expand==true, load this frame if it intersects worldWin or if any of its neighboring tiles intersect worldWin
+    		intersect = StampImage.doesFrameIntersect(f, worldWin) ||
+    		   StampImage.doesFrameIntersect(leftF, worldWin) ||
+    		   StampImage.doesFrameIntersect(rightF, worldWin) ||
+    		   StampImage.doesFrameIntersect(topF, worldWin) ||
+    		   StampImage.doesFrameIntersect(botF, worldWin);
+    	}
+    	
+    	if (intersect) {
+    		// Do this check last, because it requires disk IO and is thus somewhat expensive
+        	if (f.hasImageLocally()) return false;    		
+    	} 
+    	
+    	return false;
     }
     
-    public static ImageFrame[][][] segment(ImageFrame frames[], int xcnt, int ycnt, Rectangle2D worldWin) {
+    /*
+     * Given an array of frames, representing a two dimensional grid xcnt by ycnt in side, and a worldWin representing the area in view,
+     * attempt to form a small number of rectangular segments to minimize the number of requests that need to be made to the backend server.
+     * 
+     * The expand parameter is used to determine whether neighboring grids should be included or not.  Projected images frequently need
+     * neighboring grid tiles in order to completely project a tile in view.  Hence in these cases, we expand the set of grids needing to be
+     * retrieved to include any grid that is next to a grid that is in view as well.
+     */
+    public static ImageFrame[][][] segment(ImageFrame frames[], int xcnt, int ycnt, Rectangle2D worldWin, boolean expand) {    	
     	ImageFrame newSegments[][][]=null;
     	
     	List<ImageFrame[][]> segmentList = new ArrayList<ImageFrame[][]>();
@@ -186,12 +174,16 @@ public class FrameFetcher {
     			done[x][y]=false;
     		}
     	}
-    	
+
     	for (int y=0; y<ycnt; y++) {
     		for (int x=0; x<xcnt; x++) {
     			ImageFrame f = allFrames[x][y];
-    			
-    			if (!frameNeedsLoading(f, worldWin, done[x][y])) {
+    			ImageFrame leftF = (x-1>=0) ? allFrames[x-1][y] : null;
+    			ImageFrame rightF = (x+1<xcnt) ? allFrames[x+1][y] : null;
+    			ImageFrame topF = (y-1>=0) ? allFrames[x][y-1] : null;
+    			ImageFrame botF = (y+1<ycnt) ? allFrames[x][y+1] : null;
+    			    			
+    			if (!frameNeedsLoading(f, leftF, rightF, topF, botF, worldWin, done[x][y], expand)) {
     				done[x][y]=true; // make sure if it's local it's marked as done
     				continue;
     			}
@@ -201,7 +193,12 @@ public class FrameFetcher {
     			
     			for (int x2=x+1; x2<xcnt; x2++) {
     				ImageFrame f2 = allFrames[x2][y];
-    				if (frameNeedsLoading(f2, worldWin, done[x][y])) {
+        			ImageFrame leftF2 = (x2-1>=0) ? allFrames[x2-1][y] : null;
+        			ImageFrame rightF2 = (x2+1<xcnt) ? allFrames[x2+1][y] : null;
+        			ImageFrame topF2 = (y-1>=0) ? allFrames[x2][y-1] : null;
+        			ImageFrame botF2 = (y+1<ycnt) ? allFrames[x2][y+1] : null;
+        			
+    				if (frameNeedsLoading(f2, leftF2, rightF2, topF2, botF2, worldWin, done[x2][y], expand)) {
     					xadditional++;
     				} else {
     					break;
@@ -214,9 +211,13 @@ public class FrameFetcher {
     					break;
     				}
     				
-        			for (int x2=x; x2<xcnt; x2++) {
+        			for (int x2=x; x2<=x+xadditional; x2++) {
         				ImageFrame f2 = allFrames[x2][y2];
-        				if (!(frameNeedsLoading(f2, worldWin, done[x][y]))) {
+            			ImageFrame leftF2 = (x2-1>=0) ? allFrames[x2-1][y2] : null;
+            			ImageFrame rightF2 = (x2+1<xcnt) ? allFrames[x2+1][y2] : null;
+            			ImageFrame topF2 = (y2-1>=0) ? allFrames[x2][y2-1] : null;
+            			ImageFrame botF2 = (y2+1<ycnt) ? allFrames[x2][y2+1] : null;
+        				if (!(frameNeedsLoading(f2, leftF2, rightF2, topF2, botF2, worldWin, done[x2][y2], expand))) {
         					stillMatching=false;
         					break;
         				} 
@@ -237,7 +238,6 @@ public class FrameFetcher {
     		}
     	}
     	
-//    	System.out.println("Found a total of " + segmentList.size() + " segments.");
     	newSegments = new ImageFrame[segmentList.size()][][];
     	
     	newSegments = segmentList.toArray(newSegments);    	

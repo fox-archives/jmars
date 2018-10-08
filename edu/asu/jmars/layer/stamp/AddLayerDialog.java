@@ -1,23 +1,3 @@
-// Copyright 2008, Arizona Board of Regents
-// on behalf of Arizona State University
-// 
-// Prepared by the Mars Space Flight Facility, Arizona State University,
-// Tempe, AZ.
-// 
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-// 
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU General Public License for more details.
-// 
-// You should have received a copy of the GNU General Public License
-// along with this program.  If not, see <http://www.gnu.org/licenses/>.
-
-
 package edu.asu.jmars.layer.stamp;
 
 import java.awt.BorderLayout;
@@ -33,26 +13,37 @@ import javax.swing.JLabel;
 import javax.swing.JPanel;
 import javax.swing.JTextField;
 
-import edu.asu.jmars.Main;
+import edu.asu.jmars.layer.AddLayer;
+import edu.asu.jmars.layer.LManager;
 import edu.asu.jmars.swing.ColorCombo;
 import edu.asu.jmars.util.Util;
 
 public class AddLayerDialog extends JDialog {
-	ColorCombo initialColor = new ColorCombo();
-	JTextField initialName = new JTextField();
+	public ColorCombo initialColor = new ColorCombo();
+	public JTextField initialName = new JTextField();
 	private boolean userHitOK = false;
 
+	public AddLayerDialog(JPanel panel) {
+		super(AddLayer.getInstance(), "Add davinci stamp layer", true);
+
+		buildDialog(panel, null);
+	}
+	
 	/**
 	 ** Constructs a modal dialog for adding stamp layer
 	 **/
-	public AddLayerDialog(AddLayerWrapper wrapper)
+	public AddLayerDialog(final AddLayerWrapper wrapper)
 	{
-		super(Main.testDriver.getLManager(), "Add " + wrapper.getInstrument() + " stamp layer", true);
+		super(AddLayer.getInstance(), "Add " + wrapper.getInstrument().replace("_"," ") + " stamp layer", true);
 
 		JPanel queryPanel = wrapper.getContainer();
-		if (queryPanel!=null) {
+		buildDialog(queryPanel, wrapper);
+	}
+
+	private void buildDialog(JPanel panel, final AddLayerWrapper wrapper) {		
+		if (panel!=null) {
 			getContentPane().setLayout(new BorderLayout());
-			getContentPane().add(queryPanel, BorderLayout.CENTER);
+			getContentPane().add(panel, BorderLayout.CENTER);
 		}
 
 		JPanel bottomPanel = new JPanel();
@@ -76,6 +67,11 @@ public class AddLayerDialog extends JDialog {
 		JButton ok = new JButton("Okay");
 		ok.addActionListener(new ActionListener() {
 			public void actionPerformed(ActionEvent e) {
+				// Do not allow submission before the server
+				// has responded with options.
+				if (wrapper!=null && wrapper.filter==null) {
+					return;
+				}
 				userHitOK = true;
 				dialog.setVisible(false);
 			}
@@ -109,7 +105,11 @@ public class AddLayerDialog extends JDialog {
 
 		Dimension screen = java.awt.Toolkit.getDefaultToolkit().getScreenSize();
 
-		setLocation(Main.getLManager().getLocation());
+		if(AddLayer.instanceExists()){
+			setLocation(AddLayer.getInstance().getLocation());
+		}else{
+			setLocation(LManager.getDisplayFrame().getLocation());
+		}
 		pack();
 
 		// Attempt to make sure the bottom of the window (with the submit/cancel buttons)

@@ -1,23 +1,3 @@
-// Copyright 2008, Arizona Board of Regents
-// on behalf of Arizona State University
-// 
-// Prepared by the Mars Space Flight Facility, Arizona State University,
-// Tempe, AZ.
-// 
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-// 
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU General Public License for more details.
-// 
-// You should have received a copy of the GNU General Public License
-// along with this program.  If not, see <http://www.gnu.org/licenses/>.
-
-
 package edu.asu.jmars.util;
 
 import java.util.*;
@@ -29,9 +9,9 @@ import java.util.*;
  ** for the new selected status of each potentially [un]selected
  ** object.
  **/
-public class SetSelectionEvent extends EventObject
+public class SetSelectionEvent<E> extends EventObject
 {
-	private Set changedObjects;
+	private Set<E> changedObjects;
 	private boolean isAdjusting;
 	
 	/**
@@ -43,11 +23,10 @@ public class SetSelectionEvent extends EventObject
 	 ** @param isAdjusting An indication that this is one of a rapid
 	 ** series of events.
 	 **/
-	public SetSelectionEvent(Object source, Set changedObjects, boolean isAdjusting)
+	public SetSelectionEvent(Object source, Set<E> changedObjects, boolean isAdjusting)
 	{
 		super(source);
-		this.changedObjects =
-			Collections.unmodifiableSet( new HashSet(changedObjects) );
+		this.changedObjects = Collections.unmodifiableSet( new HashSet<E>(changedObjects) );
 		this.isAdjusting = isAdjusting;
 	}
 	
@@ -55,7 +34,7 @@ public class SetSelectionEvent extends EventObject
 	 ** Returns a list of the objects whose selection status
 	 ** changed. The returned set is immutable.
 	 **/
-	public Set getChanges()
+	public Set<E> getChanges()
 	{
 		return  changedObjects;
 	}

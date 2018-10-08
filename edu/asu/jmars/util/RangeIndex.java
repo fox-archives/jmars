@@ -1,23 +1,3 @@
-// Copyright 2008, Arizona Board of Regents
-// on behalf of Arizona State University
-// 
-// Prepared by the Mars Space Flight Facility, Arizona State University,
-// Tempe, AZ.
-// 
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-// 
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU General Public License for more details.
-// 
-// You should have received a copy of the GNU General Public License
-// along with this program.  If not, see <http://www.gnu.org/licenses/>.
-
-
 package edu.asu.jmars.util;
 
 import java.util.HashMap;
@@ -174,7 +154,7 @@ public class RangeIndex<T> {
 	/**
 	 * Simple container for the extent and value.
 	 */
-	class Tuple<TT> {
+	private static class Tuple<TT> {
 		public Tuple(double min, double max, TT value) {
 			this.min = min; this.max = max; this.value = value;
 		}
@@ -238,12 +218,7 @@ public class RangeIndex<T> {
 			dump(count + " queries results in " + sum + " items, " + distinctItems.size() + " distinct", null);
 		}
 		private static void dump (String msg, Set<?> set) {
-			if (set != null) {
-				msg += ": ";
-				for (Iterator<?> it=set.iterator(); it.hasNext(); )
-					msg += it.next();
-			}
-			System.out.println(msg);
+			System.out.println(msg + (set != null ? ":\n\t" + Util.join("\n\t", set) : ""));
 		}
 	}
 }

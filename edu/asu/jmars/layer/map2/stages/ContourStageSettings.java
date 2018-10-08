@@ -1,23 +1,3 @@
-// Copyright 2008, Arizona Board of Regents
-// on behalf of Arizona State University
-// 
-// Prepared by the Mars Space Flight Facility, Arizona State University,
-// Tempe, AZ.
-// 
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-// 
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU General Public License for more details.
-// 
-// You should have received a copy of the GNU General Public License
-// along with this program.  If not, see <http://www.gnu.org/licenses/>.
-
-
 package edu.asu.jmars.layer.map2.stages;
 
 import java.awt.Color;
@@ -35,14 +15,17 @@ public class ContourStageSettings extends AbstractStageSettings implements Clone
 	public static final String propStep = "step";
 	public static final String propBase = "base";
 	public static final String propColor = "color";
+	public static final String propLineThickness = "line thickness";
 	
 	double base, step;
 	Color color;
+	int lineThickness;
 
 	public ContourStageSettings(){
 		base = 0;
 		step = 100;
 		color = Color.white;
+		lineThickness = 1;
 	}
 	
 	public Stage createStage() {
@@ -65,6 +48,10 @@ public class ContourStageSettings extends AbstractStageSettings implements Clone
 		return color;
 	}
 	
+	public synchronized int getLineThickness(){
+		return lineThickness;
+	}
+	
 	public synchronized void setBase(double newStart){
 		double oldStart = base;
 		base = newStart;
@@ -84,6 +71,13 @@ public class ContourStageSettings extends AbstractStageSettings implements Clone
 		color = newColor;
 		log.println("Setting color value from "+oldColor+" to "+newColor);
 		firePropertyChangeEvent(propColor, oldColor, newColor);
+	}
+	
+	public synchronized void setLineThickness(int newThickness) {
+		int oldThickness = lineThickness;
+		lineThickness = newThickness;
+		log.println("Setting line thickness value from "+oldThickness+" to "+newThickness);
+		firePropertyChangeEvent(propLineThickness, oldThickness, newThickness);		
 	}
 	
 	public String getStageName() {

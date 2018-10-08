@@ -1,23 +1,3 @@
-// Copyright 2008, Arizona Board of Regents
-// on behalf of Arizona State University
-// 
-// Prepared by the Mars Space Flight Facility, Arizona State University,
-// Tempe, AZ.
-// 
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-// 
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU General Public License for more details.
-// 
-// You should have received a copy of the GNU General Public License
-// along with this program.  If not, see <http://www.gnu.org/licenses/>.
-
-
 package edu.asu.jmars.layer.map2;
 
 import java.awt.geom.Point2D;
@@ -26,6 +6,7 @@ import java.awt.image.BufferedImage;
 import java.io.Serializable;
 
 import edu.asu.jmars.util.Config;
+import edu.asu.jmars.util.Util;
 
 /**
  * A MapSource describes a map that can be retrieved from a remote map server.
@@ -41,8 +22,8 @@ import edu.asu.jmars.util.Config;
  * implemented appropriately.
  */
 public interface MapSource extends Serializable {
-	/** Name of the default map in the default map server */
-	public static final String DEFAULT_NAME = Config.get("map.default.source");
+	public static final int MAXPPD_MAX = 524288;
+	public static final double MAXPPD_MIN = 0.01;
 	
 	/**
 	 * Returns a canonic name for this {@link MapSource} within the scope of 
@@ -63,6 +44,12 @@ public interface MapSource extends Serializable {
 	 * @return Abstract text, may be <code>null</code>.
 	 */
 	public String getAbstract();
+	
+	/**
+	 * Human readable units associated with the numeric data for this map
+	 * @return Units, may be <code>null</code>
+	 */
+	public String getUnits();	
 	
 	/**
 	 * Returns an array of structural categories to which this {@link MapSource}
@@ -111,6 +98,10 @@ public interface MapSource extends Serializable {
 	 */
 	public boolean hasNumericKeyword();
 	
+	public boolean hasElevationKeyword();
+	
+	public String getOwner();
+	
 	/**
 	 * @return The east leading longitude / ocentric latitude bounds of this map
 	 *         source. The x axis should be in the half open range [0,540).
@@ -120,21 +111,37 @@ public interface MapSource extends Serializable {
 	/**
 	 * Returns the MIME-type that the data for this MapSource should be requested in.
 	 * For example, "image/png" for graphical images, "image/vicar" for numeric data.
-	 * The call should NOT return <code>null</code>.
+	 * The call should only return null for those map sources that can handle their
+	 * own downloads, and do not want caching, since the mime type is used by the
+	 * cache manager to decide the type of file to create.
 	 */
 	public String getMimeType();
 	
 	/**
-	 * Returns an array of ignore values, one for each band. The value will be
-	 * NaN for each band that has no ignore value.
+	 * Returns an array of ignore values, one for each band. The result will be null
+	 * if there is no ignore value.  {@link Double.NaN} may be used to mask by only
+	 * some of the bands.
 	 */
 	public double[] getIgnoreValue();
+	
+	/**
+	 * Sets the ignore value for this map source
+	 * @param ignoreValue a double array
+	 */
+	public void setIgnoreValue(double[] ignoreValue);
 	
 	/**
 	 * Returns the maximum PPD scale at which this map source can be produced,
 	 * or {@link Double#POSITIVE_INFINITY}.
 	 */
 	public double getMaxPPD();
+	
+	/**
+	 * Sets the maxPPD for this mapSource.
+	 * @param maxPPD a double containing the maxPPD value.
+	 * @throws IllegalArgumentException if the value passed in is not within the acceptable range.
+	 */
+	public void setMaxPPD(double maxPPD) throws IllegalArgumentException;
 	
 	/**
 	 * Fetches image data for the specified {@link MapTileRequest}.
@@ -155,10 +162,15 @@ public interface MapSource extends Serializable {
 	 */
 	public boolean isMovable();
 	
-	/** @return The nudging offset in east-leading lon / ocentric latitude */
+	/** @return The user provided nudge as an offset in world coordinates */
 	public Point2D getOffset();
 	
 	/** @param offset The new nudging offset in east-leading lon / ocentric latitude */
 	public void setOffset(Point2D offset);
+	
+	/** Add a listener that will be called on every event that invalidates any possible call to fetchTile */
+	public void addListener(MapSourceListener l);
+	
+	/** Removes the given source listener */
+	public void removeListener(MapSourceListener l);
 }
-

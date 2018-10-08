@@ -1,23 +1,3 @@
-// Copyright 2008, Arizona Board of Regents
-// on behalf of Arizona State University
-// 
-// Prepared by the Mars Space Flight Facility, Arizona State University,
-// Tempe, AZ.
-// 
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-// 
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU General Public License for more details.
-// 
-// You should have received a copy of the GNU General Public License
-// along with this program.  If not, see <http://www.gnu.org/licenses/>.
-
-
 package edu.asu.jmars.layer.map2.msd;
 
 import java.beans.PropertyChangeListener;
@@ -153,7 +133,8 @@ public class PipelineModel implements PipelineLegModelListener, Cloneable, Seria
 		if (i >= 0){
 			if (isResizable()){
 				((BandAggregatorSettings)((BandAggregator)selComp).getSettings()).setInputCount(i+1);
-				adjust(false);
+				//adjust(false);
+				adjust(true);  // TODO: This is also not the correct way of doing this, but it makes things work.
 				sources.set(i, new WrappedMapSource(selComp, i, source));
 				fireChildrenAdded(new int[]{ i }, new WrappedMapSource[]{ (WrappedMapSource)sources.get(i) });
 			}

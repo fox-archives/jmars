@@ -1,33 +1,17 @@
-// Copyright 2008, Arizona Board of Regents
-// on behalf of Arizona State University
-// 
-// Prepared by the Mars Space Flight Facility, Arizona State University,
-// Tempe, AZ.
-// 
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-// 
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU General Public License for more details.
-// 
-// You should have received a copy of the GNU General Public License
-// along with this program.  If not, see <http://www.gnu.org/licenses/>.
-
-
 package edu.asu.jmars.layer.util.features;
 
-import java.awt.geom.*;
-import java.io.*;
-import java.util.*;
+import java.awt.Shape;
+import java.io.File;
+import java.util.ArrayList;
+import java.util.Iterator;
+import java.util.List;
 
-import javax.swing.*;
+import javax.swing.JOptionPane;
 
 import edu.asu.jmars.Main;
-import edu.asu.jmars.util.*;
+import edu.asu.jmars.layer.LManager;
+import edu.asu.jmars.util.DebugLog;
+import edu.asu.jmars.util.GML;
 
 // this means that the GML.java class needs to be moved to edu.asu.jmars.util
 //import edu.asu.jmars.layer.shape.*;
@@ -52,7 +36,7 @@ public class FeatureProviderGML implements FeatureProvider {
 
 	private DebugLog log = DebugLog.instance();
 
-	public static final Field ID        = new Field( "id",           String.class, false);
+	public static final Field ID = new Field( "id", String.class);
 
 	public FeatureCollection load(String name) {
 		// Build a new FeatureProvider inside a new FeatureCollection
@@ -70,8 +54,8 @@ public class FeatureProviderGML implements FeatureProvider {
 				Feature     newFeature = new Feature();
 				try {
 					String featureTypeString = FeatureUtil.getFeatureTypeString(gmlFeatureTypeToFeatureType(gmlFeature.getType()));
-					GeneralPath gp = gmlFeature.getGeneralPath();
-					FPath path = new FPath (gp, FPath.SPATIAL_EAST);
+					Shape shape = gmlFeature.getShape();
+					FPath path = new FPath(shape, FPath.SPATIAL_EAST);
 					newFeature.setAttributeQuiet( ID,                       gmlFeature.getId());
 					newFeature.setAttributeQuiet( Field.FIELD_LABEL,        gmlFeature.getDescription());
 					newFeature.setAttributeQuiet( Field.FIELD_FEATURE_TYPE, featureTypeString);
@@ -120,7 +104,7 @@ public class FeatureProviderGML implements FeatureProvider {
 	// writes out the specified features to the specified file.
 	public int save(FeatureCollection fc, String name) {
 		if (fc==null || fc.getFeatures()==null || fc.getFeatures().size()<1){
-			JOptionPane.showMessageDialog(Main.getLManager(),
+			JOptionPane.showMessageDialog(LManager.getDisplayFrame(),
 						      "Selection contains no rows. Save aborted.");
 			return 0;
 		}
@@ -136,7 +120,7 @@ public class FeatureProviderGML implements FeatureProvider {
 			int gmlShape = featureTypeToGmlFeatureType(f.getPath().getType());
 
 			FPath path = (FPath)f.getAttribute( Field.FIELD_PATH);
-			GeneralPath gp = path.getSpatialEast().getGeneralPath();
+			Shape gp = path.getSpatialEast().getShape();
 
 			String id = (String) f.getAttribute(ID);
 
@@ -160,6 +144,11 @@ public class FeatureProviderGML implements FeatureProvider {
 			fileName += getExtension();
 		return new File(fileName);
 	}
+
+    @Override
+    public boolean setAsDefaultFeatureCollection() {
+        return false;
+    }
 }
  
 

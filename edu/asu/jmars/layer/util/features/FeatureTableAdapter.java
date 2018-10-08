@@ -1,35 +1,28 @@
-// Copyright 2008, Arizona Board of Regents
-// on behalf of Arizona State University
-// 
-// Prepared by the Mars Space Flight Facility, Arizona State University,
-// Tempe, AZ.
-// 
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-// 
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU General Public License for more details.
-// 
-// You should have received a copy of the GNU General Public License
-// along with this program.  If not, see <http://www.gnu.org/licenses/>.
-
-
 package edu.asu.jmars.layer.util.features;
 
 import java.awt.Color;
+import java.awt.Component;
+import java.awt.Dimension;
 
+import javax.swing.JComponent;
 import javax.swing.JTable;
+import javax.swing.border.EmptyBorder;
 import javax.swing.event.ChangeEvent;
+import javax.swing.table.DefaultTableCellRenderer;
+import javax.swing.table.TableCellRenderer;
 
+import edu.asu.jmars.layer.shape2.ShapeLayer;
 import edu.asu.jmars.swing.STable;
 import edu.asu.jmars.util.History;
 import edu.asu.jmars.util.LineType;
+import edu.asu.jmars.util.ListType;
 import edu.asu.jmars.util.ObservableSet;
-import edu.asu.jmars.util.stable.*;
+import edu.asu.jmars.util.stable.ListTypeCellEditor;
+import edu.asu.jmars.util.stable.ColorCellEditor;
+import edu.asu.jmars.util.stable.ColorCellRenderer;
+import edu.asu.jmars.util.stable.FilteringColumnModel;
+import edu.asu.jmars.util.stable.LineTypeCellEditor;
+import edu.asu.jmars.util.stable.LineTypeTableCellRenderer;
 
 /**
  * Produces an STable for viewing features. Editors and renderers are added for
@@ -48,12 +41,35 @@ public class FeatureTableAdapter implements FeatureListener
 	private FeatureTableModel ftm;
 	private History history;
 	
-	public FeatureTableAdapter (FeatureCollection fc, ObservableSet<Feature> selections, History history) {
+	private ShapeLayer layer;
+	
+	public FeatureTableAdapter (FeatureCollection fc, ObservableSet<Feature> selections, History history, ShapeLayer sl) {
 		this.fc = fc;
 		this.history = history;
+		this.layer = sl;
 		
 		// create and customize an STable for our needs
 		fst = new STable () {
+			private static final long serialVersionUID = 1L;
+			private final Color rowhighlight = new Color(237, 243, 254);
+			private final EmptyBorder border = new EmptyBorder(1,2,1,2);
+			{
+				setRowHeight(getRowHeight() + border.getBorderInsets().top + border.getBorderInsets().bottom);
+			}
+			
+			public Component prepareRenderer(TableCellRenderer renderer, int row, int column) {
+				// TODO: row highlight will need to be disabled under Synth
+				// since it already does something similar
+				Component c = super.prepareRenderer(renderer, row, column);
+				if (!isRowSelected(row) && row%2==1) {
+					c.setBackground(rowhighlight);
+				}
+				if (c instanceof JComponent) {
+					((JComponent)c).setBorder(border);
+				}
+				return c;
+			}
+			
 			// marks a history frame when the table cell editor is used
 			public void editingStopped(ChangeEvent e) {
 				FeatureTableAdapter.this.history.mark();
@@ -61,10 +77,13 @@ public class FeatureTableAdapter implements FeatureListener
 			}
 		};
 		
+		fst.setIntercellSpacing(new Dimension(1,0));
 		fst.setAutoCreateColumnsFromModel(false);
 		fst.setAutoResizeMode(JTable.AUTO_RESIZE_OFF);
+		fst.setShowHorizontalLines(false);
 		fst.setTypeSupport(Color.class, new ColorCellRenderer(), new ColorCellEditor());
 		fst.setTypeSupport(LineType.class, new LineTypeTableCellRenderer(), new LineTypeCellEditor());
+		fst.setTypeSupport(ListType.class, new DefaultTableCellRenderer(), new ListTypeCellEditor(layer));
 
 		fsl = new FeatureSelectionListener (fst, fc, selections);
 		ftm = new FeatureTableModel (fc, (FilteringColumnModel)fst.getColumnModel(), fsl);

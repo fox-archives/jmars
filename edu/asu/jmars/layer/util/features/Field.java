@@ -1,23 +1,3 @@
-// Copyright 2008, Arizona Board of Regents
-// on behalf of Arizona State University
-// 
-// Prepared by the Mars Space Flight Facility, Arizona State University,
-// Tempe, AZ.
-// 
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-// 
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU General Public License for more details.
-// 
-// You should have received a copy of the GNU General Public License
-// along with this program.  If not, see <http://www.gnu.org/licenses/>.
-
-
 package edu.asu.jmars.layer.util.features;
 
 import java.awt.Color;
@@ -48,20 +28,23 @@ public class Field implements Serializable {
 	public static final Field FIELD_FILL_COLOR = new Field("Fill Color",java.awt.Color.class,true);
 	public static final Field FIELD_LABEL_COLOR = new Field("Label Color",Color.class,true);
 	public static final Field FIELD_LINE_WIDTH = new Field("Line Width",Double.class,true);
-	public static final Field FIELD_POINT_SIZE = new Field("Point size",Integer.class,true);
+	public static final Field FIELD_POINT_SIZE = new Field("Point Size",Integer.class,true);
 	public static final Field FIELD_LINE_DASH = new Field("Line Type",LineType.class,true);
 	public static final Field FIELD_LINE_DIRECTED = new Field("Line Arrow",Boolean.class,true);
 	public static final Field FIELD_FONT = new Field("font",Font.class,false);
 	public static final Field FIELD_LABEL = new Field("Label",String.class,true);
 	public static final Field FIELD_SHOW_LABEL = new Field("Show Labels",Boolean.class,true);
 	public static final Field FIELD_FILL_POLYGON = new Field("Fill Poly",Boolean.class,true);
+	public static final Field FIELD_DRAW_OUTLINE = new Field("Show Outlines",Boolean.class,true);
 	public static final Field FIELD_FEATURE_TYPE = new Field("Feature", String.class, false);
-
+	public static final Field FIELD_LABEL_BORDER_COLOR = new Field("Label Border Color",Color.class,true);
+	public static final Field FIELD_LABEL_FONT = new Field("Label Font",String.class,true);
+	public static final Field FIELD_LABEL_SIZE=new Field("Label Size",Integer.class,true);
+	public static final Field FIELD_LABEL_STYLE=new Field("Label Style",String.class,true);
 	/**
 	 * The name of the field, usually what is displayed in a table header.
 	 */
-	public final String name;
-
+	public String name;//1787
 	/**
 	 * The type of the field. Note that the boxed primitives Integer, Double,
 	 * etc must be used in place of real primitives, due to the limitations of
@@ -76,20 +59,20 @@ public class Field implements Serializable {
 	 * edit the value; The system will still be able to modify attributes of
 	 * this Field.
 	 */
-	public final boolean editable;
+	public boolean editable;
 
 	/**
 	 * Create a new Field with the given name and type. The Field will be
 	 * editable.
 	 */
-	public Field (String name, Class type) {
+	public Field (String name, Class<?> type) {
 		this (name, type, true);
 	}
 
 	/**
 	 * Create a new Field with the given name, type, and editable state.
 	 */
-	public Field (String name, Class type, boolean editable) {
+	public Field (String name, Class<?> type, boolean editable) {
 		this.name = name;
 		this.type = type;
 		this.editable = editable;
@@ -120,6 +103,13 @@ public class Field implements Serializable {
 	 */
 	public String toString(){
 		return name;
+	}
+	
+	/**
+	 * This is used to set fields uneditable for read only shape layers.
+	 */
+	public void setEditable(boolean b){
+		editable = b;
 	}
 }
 

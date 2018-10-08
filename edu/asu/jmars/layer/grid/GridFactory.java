@@ -1,49 +1,54 @@
-// Copyright 2008, Arizona Board of Regents
-// on behalf of Arizona State University
-// 
-// Prepared by the Mars Space Flight Facility, Arizona State University,
-// Tempe, AZ.
-// 
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-// 
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU General Public License for more details.
-// 
-// You should have received a copy of the GNU General Public License
-// along with this program.  If not, see <http://www.gnu.org/licenses/>.
-
-
 package edu.asu.jmars.layer.grid;
 
-import edu.asu.jmars.layer.*;
-import edu.asu.jmars.util.*;
-public class GridFactory extends LViewFactory
- {
-	public Layer.LView createLView()
-	 {
-		Layer.LView ret = new GridLView();
-                ret.originatingFactory = this;
-                return ret;
-	 }
+import edu.asu.jmars.layer.LManager;
+import edu.asu.jmars.layer.LViewFactory;
+import edu.asu.jmars.layer.Layer;
+import edu.asu.jmars.layer.LayerParameters;
+import edu.asu.jmars.layer.SerializedParameters;
+import edu.asu.jmars.layer.Layer.LView;
+import edu.asu.jmars.layer.grid.GridLayer;
 
-	//used to restore a view from a save state
-	public Layer.LView recreateLView(SerializedParameters parmBlock)
-	 {
-		return createLView();
-	 }
+public class GridFactory extends LViewFactory {
+    
+	public GridFactory(){
+		type = "llgrid";
+	}
+	
+    public void createLView(boolean async, LayerParameters l) {
+        LView view = realCreateLView(new GridParameters());
+        view.setLayerParameters(l);
+        LManager.receiveNewLView(view);
+    }
 
-	public String getName()
-	 {
-		return  "Lat/Lon Grid";
-	 }
+    // called to provide default lat/lon grid layer on tool startup
+    public Layer.LView createLView() {
+        return realCreateLView(new GridParameters()); // use defaults
+    }
+    
+	// used to restore a view from a save state
+	public Layer.LView recreateLView(SerializedParameters parmBlock) {
+        if (parmBlock instanceof GridParameters) {
+            return realCreateLView((GridParameters)parmBlock);
+        } else {
+            return realCreateLView(new GridParameters()); // use defaults
+        }
+	}
 
-	public String getDesc()
-	 {
-		return  "An adjustable grid of latitude/longitude lines.";
-	 }
- }
+	public String getName() {
+		return "Lat/Lon Grid";
+	}
+
+	public String getDesc() {
+		return "An adjustable grid of latitude/longitude lines.";
+	}
+	
+    private Layer.LView realCreateLView(GridParameters params) {
+        GridLayer layer = new GridLayer();
+        layer.initialLayerData = params;
+        Layer.LView view = new GridLView(true, layer, params);
+        view.originatingFactory = this;
+        view.setVisible(true);
+        return view;
+    }
+
+}

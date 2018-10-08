@@ -1,23 +1,3 @@
-// Copyright 2008, Arizona Board of Regents
-// on behalf of Arizona State University
-// 
-// Prepared by the Mars Space Flight Facility, Arizona State University,
-// Tempe, AZ.
-// 
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-// 
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU General Public License for more details.
-// 
-// You should have received a copy of the GNU General Public License
-// along with this program.  If not, see <http://www.gnu.org/licenses/>.
-
-
 package edu.asu.jmars.util.stable;
 
 import java.util.Iterator;
@@ -150,7 +130,7 @@ public class SortingTableModel
 			notify(null);
 		} else if (e.getFirstRow()==TableModelEvent.HEADER_ROW) {
 			notify(new TableModelEvent(this, TableModelEvent.HEADER_ROW, Integer.MAX_VALUE, TableModelEvent.ALL_COLUMNS));			
-		}  		
+		}
 		// if row range is in the unsortedModel's row domain
 		else if (first >= 0 && last < sorter.getSize() && last >= first) {
 			if (e.getType()!=TableModelEvent.UPDATE || !isSortedBy(e) ) {
@@ -160,13 +140,11 @@ public class SortingTableModel
 					indices[i] = sorter.sortRow(i+first);
 				}
 				int[][] binned = Util.binRanges (indices);
-				if (binned.length > 2) {
+				if (binned.length > 1) {
 					notify (new TableModelEvent (this));
 				} else {
-					for (int i = 0; i < binned.length; i++) {
-						notify (new TableModelEvent (this, binned[i][0],
-								binned[i][1], e.getColumn(), e.getType()));
-					}
+					notify (new TableModelEvent (this, binned[0][0],
+						binned[0][1], e.getColumn(), e.getType()));
 				}
 			} else {
 				notify (new TableModelEvent (this, 0,

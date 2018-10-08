@@ -1,23 +1,3 @@
-// Copyright 2008, Arizona Board of Regents
-// on behalf of Arizona State University
-// 
-// Prepared by the Mars Space Flight Facility, Arizona State University,
-// Tempe, AZ.
-// 
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-// 
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU General Public License for more details.
-// 
-// You should have received a copy of the GNU General Public License
-// along with this program.  If not, see <http://www.gnu.org/licenses/>.
-
-
 package edu.asu.jmars.layer.map2;
 
 import java.awt.geom.Rectangle2D;
@@ -132,6 +112,18 @@ public class MapServerTest {
 		for (Arg a: args.values()) {
 			System.out.println(MessageFormat.format("\t-{0}: {1}  (default ''{2}'')", a.name, a.desc, a.value));
 		}
+		System.out.println("\nThe result is a table of reports from each client and a summary at the end.\n");
+		System.out.println("Each column shows the following:");
+		System.out.println(" 1. Milliseconds before client gets first tile response.");
+		System.out.println(" 2. Milliseconds before client gets last tile response.");
+		System.out.println(" 3. Average number of tiles per second after first tile arrives.");
+		System.out.println(" 4. Number of retryable failures (dropped connection, etc.)");
+		System.out.println(" 5. Number of permanent failures (bad request, unrecognized layer ID, etc.)");
+		System.out.println(" 6. Number of tiles that timed out.");
+		System.out.println(" 7. The WMS name of the map that was requested.");
+		System.out.println(" 8. The pixels per degree of the requested tiles.");
+		System.out.println(" 9. The bounding box in which tiles were requested.");
+		System.out.println("10. The pole of the oeqc projection used.\n");
 	}
 	
 	public static void main(String[] args) {
@@ -214,13 +206,19 @@ public class MapServerTest {
 			Rectangle2D world = new Rectangle2D.Double(-180,-90,360,180);
 			for (String s: maps.split(",")) {
 				boolean numeric = s.toLowerCase().endsWith("numeric");
+				boolean elevation = false;
+				String owner = "";
 				sources.add(new WMSMapSource(
-					s, s, "", cat, server, numeric, world, null, Double.NaN));
+					s, s, "", null, cat, server, numeric, elevation, world, null, Double.NaN, owner));
 			}
+		}
+
+		if (sources.isEmpty()) {
+			throw new IllegalStateException("No sources found or specified.");
 		}
 		
 		// randomly generate the requests for each client
-		Random random = new Random(getArg("seed",Integer.class));
+		Random random = new Random((long) getArg("seed",Integer.class));
 		final List<Callable<Stats>> tasks = new ArrayList<Callable<Stats>>(clients);
 		for (int j = 0; j < clients; j++) {
 			// ppd always uniform power of 2 in [8,512]
@@ -461,8 +459,9 @@ public class MapServerTest {
 				}
 			}
 			boolean isNumeric = name.toLowerCase().contains("numeric");
+			boolean hasElevation = name.toLowerCase().contains("elevation");
 			WMSMapSource source = new WMSMapSource(
-				name,name,null,new String[0][],this,isNumeric,null,null,Double.POSITIVE_INFINITY);
+				name,name,null,null,new String[0][],this,isNumeric,hasElevation,null,null,Double.POSITIVE_INFINITY, null);
 			sources.add(source);
 			return source;
 		}

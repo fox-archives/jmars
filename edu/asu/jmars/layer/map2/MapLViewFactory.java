@@ -1,23 +1,3 @@
-// Copyright 2008, Arizona Board of Regents
-// on behalf of Arizona State University
-// 
-// Prepared by the Mars Space Flight Facility, Arizona State University,
-// Tempe, AZ.
-// 
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-// 
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU General Public License for more details.
-// 
-// You should have received a copy of the GNU General Public License
-// along with this program.  If not, see <http://www.gnu.org/licenses/>.
-
-
 package edu.asu.jmars.layer.map2;
 
 
@@ -38,13 +18,16 @@ import java.util.Set;
 import java.util.TreeMap;
 import java.util.concurrent.CountDownLatch;
 
+import javax.swing.JFrame;
 import javax.swing.JMenu;
 import javax.swing.JMenuItem;
 import javax.swing.JOptionPane;
 import javax.swing.SwingUtilities;
 
 import edu.asu.jmars.Main;
+import edu.asu.jmars.layer.LManager;
 import edu.asu.jmars.layer.LViewFactory;
+import edu.asu.jmars.layer.LayerParameters;
 import edu.asu.jmars.layer.SerializedParameters;
 import edu.asu.jmars.layer.Layer.LView;
 import edu.asu.jmars.layer.map2.msd.MapSettingsDialog;
@@ -64,7 +47,7 @@ public class MapLViewFactory extends LViewFactory {
 		SwingUtilities.invokeLater(new Runnable() {
 			public void run() {
 				JOptionPane.showMessageDialog(
-					Main.getLManager(),
+					LManager.getDisplayFrame(),
 					msg, title,
 					JOptionPane.ERROR_MESSAGE);
 			}
@@ -86,6 +69,28 @@ public class MapLViewFactory extends LViewFactory {
 					error("Map server doesn't seem to have the default map", "Error loading default map!");
 				} else try {
 					setViewSource(layer.mapSettingsDialog, MapServerFactory.getDefaultMapSource());
+					
+					
+					MapSource plotSource = MapServerFactory.getDefaultPlotSource();
+					
+					if (plotSource!=null) {	
+						Pipeline pipeline[] = new Pipeline[1];
+						
+						pipeline[0]=new Pipeline(plotSource, new Stage[]{(CompositeStage)(new BandAggregatorSettings(1)).createStage()});
+					
+						try {
+							(layer.mapSettingsDialog).getChartPipelineModel().setFromPipeline(
+									pipeline, (CompositeStage)(new BandAggregatorSettings(1)).createStage());
+							layer.mapSettingsDialog.firePipelineEvent();
+						} catch (Exception e) {
+							JOptionPane.showMessageDialog(LManager.getLManager(),
+							"Exception: "+e.toString()+" creating layer for "+plotSource.toString(),
+							"Error creating layer for "+plotSource.toString()+"!", JOptionPane.ERROR_MESSAGE);				
+						}
+					}
+					
+					layer.focusPanel.infoPanel.loadFields();
+					layer.focusPanel.setSelectedIndex(layer.focusPanel.selectedIndex);
 				} catch (Exception e) {
 					log.aprintln("Failed to update default map layer with default map");
 					log.aprintln(e);
@@ -102,7 +107,7 @@ public class MapLViewFactory extends LViewFactory {
 				} else {
 					error(MessageFormat.format(
 							"Unable to find default map named ''{0}'' in server named ''{1}''",
-							MapSource.DEFAULT_NAME, MapServer.DEFAULT_NAME),
+							MapSourceDefault.DEFAULT_NAME, MapServerDefault.DEFAULT_NAME),
 						"Error loading default map!");
 				}
 			}
@@ -115,18 +120,45 @@ public class MapLViewFactory extends LViewFactory {
 	}
 	
 	/** Creates the main view by prompting the user to enter settings */
-	public void createLView(Callback callBack) {
+	public void createLView(boolean async) {
 		try {
 			MapLayer mapLayer = createLayer();
 			mapLayer.mapSettingsDialog.getViewPipelineModel().setCompStage(
 					CompStageFactory.instance().getStageByName(SingleCompositeSettings.stageName));
+			mapLayer.mapSettingsDialog.dialog.setLocationRelativeTo(Main.mainFrame);
 			mapLayer.mapSettingsDialog.dialog.setVisible(true);
 			if (mapLayer.mapSettingsDialog.isOkay()) {
 				// TODO: This is not the right way of propagating the pipeline from a prebuilt dialog.
 				MapLView lview = new MapLView(mapLayer, true);
 				lview.originatingFactory = this;
 				mapLayer.mapSettingsDialog.firePipelineEvent();
-				callBack.receiveNewLView(lview);
+				LManager.receiveNewLView(lview);
+			}
+		} catch(Exception ex) {
+			error(ex.getMessage(), "Error creating "+getName()+".");
+			log.aprintln(ex);
+		}
+	}
+	
+	/** 
+	 * Creates the main view by prompting the user to enter settings
+	 * When calling from a window other than the main JMARS window
+	 * (such as AddLayer), pass that window in as the context to ensure 
+	 * proper window layering.
+	 * */
+	public void createLView(boolean async, JFrame context) {
+		try {
+			MapLayer mapLayer = createLayer(context);
+			mapLayer.mapSettingsDialog.getViewPipelineModel().setCompStage(
+					CompStageFactory.instance().getStageByName(SingleCompositeSettings.stageName));
+			mapLayer.mapSettingsDialog.dialog.setLocationRelativeTo(context);
+			mapLayer.mapSettingsDialog.dialog.setVisible(true);
+			if (mapLayer.mapSettingsDialog.isOkay()) {
+				// TODO: This is not the right way of propagating the pipeline from a prebuilt dialog.
+				MapLView lview = new MapLView(mapLayer, true);
+				lview.originatingFactory = this;
+				mapLayer.mapSettingsDialog.firePipelineEvent();
+				LManager.receiveNewLView(lview);
 			}
 		} catch(Exception ex) {
 			error(ex.getMessage(), "Error creating "+getName()+".");
@@ -149,10 +181,12 @@ public class MapLViewFactory extends LViewFactory {
 			// source must be found in the live server
 			MapSource liveSource = liveServer.getSourceByName(sessionSource.getName());
 			if (liveSource == null) {
-				throw new IllegalStateException("Saved map used map named " + sessionSource.getName() + " that is no longer on the server");
+				throw new IllegalStateException("Saved map named " + sessionSource.getName() + " is no longer on the server");
 			}
 			wrapper.setWrappedSource(liveSource);
 			liveSource.setOffset(sessionSource.getOffset());
+			liveSource.setIgnoreValue(sessionSource.getIgnoreValue());
+			liveSource.setMaxPPD(sessionSource.getMaxPPD());
 			model.getPipelineLeg(i).setMapSource(liveSource);
 		}
 	}
@@ -176,6 +210,11 @@ public class MapLViewFactory extends LViewFactory {
 					mapLayer.mapSettingsDialog.setChartPipeline(chartPipeline);
 					
 					mapLayer.mapSettingsDialog.firePipelineEvent();
+					mapLayer.focusPanel.infoPanel.loadFields();//@since change bodies
+					mapLayer.focusPanel.setSelectedIndex(mapLayer.focusPanel.selectedIndex);
+					if (p.profilePath!=null) {
+						mapLayer.focusPanel.mapLView.setProfileLine(p.profilePath.getPath().getShape());
+				}
 				}
 				catch(Exception ex){
 					error(ex.getMessage(), "Error recreating layer");
@@ -228,8 +267,12 @@ public class MapLViewFactory extends LViewFactory {
 		};
 		
 		MapServerFactory.whenMapServersReady(onServersReady);
-		
-		MapLView lview = new MapLView(mapLayer, true);
+		MapLView lview = null;
+		if(p.layerParams == null){
+			lview = new MapLView(mapLayer, true, p.layerKey);
+		}else{
+			lview = new MapLView(mapLayer, true, p.layerParams);
+		}
 		lview.originatingFactory = this;
 		return lview;
 	}
@@ -243,11 +286,11 @@ public class MapLViewFactory extends LViewFactory {
 	 * servers by map type (graphic or numeric), one or more map categories, and
 	 * map title.
 	 */
-	public JMenuItem[] createMenuItems(final Callback cb) {
+	public JMenuItem[] createMenuItems() {
 		if (MapServerFactory.getMapServers() == null) {
 			MapServerFactory.whenMapServersReady(new Runnable() {
 				public void run() {
-					Main.testDriver.getLManager().refreshAddMenu();
+					LManager.getLManager().refreshAddMenu();
 				}
 			});
 			JMenuItem loadingIndicator = new JMenuItem("Loading Maps...");
@@ -311,7 +354,11 @@ public class MapLViewFactory extends LViewFactory {
 					}
 					parent = partMenu;
 				}
-				parent.add(createMenuPicker(cb, paths.get(path)));
+				JMenuItem processingMenu = createMenuPicker(paths.get(path));
+				// this can only be false with maps that weren't in the menus to begin with
+				if (parent != null) {
+					parent.add(processingMenu);
+				}
 			}
 			
 			// If all categories start with 'By ', as in 'By Instrument' or 'By
@@ -327,7 +374,7 @@ public class MapLViewFactory extends LViewFactory {
 					root.setText("Maps " + root.getText());
 				}
 			} else {
-				JMenu proxyRoot = new JMenu("Map");
+				JMenu proxyRoot = new JMenu("Maps");
 				for (JMenuItem item: roots)
 					proxyRoot.add(item);
 				roots.clear();
@@ -345,7 +392,7 @@ public class MapLViewFactory extends LViewFactory {
 						source.hasNumericKeyword() ? null : source,
 						source.hasNumericKeyword() ? source : null,
 					};
-					customMenu.add(createMenuPicker(cb, pair));
+					customMenu.add(createMenuPicker(pair));
 				}
 				roots.add(customMenu);
 			}
@@ -354,7 +401,7 @@ public class MapLViewFactory extends LViewFactory {
 			JMenuItem advancedMenu = new JMenuItem("Advanced Map...");
 			advancedMenu.addActionListener(new ActionListener() {
 				public void actionPerformed(ActionEvent e) {
-					createCustomProc(cb);
+					createCustomProc();
 				}
 			});
 			roots.add(advancedMenu);
@@ -364,7 +411,7 @@ public class MapLViewFactory extends LViewFactory {
 	}
 	
 	/** Creates the menu that contains 'view', 'plot', and 'both' submenus */
-	private JMenuItem createMenuPicker(final Callback cb, final MapSource[] pair) {
+	private JMenuItem createMenuPicker(final MapSource[] pair) {
 		// the primary source will supply values that could come from either source
 		String title = pair[pair[0] == null ? 1 : 0].getTitle();
 		title = title.replaceAll(" - Numeric$", "");
@@ -386,27 +433,27 @@ public class MapLViewFactory extends LViewFactory {
 		contourItem.setEnabled(pair[1] != null);
 		viewItem.addActionListener(new ActionListener() {
 			public void actionPerformed(ActionEvent e) {
-				createLayer(cb, pair[0], null);
+				createLayer(pair[0], null);
 			}
 		});
 		plotItem.addActionListener(new ActionListener() {
 			public void actionPerformed(ActionEvent e) {
-				createLayer(cb, null, pair[1]);
+				createLayer(null, pair[1]);
 			}
 		});
 		bothGraphic.addActionListener(new ActionListener() {
 			public void actionPerformed(ActionEvent e) {
-				createLayer(cb, pair[0], pair[1]);
+				createLayer(pair[0], pair[1]);
 			}
 		});
 		bothNumeric.addActionListener(new ActionListener() {
 			public void actionPerformed(ActionEvent e) {
-				createLayer(cb, pair[1], pair[1]);
+				createLayer(pair[1], pair[1]);
 			}
 		});
 		contourItem.addActionListener(new ActionListener() {
 			public void actionPerformed(ActionEvent e) {
-				createContour(cb, pair[1]);
+				createContour(pair[1]);
 			}
 		});
 		return top;
@@ -443,18 +490,18 @@ public class MapLViewFactory extends LViewFactory {
 	};
 	
 	/** Creates a new main LView for a map layer that contours the given map */
-	public void createContour(final Callback cb, final MapSource source) {
+	public void createContour(final MapSource source) {
 		final MapLayer layer = createLayer();
 		layer.setName("Preparing Contour...");
 		final MapLView mapLView = new MapLView(layer, true);
 		mapLView.originatingFactory = MapLViewFactory.this;
-		cb.receiveNewLView(mapLView);
+		LManager.receiveNewLView(mapLView);
 		final MapSettingsDialog dlg = mapLView.getLayer().mapSettingsDialog;
 		source.getMapAttr(new MapAttrReceiver() {
 			public void receive(MapAttr attr) {
 				MapChannel ch = new MapChannel(
 					Main.testDriver.mainWindow.getProj().getWorldWindow(),
-					Main.testDriver.mainWindow.getMagnify() / 4,
+					Main.testDriver.mainWindow.getZoomManager().getZoomPPD() / 4,
 					Main.PO,
 					new Pipeline[]{new Pipeline(source, new Stage[]{})});
 				ch.addReceiver(new MapChannelReceiver() {
@@ -471,20 +518,20 @@ public class MapLViewFactory extends LViewFactory {
 						for (int x = 0; x < r.getWidth(); x++) {
 							for (int y = 0; y < r.getHeight(); y++) {
 								r.getPixel(x, y, pixel);
-								if (! Arrays.equals(ignore, pixel)) {
+								if (ignore == null || !Arrays.equals(ignore, pixel)) {
 									min = Math.min(min, pixel[0]);
 									max = Math.max(max, pixel[0]);
 								}
 							}
 						}
-
+						
 						ContourStageSettings css = new ContourStageSettings();
 						css.setBase(min - (max-min)/12);
 						css.setStep((max-min)/10);
 						Stage contour = css.createStage();
 						Stage single = new SingleCompositeSettings().createStage();
 						Pipeline view = new Pipeline(source, new Stage[]{contour, single});
-
+						
 						Stage getband = new BandExtractorStageSettings(bands,0).createStage();
 						Stage bandagg = new BandAggregatorSettings(1).createStage();
 						Pipeline plot = new Pipeline(source, new Stage[]{getband,bandagg});
@@ -504,11 +551,24 @@ public class MapLViewFactory extends LViewFactory {
 		});
 	}
 	
+		/** Creates a new main LView for a new map layer and sends it to the given callback */
+	public void createLayer(final MapSource viewSource, final MapSource plotSource) {
+		ArrayList<MapSource> plotSources = new ArrayList<MapSource>();
+		if (plotSource!=null) {
+			plotSources.add(plotSource);
+		}
+		createLayer(viewSource, plotSources, null);
+	}
+	
 	/** Creates a new main LView for a new map layer and sends it to the given callback */
-	public void createLayer(final Callback cb, final MapSource viewSource, final MapSource plotSource) {
-		final MapLView mapLView = new MapLView(createLayer(), true);
+	public void createLayer(final MapSource viewSource, final ArrayList<MapSource> plotSources, LayerParameters lp) {
+		LayerParameters layerParams = null;
+		if(lp!=null)
+			layerParams = lp;
+	
+		final MapLView mapLView = new MapLView(createLayer(), true, layerParams);
 		mapLView.originatingFactory = MapLViewFactory.this;
-		cb.receiveNewLView(mapLView);
+		LManager.receiveNewLView(mapLView);
 		
 		if (viewSource != null) {
 			viewSource.getMapAttr(new MapAttrReceiver() {
@@ -516,33 +576,58 @@ public class MapLViewFactory extends LViewFactory {
 					try {
 						setViewSource(((MapLayer)mapLView.getLayer()).mapSettingsDialog, viewSource);
 					} catch (Exception e) {
-						JOptionPane.showMessageDialog(Main.getLManager(),
+						e.printStackTrace();
+						JOptionPane.showMessageDialog(LManager.getDisplayFrame(),
 							"Exception: "+e.toString()+" creating layer for "+viewSource.toString(),
 							"Error creating layer for "+viewSource.toString()+"!", JOptionPane.ERROR_MESSAGE);
 
 					}
 				}
 			});
+		} else {
+			// This block handles the case of using the old-style add menu and selecting 'Plot Only'
+			if (plotSources.size()>0) {
+				final MapSource plotSource = plotSources.get(0);
+				plotSource.getMapAttr(new MapAttrReceiver() {
+					public void receive(MapAttr attr) {
+						try {
+							setPlotSource(((MapLayer)mapLView.getLayer()).mapSettingsDialog, plotSource);
+						} catch (Exception e) {
+							JOptionPane.showMessageDialog(LManager.getDisplayFrame(),
+								"Exception: "+e.toString()+" creating layer for "+plotSource.toString(),
+								"Error creating layer for "+plotSource.toString()+"!", JOptionPane.ERROR_MESSAGE);
+						}
+					}
+				});
+				return;
+			}			
 		}
 		
-		if (plotSource != null) {
-			plotSource.getMapAttr(new MapAttrReceiver() {
-				public void receive(MapAttr attr) {
-					try {
-						setPlotSource(((MapLayer)mapLView.getLayer()).mapSettingsDialog, plotSource);
-					} catch (Exception e) {
-						JOptionPane.showMessageDialog(Main.getLManager(),
-							"Exception: "+e.toString()+" creating layer for "+plotSource.toString(),
-							"Error creating layer for "+plotSource.toString()+"!", JOptionPane.ERROR_MESSAGE);
-					}
-				}
-			});
+		if (plotSources.size()>0) {	
+			Pipeline pipeline[] = new Pipeline[plotSources.size()];
+			
+			for (int i=0; i<plotSources.size(); i++) {
+				pipeline[i]=new Pipeline(plotSources.get(i), new Stage[]{(CompositeStage)(new BandAggregatorSettings(plotSources.size())).createStage()});
+			}
+		
+			try {
+				(((MapLayer)mapLView.getLayer()).mapSettingsDialog).getChartPipelineModel().setFromPipeline(
+						pipeline, (CompositeStage)(new BandAggregatorSettings(plotSources.size())).createStage());
+			} catch (Exception e) {
+				JOptionPane.showMessageDialog(LManager.getLManager(),
+				"Exception: "+e.toString()+" creating layer for "+plotSources.toString(),
+				"Error creating layer for "+plotSources.toString()+"!", JOptionPane.ERROR_MESSAGE);				
+			}
 		}
 	}
 	
 	/** Creates and returns an empty MapLayer */
 	private static MapLayer createLayer() {
-		return new MapLayer(new MapSettingsDialog(Main.getLManager()));
+		return new MapLayer(new MapSettingsDialog(LManager.getDisplayFrame()));
+	}
+	
+	private static MapLayer createLayer(JFrame context) {
+		return new MapLayer(new MapSettingsDialog(context));
 	}
 	
 	/** Configures map source as the view */
@@ -559,7 +644,7 @@ public class MapLViewFactory extends LViewFactory {
 		dlg.firePipelineEvent();
 	}
 	
-	private void createCustomProc(Callback cb) {
-		createLView(cb);
+	private void createCustomProc() {
+		createLView(true);
 	}
 }

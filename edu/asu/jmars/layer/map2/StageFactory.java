@@ -1,61 +1,41 @@
-// Copyright 2008, Arizona Board of Regents
-// on behalf of Arizona State University
-// 
-// Prepared by the Mars Space Flight Facility, Arizona State University,
-// Tempe, AZ.
-// 
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-// 
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU General Public License for more details.
-// 
-// You should have received a copy of the GNU General Public License
-// along with this program.  If not, see <http://www.gnu.org/licenses/>.
-
-
 package edu.asu.jmars.layer.map2;
 
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 import edu.asu.jmars.layer.map2.stages.ColorStretcherStageSettings;
 import edu.asu.jmars.layer.map2.stages.ContourStageSettings;
 import edu.asu.jmars.layer.map2.stages.GrayscaleStageSettings;
+import edu.asu.jmars.layer.map2.stages.LowPassFilterStageSettings;
+import edu.asu.jmars.layer.map2.stages.ShadeStageSettings;
+import edu.asu.jmars.layer.map2.stages.ThresholdSettings;
 
 /**
  * Factory to create instances of Stages.
  */
 public final class StageFactory {
 	static StageFactory instance;
-	private final List<Stage> singleIOStages;
-	private StageFactory() {
-		singleIOStages = new ArrayList<Stage>();
-		singleIOStages.add(getStageInstance(ColorStretcherStageSettings.stageName));
-		singleIOStages.add(getStageInstance(GrayscaleStageSettings.stageName));
-		singleIOStages.add(getStageInstance(ContourStageSettings.stageName));
-	}
+	private final Map<String,Stage> singleIOStages;
 	
-	/**
-	 * Returns a StageFactory instance.
-	 */
-	public static StageFactory instance(){
-		if (instance == null)
-			instance = new StageFactory();
-		return instance;
+	public StageFactory() {
+		singleIOStages = new LinkedHashMap<String,Stage>();
+		singleIOStages.put(ColorStretcherStageSettings.stageName,(new ColorStretcherStageSettings()).createStage());
+		singleIOStages.put(GrayscaleStageSettings.stageName,(new GrayscaleStageSettings()).createStage());
+		singleIOStages.put(ContourStageSettings.stageName,(new ContourStageSettings()).createStage());
+		singleIOStages.put(ThresholdSettings.stageName,(new ThresholdSettings()).createStage());
+		singleIOStages.put(ShadeStageSettings.stageName,(new ShadeStageSettings()).createStage());
+		singleIOStages.put(LowPassFilterStageSettings.stageName,(new LowPassFilterStageSettings()).createStage());
 	}
 	
 	/**
 	 * Returns an unmodifiable list of single input single output
 	 * Stages.
 	 */
-	public List<Stage> getAllSingleIOStages(){
-		return Collections.unmodifiableList(singleIOStages);
+	public List<Stage> getAllSingleIOStages() {
+		return Collections.unmodifiableList(new ArrayList<Stage>(singleIOStages.values()));
 	}
 	
 	/**
@@ -64,15 +44,8 @@ public final class StageFactory {
 	 * within the stages. Only a handful of single input/output 
 	 * stages are supported at this time.
 	 */
-	public static Stage getStageInstance(String name) {
-		if (name.equals(GrayscaleStageSettings.stageName)) {
-			return (new GrayscaleStageSettings()).createStage();
-		} else if (name.equals(ColorStretcherStageSettings.stageName)) {
-			return (new ColorStretcherStageSettings()).createStage();
-		} else if (name.equals(ContourStageSettings.stageName)) {
-			return (new ContourStageSettings()).createStage();
-		} else {
-			return null;
-		}
+	public Stage getStageInstance(String name) {
+		Stage returnStage = singleIOStages.get(name);
+		return returnStage;
 	}
 }

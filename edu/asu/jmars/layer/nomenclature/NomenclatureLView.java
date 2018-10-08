@@ -1,23 +1,3 @@
-// Copyright 2008, Arizona Board of Regents
-// on behalf of Arizona State University
-// 
-// Prepared by the Mars Space Flight Facility, Arizona State University,
-// Tempe, AZ.
-// 
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-// 
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU General Public License for more details.
-// 
-// You should have received a copy of the GNU General Public License
-// along with this program.  If not, see <http://www.gnu.org/licenses/>.
-
-
 package edu.asu.jmars.layer.nomenclature;
 
 import java.awt.BasicStroke;
@@ -39,6 +19,8 @@ import java.awt.geom.Dimension2D;
 import java.awt.geom.Point2D;
 import java.awt.geom.Rectangle2D;
 import java.io.BufferedReader;
+import java.io.File;
+import java.io.FileInputStream;
 import java.io.FileReader;
 import java.io.InputStreamReader;
 import java.text.DecimalFormat;
@@ -72,12 +54,17 @@ import edu.asu.jmars.Main;
 import edu.asu.jmars.graphics.SpatialGraphics2D;
 import edu.asu.jmars.graphics.SpatialGraphicsCyl;
 import edu.asu.jmars.layer.FocusPanel;
+import edu.asu.jmars.layer.InvestigateData;
 import edu.asu.jmars.layer.LViewSettings;
 import edu.asu.jmars.layer.Layer;
+import edu.asu.jmars.util.Config;
 import edu.asu.jmars.util.DebugLog;
+import edu.asu.jmars.util.HighResExport;
+import edu.asu.jmars.util.Util;
 
 /* Class for Nomenclature layerview */
 public class NomenclatureLView extends Layer.LView {
+	public static final String NOMENCLATURE_DIR = "nomenclature/";// @since change bodies
 	private static final DecimalFormat f = new DecimalFormat("0.###");
 	private static DebugLog log = DebugLog.instance();
 
@@ -105,9 +92,12 @@ public class NomenclatureLView extends Layer.LView {
 		 */
 
 		try {
-			BufferedReader in = new BufferedReader(
-				new InputStreamReader(
-					Main.getResourceAsStream("resources/mars_features.txt")));
+			// @since change bodies
+			File nomenclatureFile = NomenclatureLView.getFeaturesFile();
+			FileInputStream fis = new FileInputStream(nomenclatureFile);
+			InputStreamReader isr = new InputStreamReader(fis, "utf-8");
+			BufferedReader in = new BufferedReader(isr);
+			// end change bodies
 			String lineIn = in.readLine();
 			while (lineIn != null && lineIn.compareToIgnoreCase("STOP") != 0) {
 				MarsFeature mf = new MarsFeature();
@@ -140,25 +130,41 @@ public class NomenclatureLView extends Layer.LView {
 
 		// define default items to show
 		if (settings.showLandmarkTypes.size() == 0) {
-			settings.showLandmarkTypes.add("Crater");
-			settings.showLandmarkTypes.add("Mons");
+			// @since change bodies
+			String defaultLandmarkType = Config.get(Util.getProductBodyPrefix()+Config.CONFIG_DEFAULT_LANDMARK_TYPE);
+			if (defaultLandmarkType != null && !"".equals(defaultLandmarkType)) {
+				settings.showLandmarkTypes.add(defaultLandmarkType);
+			} else {
+				if (landmarks != null && landmarks.size() > 0) {
+					settings.showLandmarkTypes.add(landmarks.get(0).landmarkType);
+				}
+			}
+			// end change bodies
 		}
-	}
 
+	}
+	/**
+	* @since change bodies
+	*/
+	public static File getFeaturesFile() {
+		//check if there is a new version of the nomenclature for this body
+		//with this check, we can eliminate the features.txt files from the jar file if we choose - KJR 1/4/12
+		String featureFileName = Main.getBody().toLowerCase() + "_features.txt";
+		String remoteUrl = Config.get(Config.CONTENT_SERVER) + NOMENCLATURE_DIR + featureFileName;
+		return Util.getCachedFile(remoteUrl, true);
+	}
 	/**
 	 * This is good - build the focus panel on demand instead of during the
 	 * view's constructor. That way, the saved session variables get propogated
 	 * properly.
 	 */
 	public FocusPanel getFocusPanel() {
-		if (focusPanel == null)
-			focusPanel = new DelayedFocusPanel() {
-				public JPanel createFocusPanel() {
-					JPanel spacing = new JPanel(new BorderLayout());
-					spacing.add(new NomenclaturePanel(), BorderLayout.CENTER);
-					return spacing;
-				}
-			};
+		if (focusPanel == null){
+			focusPanel = new FocusPanel(this,true);
+			JScrollPane nomAdjustments = new JScrollPane(new NomenclaturePanel(), JScrollPane.VERTICAL_SCROLLBAR_AS_NEEDED, JScrollPane.HORIZONTAL_SCROLLBAR_AS_NEEDED);
+			nomAdjustments.getVerticalScrollBar().setUnitIncrement(10);
+			focusPanel.add("Adjustments", nomAdjustments);
+		}
 		return focusPanel;
 	}
 
@@ -193,14 +199,27 @@ public class NomenclatureLView extends Layer.LView {
 			getChild().repaint();
 		}
 	}
-
-	private void redraw() {
+	
+	private synchronized void redraw() {
 		labelFont = getFont().deriveFont(Font.BOLD);
+		
+		float zoomFactor = 1.0f;
+		
+		if (HighResExport.exporting) {
+			zoomFactor = HighResExport.zoomFactor;
+		}
+		
+		labelFont = labelFont.deriveFont((float)(labelFont.getSize()*zoomFactor));
+		
 		labelLocations.clear();
 		clearOffScreen();
 		
 		Graphics2D g1 = getOffScreenG2Direct();
-		g1.setFont(getFont().deriveFont(Font.BOLD));
+		if (g1 == null) {
+			return;
+		}
+		
+		g1.setFont(labelFont);
 		g1.setColor(settings.labelColor);
 		
 		Graphics2D g2 = getOffScreenG2();
@@ -269,7 +288,6 @@ public class NomenclatureLView extends Layer.LView {
 			return "";
 
 		try {
-
 			Point2D mouseWorld = getProj().screen.toWorld(event.getPoint());
 			return getStringForPoint(mouseWorld, true);
 		} catch (Exception ex) {
@@ -279,6 +297,31 @@ public class NomenclatureLView extends Layer.LView {
 		return "";
 	}
 
+// Used to display information for InvestigateTool
+	public InvestigateData getInvestigateData(MouseEvent event){
+		InvestigateData invData = new InvestigateData(getName());
+		
+		Point2D worldPoint = getProj().screen.toWorld(event.getPoint());
+		Set<MarsFeature> copyKeys = new HashSet<MarsFeature>(labelLocations.keySet());
+		
+		for (MarsFeature mf: copyKeys) {
+			Rectangle2D r = labelLocations.get(mf);
+
+			if (settings.showLandmarkTypes.contains(mf.landmarkType)) {
+				if (r != null
+						&& r.contains(worldPoint)
+						|| r.contains(new Point2D.Double(worldPoint.getX() - 360.0,
+								worldPoint.getY()))) {
+					String key = mf.name+" ("+f.format((360-mf.longitude)%360)+"E, "+f.format(mf.latitude)+"N)";
+					String val = "Diameter="+mf.diameter+"km. Origin="+mf.origin;
+					
+					invData.add(key, val);
+				}
+			}
+		}
+		return invData;
+	}
+	
 	protected String getStringForPoint(Point2D worldPoint, boolean showAsHTML) {
 		for (MarsFeature mf: labelLocations.keySet()) {
 			Rectangle2D r = labelLocations.get(mf);
@@ -323,6 +366,14 @@ public class NomenclatureLView extends Layer.LView {
 		}
 	}
 
+	/**
+	 * Clear the settings so if the factory uses this object again, the settings do not remain. 
+	 * @since change bodies
+	 */
+	public void clearSettings() {
+		settings = new NomenclatureSettings();
+	}
+	
 	private class NomenclaturePanel extends JPanel implements ActionListener, ListSelectionListener {
 		JCheckBox chkShowMainPoints;
 		JCheckBox chkShowPannerPoints;
@@ -403,7 +454,7 @@ public class NomenclatureLView extends Layer.LView {
 
 			JPanel p3 = new JPanel(new BorderLayout());
 			p3.setBorder(BorderFactory.createCompoundBorder(BorderFactory
-					.createTitledBorder("Selected Landmarks:"), BorderFactory
+					.createTitledBorder("Selected Landmarks Types:"), BorderFactory
 					.createEmptyBorder(5, 5, 5, 5)));
 
 			box.add(p3);
@@ -785,6 +836,10 @@ public class NomenclatureLView extends Layer.LView {
 
 			Rectangle2D worldwin = getProj().getWorldWindow();
 
+			if (HighResExport.exporting) {
+				worldwin = HighResExport.fullExportExtent;
+			}
+			
 			for (int i = 0; i < worldPoints.length; i++) {
 
 				if (!worldwin.contains(worldPoints[i]))
@@ -796,10 +851,6 @@ public class NomenclatureLView extends Layer.LView {
 			}
 		}
 
-		protected void drawPoint(Graphics2D g2) {
-			drawPoint(g2, this.thisWorldPoint);
-		}
-
 		protected void drawPoint(Graphics2D g2, Point2D worldPoint) {
 			if (!settings.showMainPoints && getChild() != null)
 				return;
@@ -808,6 +859,14 @@ public class NomenclatureLView extends Layer.LView {
 				return;
 
 			Dimension2D pSize = getProj().getPixelSize();
+			int zoomFactor = 1;
+			
+			if (HighResExport.exporting) {
+				zoomFactor = HighResExport.zoomFactor;
+			}
+			
+			pSize.setSize(pSize.getWidth()*zoomFactor, pSize.getHeight()*zoomFactor);
+			
 			g2.setPaint(settings.pointColor);
 			g2.setStroke(new BasicStroke(0));
 			Rectangle2D.Double box = new Rectangle2D.Double(worldPoint.getX()
@@ -888,4 +947,13 @@ public class NomenclatureLView extends Layer.LView {
 			g1.drawString(name, (float) pt.getX(), (float) pt.getY());
 		}
 	}
+	
+//The following two methods are used to query for the
+// info panel fields (description, citation, etc)	
+ 	public String getLayerKey(){
+ 		return "Nomenclature";
+ 	}
+ 	public String getLayerType(){
+ 		return "nomenclature";
+ 	}
 }

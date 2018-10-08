@@ -1,40 +1,29 @@
-// Copyright 2008, Arizona Board of Regents
-// on behalf of Arizona State University
-// 
-// Prepared by the Mars Space Flight Facility, Arizona State University,
-// Tempe, AZ.
-// 
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-// 
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU General Public License for more details.
-// 
-// You should have received a copy of the GNU General Public License
-// along with this program.  If not, see <http://www.gnu.org/licenses/>.
-
-
 package edu.asu.jmars.layer.map2;
 
+import java.awt.BorderLayout;
+import java.awt.Color;
 import java.awt.Component;
 import java.awt.Cursor;
+import java.awt.Font;
 import java.awt.Frame;
 import java.awt.GridBagConstraints;
 import java.awt.GridBagLayout;
+import java.awt.GridLayout;
 import java.awt.Insets;
+import java.awt.event.MouseAdapter;
+import java.awt.event.MouseEvent;
 import java.awt.event.ActionEvent;
 import java.awt.event.ActionListener;
 import java.awt.geom.Rectangle2D;
 import java.io.File;
-import java.net.MalformedURLException;
 import java.net.URL;
 import java.text.MessageFormat;
+import java.util.Scanner;
 
+import javax.swing.BorderFactory;
 import javax.swing.Box;
+import javax.swing.BoxLayout;
+import javax.swing.ButtonGroup;
 import javax.swing.JButton;
 import javax.swing.JCheckBox;
 import javax.swing.JComponent;
@@ -43,17 +32,30 @@ import javax.swing.JFileChooser;
 import javax.swing.JLabel;
 import javax.swing.JOptionPane;
 import javax.swing.JPanel;
+import javax.swing.JRadioButton;
+import javax.swing.JScrollPane;
+import javax.swing.JTextArea;
 import javax.swing.JTextField;
+import javax.swing.UIManager;
+import javax.swing.event.MouseInputAdapter;
 import javax.swing.SwingUtilities;
 import javax.swing.border.EmptyBorder;
+import javax.swing.border.TitledBorder;
 import javax.swing.event.DocumentEvent;
 import javax.swing.event.DocumentListener;
+import javax.swing.text.Caret;
 
 import edu.asu.jmars.swing.CustomTabOrder;
+import edu.asu.jmars.util.Config;
 import edu.asu.jmars.util.DebugLog;
+import edu.asu.jmars.util.JmarsHttpRequest;
 import edu.asu.jmars.util.Util;
+import edu.asu.jmars.util.HttpRequestType;
 
 public class FileUploadDialog extends JDialog {
+	private String defaultdescTxt = "This is an optional description that will be attached to this " +
+	"custom map and displayed in the info panel (for anyone who has access to it, initial and shared users).";
+
 	private static final long serialVersionUID = 2L;
 	private static DebugLog log = DebugLog.instance();
 	
@@ -66,9 +68,25 @@ public class FileUploadDialog extends JDialog {
 	private JTextField south = new JTextField(2);
 	private JTextField west = new JTextField(2);
 	private JTextField east = new JTextField(2);
+	private JTextArea description = new JTextArea(defaultdescTxt);
 	private JCheckBox email = new JCheckBox("Email when ready");
+	private JCheckBox geoRef = new JCheckBox("Contained in image");
 	private JButton uploadPB = new JButton("Upload");
 	private JButton cancelPB = new JButton("Cancel");
+	private JLabel supportedPB = new JLabel("<html><u><font color=#0000FF>List of supported file formats</font></u></html>");
+	
+	JRadioButton global = new JRadioButton("Global Map");
+	JRadioButton regional = new JRadioButton("Regional Image");
+	
+	JLabel eastLonLbl = new JLabel("Easternmost Longitude (\u00b0E)  ", JLabel.TRAILING);
+	JLabel westLonLbl = new JLabel("Westernmost Longitude (\u00b0E)  ", JLabel.TRAILING);
+	JRadioButton degreeE = new JRadioButton("\u00b0E");
+	JRadioButton degreeW = new JRadioButton("\u00b0W");
+	
+	// hidden radio button to deselect other options
+	JRadioButton unselected = new JRadioButton("Unselected"); 
+
+	private boolean regionSet = false;
 	
 	/** Creates a simple file chooser for the custom maps */
 	public static JFileChooser createDefaultChooser() {
@@ -94,8 +112,11 @@ public class FileUploadDialog extends JDialog {
 		super(parent, "Upload File", true);
 		this.fileChooser = chooser == null ? createDefaultChooser() : chooser;
 		this.customMapServer = customMapServer;
+		setResizable(false);
 		setContentPane(createMain());
 		pack();
+		setLocationRelativeTo(parent);
+		Util.addEscapeAction(this);
 		setDefaultCloseOperation(JDialog.HIDE_ON_CLOSE);
 	}
 	
@@ -130,6 +151,19 @@ public class FileUploadDialog extends JDialog {
 					error(name, "Must provide a remote name to identify this map");
 					return;
 				}
+				
+				// check for invalid file name chars
+				String rawInput = name.trim();
+				if (!rawInput.matches("^[\\w\\s-_.@]*$")) {
+					JOptionPane.showMessageDialog(remoteName.getRootPane(), "You have entered illegal map name characters.\n " +
+							"Only the following characters are allowed:\n " +
+							"A-Z a-z 0-9 - _ . @ <space>", 
+							"File Name Input Error", JOptionPane.ERROR_MESSAGE);
+					return;
+				}
+				
+				
+				
 				boolean titleUsed = false;
 				for (MapSource source: customMapServer.getMapSources()) {
 					if (source.getTitle().equals(name)) {
@@ -154,6 +188,15 @@ public class FileUploadDialog extends JDialog {
 						double maxx = Double.parseDouble(east.getText().trim());
 						double miny = Double.parseDouble(south.getText().trim());
 						double maxy = Double.parseDouble(north.getText().trim());
+						// If degrees west is selected, convert to East first...
+						if(degreeW.isSelected()){
+							if(minx < 0) minx = minx+360;
+							else minx = 360-minx;
+							
+							if(maxx<0) maxx=maxx+360;
+							else maxx = 360-maxx;
+						}
+						
 						if (minx < 0) {
 							minx += 360;
 							maxx += 360;
@@ -171,19 +214,22 @@ public class FileUploadDialog extends JDialog {
 					
 					boolean mail = email.isSelected();
 					
+					String desc = description.isEditable() ? description.getText() : "";
+					
 					log.println(MessageFormat.format(
-						"Uploading {0} to {1}, ignore {2}, bounds {3}, email {4}",
+						"Uploading {0} to {1}, ignore {2}, bounds {3}, email {4}, description {5}",
 						path,
 						customMapServer.getURI(),
 						ignore==null?"unspecified":ignore.toString(),
 						bounds==null?"unspecified":bounds.toString(),
-						mail ? "yes" : "no"));
+						mail ? "yes" : "no",
+						desc));
 					
 					// creates a new task for this upload off the AWT thread so
 					// the user can potentially do other things while waiting, and moves
 					// the onUpload callback into the task so the dialog doesn't have
 					// to hold it
-					currentTask.setArgs(name, path, bounds, ignore, mail);
+					currentTask.setArgs(name, path, bounds, ignore, mail, desc, geoRef.isSelected());
 					Thread uploadThread = new Thread(currentTask);
 					uploadThread.setName("Custom upload thread");
 					uploadThread.setPriority(Thread.MIN_PRIORITY);
@@ -196,9 +242,68 @@ public class FileUploadDialog extends JDialog {
 		
 		cancelPB.addActionListener(new ActionListener() {
 			public void actionPerformed(ActionEvent e) {
+				description.setText(defaultdescTxt);
+				description.setEditable(false);
+				description.setForeground(Color.GRAY);
 				stopAndClose();
 			}
 		});
+		
+		supportedPB.addMouseListener(new MouseAdapter() {
+			public void mouseClicked(MouseEvent event) {
+					String str = null;
+					String supported_url = Config.get("supportedfileformatspage");
+					try {
+/*						URLConnection connection = null;
+						connection =  new URL(supported_url).openConnection();
+						
+						// This code reads the entire web page at once and stores it in str
+							
+						Scanner scanner = new Scanner(connection.getInputStream());
+						scanner.useDelimiter("\\Z");
+						str = scanner.next();
+						scanner.close();
+*/						
+						JmarsHttpRequest request = new JmarsHttpRequest(supported_url, HttpRequestType.GET);
+						request.send();
+						
+						Scanner scanner = new Scanner(request.getResponseAsStream());
+						scanner.useDelimiter("\\Z");
+						str = scanner.next();
+						scanner.close();
+						request.close();
+
+						JOptionPane optionPane = new JOptionPane();
+						optionPane.setMessage(str);
+						optionPane.setMessageType(JOptionPane.INFORMATION_MESSAGE);
+						JDialog dialog = optionPane.createDialog(FileUploadDialog.this, "List of supported file formats");
+						dialog.setVisible(true);
+					}
+					catch (Exception e) {
+						log.aprintln("Exception accessing Supported Images URL (in FileUploadDialog)=" + supported_url);
+						log.aprintln(e);
+						JOptionPane.showMessageDialog(FileUploadDialog.this, "General exception occurred while trying to access (" + supported_url + ")");
+					}
+				}
+			});
+	// Fix for the regional erase bug (enter text in these fields before the regional dial
+	//	button is selected and it erases entries when you select the dial)
+		DocumentListener regionalTextFields = new DocumentListener() {
+			public void removeUpdate(DocumentEvent e) {
+			}
+			public void insertUpdate(DocumentEvent e) {
+				if(global.isSelected()==false)
+					regional.setSelected(true);
+					uploadPB.setEnabled(true);
+			}
+			public void changedUpdate(DocumentEvent e) {
+			}
+		};
+		north.getDocument().addDocumentListener(regionalTextFields);
+		south.getDocument().addDocumentListener(regionalTextFields);
+		east.getDocument().addDocumentListener(regionalTextFields);
+		west.getDocument().addDocumentListener(regionalTextFields);
+		
 		
 		nameField.getDocument().addDocumentListener(new DocumentListener() {
 			public void changedUpdate(DocumentEvent e) {
@@ -224,43 +329,213 @@ public class FileUploadDialog extends JDialog {
 					name = new File(name).getName();
 				}
 				remoteName.setText(name);
+
+				if (name.length()>3 && name.substring(name.length()-4).toLowerCase().endsWith(".cub")) {
+					if (!regionSet) {
+						regionSet=true;
+						north.setText("");
+						south.setText("");
+						west.setText("");
+						east.setText("");
+						north.setEnabled(false);
+						south.setEnabled(false);
+						west.setEnabled(false);
+						east.setEnabled(false);
+						global.setEnabled(false);
+						regional.setEnabled(false);
+						unselected.setSelected(true);
+					}
+				} else if (!geoRef.isSelected()) {				
+						north.setEnabled(true);
+						south.setEnabled(true);
+						west.setEnabled(true);
+						east.setEnabled(true);			
+						global.setEnabled(true);
+						regional.setEnabled(true);
+						regionSet=false;
+					
+				}
+				if (regionSet||global.isSelected()||regional.isSelected()||geoRef.isSelected()) {
+					uploadPB.setEnabled(true);
+				} else {
+					uploadPB.setEnabled(false);
+				}
 			}
 		});
 		
-		JPanel main = new JPanel(new GridBagLayout());
+		JPanel mainPanel = new JPanel(new BorderLayout());
+		
+		
+		Box main = new Box(BoxLayout.Y_AXIS);
 		main.setBorder(new EmptyBorder(4,4,4,4));
 		
 		Insets insets = new Insets(4,4,4,4);
 		int padx = 0;
 		int pady=  0;
 		
-		Box buttons = Box.createVerticalBox();
-		buttons.add(Box.createVerticalGlue());
-		buttons.add(uploadPB);
-		buttons.add(Box.createVerticalStrut(insets.top));
-		buttons.add(cancelPB);
+		JPanel step1 = new JPanel(new GridBagLayout());
+		step1.setBorder(new TitledBorder("Step 1: Pick Map to Upload"));
 		
-		main.add(new JLabel("File or URL"), new GridBagConstraints(0,0,1,1,0,0,GridBagConstraints.WEST,GridBagConstraints.HORIZONTAL,insets,padx,pady));
-		main.add(nameField, new GridBagConstraints(2,0,2,1,1,0,GridBagConstraints.WEST,GridBagConstraints.HORIZONTAL,insets,padx,pady));
-		main.add(browsePB, new GridBagConstraints(4,0,1,1,0,0,GridBagConstraints.EAST,GridBagConstraints.NONE,insets,padx,pady));
-		main.add(new JLabel("Map Name"), new GridBagConstraints(0,1,1,1,0,0,GridBagConstraints.WEST,GridBagConstraints.NONE,insets,padx,pady));
-		main.add(remoteName, new GridBagConstraints(2,1,2,1,1,0,GridBagConstraints.WEST,GridBagConstraints.HORIZONTAL,insets,padx,pady));
-		main.add(email, new GridBagConstraints(0,2,5,1,1,0,GridBagConstraints.WEST,GridBagConstraints.HORIZONTAL,insets,padx,pady));
-		main.add(new JLabel(), new GridBagConstraints(0,3,5,1,1,1,GridBagConstraints.WEST,GridBagConstraints.HORIZONTAL,insets,padx,pady));
-		main.add(new JLabel("Advanced Options"), new GridBagConstraints(0,4,5,1,0,0,GridBagConstraints.WEST,GridBagConstraints.NONE,insets,padx,pady));
-		main.add(new JLabel("Ignore Value"), new GridBagConstraints(0,5,1,1,0,0,GridBagConstraints.WEST,GridBagConstraints.NONE,insets,padx,pady));
-		main.add(ignoreField, new GridBagConstraints(2,5,1,1,0.5,0,GridBagConstraints.WEST,GridBagConstraints.HORIZONTAL,insets,padx,pady));
-		main.add(new JLabel("Bounds"), new GridBagConstraints(0,6,1,1,0,0,GridBagConstraints.WEST,GridBagConstraints.NONE,insets,padx,pady));
-		main.add(new JLabel("Northernmost Latitude (\u00b0N)"), new GridBagConstraints(0,7,1,1,0,0,GridBagConstraints.WEST,GridBagConstraints.NONE,insets,padx,pady));
-		main.add(north, new GridBagConstraints(2,7,1,1,0.5,0,GridBagConstraints.WEST,GridBagConstraints.HORIZONTAL,insets,padx,pady));
-		main.add(new JLabel("Southernmost Latitude (\u00b0N)"), new GridBagConstraints(0,8,1,1,0,0,GridBagConstraints.WEST,GridBagConstraints.NONE,insets,padx,pady));
-		main.add(south, new GridBagConstraints(2,8,1,1,0.5,0,GridBagConstraints.WEST,GridBagConstraints.HORIZONTAL,insets,padx,pady));
-		main.add(new JLabel("Westernmost Longitude (\u00b0E)"), new GridBagConstraints(0,9,1,1,0,0,GridBagConstraints.WEST,GridBagConstraints.NONE,insets,padx,pady));
-		main.add(west, new GridBagConstraints(2,9,1,1,0.5,0,GridBagConstraints.WEST,GridBagConstraints.HORIZONTAL,insets,padx,pady));
-		main.add(new JLabel("Eastermost Longitude (\u00b0E)"), new GridBagConstraints(0,10,1,1,0,0,GridBagConstraints.WEST,GridBagConstraints.NONE,insets,padx,pady));
-		main.add(east, new GridBagConstraints(2,10,1,1,0.5,0,GridBagConstraints.WEST,GridBagConstraints.HORIZONTAL,insets,padx,pady));
-		main.add(buttons, new GridBagConstraints(4,7,1,4,0,1,GridBagConstraints.SOUTHEAST,GridBagConstraints.NONE,insets,padx,pady));
+		step1.add(new JLabel("File or URL"), new GridBagConstraints(0,0,1,1,0,0,GridBagConstraints.WEST,GridBagConstraints.NONE,insets,padx,pady));
+
+		GridBagConstraints constraints = new GridBagConstraints ();
+		constraints.gridy = 0;
+		step1.add(nameField, constraints);
+		step1.add(browsePB, new GridBagConstraints(4,0,1,1,0,0,GridBagConstraints.EAST,GridBagConstraints.NONE,insets,padx,pady));
+		constraints.gridy = 1;
+		constraints.gridwidth = 2;
+		constraints.anchor = GridBagConstraints.WEST;
+		step1.add(supportedPB, constraints);
+
+		JPanel step2 = new JPanel();
+		step2.setBorder(new TitledBorder("Step 2: Choose a name for this map in JMARS"));
+
+		step2.add(new JLabel("Map Name"), new GridBagConstraints(0,1,1,1,0,0,GridBagConstraints.WEST,GridBagConstraints.NONE,insets,padx,pady));
+		step2.add(remoteName, new GridBagConstraints(2,1,2,1,1,0,GridBagConstraints.WEST,GridBagConstraints.HORIZONTAL,insets,padx,pady));
 		
+		JPanel step3 = new JPanel(new GridLayout(0,2));
+		step3.setBorder(new TitledBorder("Step 3: Enter spatial information:"));
+		
+		enableSpatialInputs(true);
+		JLabel geoRefLabel = new JLabel("Geospatial data:  ",JLabel.TRAILING);
+		//toolTip for geoRef button
+		geoRefLabel.setToolTipText("Select this box to have JMARS read the Geospatial information from the image. If this image does not have Geospatial information, use one of the other options below.");
+		step3.add(geoRefLabel);
+		geoRef.setSelected(false);
+		geoRef.setToolTipText("Select this box to have JMARS read the Geospatial information from the image. If this image does not have Geospatial information, use one of the other options below.");
+		geoRef.addActionListener(new ActionListener() {
+			
+			public void actionPerformed(ActionEvent e) {
+				if (geoRef.isSelected()) {
+					clearSpatialInputs();
+					enableSpatialInputs(false);
+					uploadPB.setEnabled(true);
+					setGeoMode();
+				} else {
+					enableSpatialInputs(true);
+					if (regionSet||global.isSelected()||regional.isSelected()) {
+						uploadPB.setEnabled(true);
+					} else {
+						uploadPB.setEnabled(false);
+					}
+				}
+			}
+		});
+		step3.add(geoRef);
+		
+		ActionListener selectionChange = new ActionListener(){
+			boolean globalWasSelected=false;
+			public void actionPerformed(ActionEvent e) {
+				if (global.isSelected()) {
+					north.setText("90");
+					south.setText("-90");
+					west.setText("-180");
+					east.setText("180");
+					globalWasSelected=true;
+				} else if (regional.isSelected() && globalWasSelected) {
+					north.setText("");
+					south.setText("");
+					west.setText("");
+					east.setText("");					
+				} else {
+					// Shouldn't be any other cases, do nothing if there are
+				}
+				
+				if (regionSet||global.isSelected()||regional.isSelected()||geoRef.isSelected()) {
+					uploadPB.setEnabled(true);
+				} else {
+					uploadPB.setEnabled(false);
+				}
+
+			}
+		};
+		
+		global.addActionListener(selectionChange);
+		regional.addActionListener(selectionChange);
+		
+		ButtonGroup group = new ButtonGroup();
+		group.add(global);
+		group.add(regional);
+		group.add(unselected);
+		
+		
+		ActionListener degreeChange = new ActionListener(){
+			public void actionPerformed(ActionEvent e){
+				JRadioButton deg = (JRadioButton) e.getSource();
+				westLonLbl.setText("Westernmost Longitude ("+deg.getText()+")  ");
+				eastLonLbl.setText("Easternmost Longitude ("+deg.getText()+")  ");
+			}
+		};
+		
+		degreeE.addActionListener(degreeChange);
+		degreeW.addActionListener(degreeChange);
+		
+		ButtonGroup degreeGroup = new ButtonGroup();
+		degreeGroup.add(degreeE);
+		degreeGroup.add(degreeW);
+		JPanel degreePanel = new JPanel();
+		degreePanel.setLayout(new BoxLayout(degreePanel, BoxLayout.LINE_AXIS));
+		degreePanel.add(Box.createHorizontalStrut(45));
+		degreePanel.add(degreeE);
+		degreePanel.add(Box.createHorizontalStrut(15));
+		degreePanel.add(degreeW);
+		degreeE.setSelected(true);
+		
+		step3.add(global);
+		step3.add(regional);
+		step3.add(new JLabel("Northernmost Latitude (\u00b0N)  ", JLabel.TRAILING));
+		step3.add(north);
+		step3.add(new JLabel("Southernmost Latitude (\u00b0N)  ", JLabel.TRAILING));
+		step3.add(south);
+		step3.add(new JLabel("Longitude Degrees: ", JLabel.TRAILING));
+		step3.add(degreePanel);
+		step3.add(westLonLbl);
+		step3.add(west);
+		step3.add(eastLonLbl);
+		step3.add(east);
+
+		JPanel step4 = new JPanel(new GridBagLayout());
+		step4.setBorder(new TitledBorder("Step 4: Additional options"));
+		step4.add(new JLabel("Ignore Value"), new GridBagConstraints(0,0,1,1,0,0,GridBagConstraints.WEST,GridBagConstraints.NONE,insets,padx,pady));
+		ignoreField.setMaximumSize(ignoreField.getPreferredSize());
+		step4.add(ignoreField, new GridBagConstraints(1,0,1,1,0.5,0,GridBagConstraints.WEST,GridBagConstraints.NONE,insets,padx,pady));
+
+		step4.add(email, new GridBagConstraints(2,0,1,1,1,0,GridBagConstraints.WEST,GridBagConstraints.NONE,insets,padx,pady));
+		step4.add(new JLabel("Description"), new GridBagConstraints(0,1,1,1,0,0,GridBagConstraints.WEST,GridBagConstraints.NONE,insets,padx,pady));
+		description.setBorder(BorderFactory.createLineBorder(Color.GRAY));
+		description.setColumns(34);
+		description.setRows(3);
+		description.setLineWrap(true);
+		description.setWrapStyleWord(true);
+		description.setEditable(false);
+		description.setEnabled(true);
+		description.setForeground(Color.GRAY);
+		final Caret caret = description.getCaret();
+		caret.setSelectionVisible(true);
+		description.addMouseListener(new MouseInputAdapter () {
+			public void mouseClicked(MouseEvent e) {
+				if (!description.isEditable()) {
+					description.setText("");
+					description.setForeground(Color.BLACK);
+					description.setEditable(true);
+					description.setCaret(caret);
+					description.setCaretPosition(0);
+					
+				}
+			}
+		});
+		JScrollPane descScrollPane = new JScrollPane(description);
+		descScrollPane.setVerticalScrollBarPolicy(
+		                JScrollPane.VERTICAL_SCROLLBAR_AS_NEEDED);
+		descScrollPane.setPreferredSize(description.getPreferredScrollableViewportSize());
+		
+		step4.add(descScrollPane, new GridBagConstraints(0,2,3,1,0,0,GridBagConstraints.CENTER,GridBagConstraints.NONE,insets,padx,pady));
+		
+		main.add(step1);
+		main.add(step2);
+		main.add(step3);
+		main.add(step4);
+				
 		// set up hot keys
 		browsePB.setMnemonic('B');
 		uploadPB.setMnemonic('U');
@@ -282,9 +557,74 @@ public class FileUploadDialog extends JDialog {
 		}));
 		main.setFocusTraversalPolicyProvider(true);
 		revertValues();
-		return main;
+
+		JPanel buttonPanel = new JPanel();
+		buttonPanel.add(uploadPB);
+		buttonPanel.add(cancelPB);
+		
+		uploadPB.setEnabled(false);
+		
+		mainPanel.add(main, BorderLayout.CENTER);
+		mainPanel.add(buttonPanel, BorderLayout.SOUTH);
+		return mainPanel;
 	}
 	
+    public void setGeoMode() {
+    	
+    	if(geoRef.isSelected()){
+    		//Display instruction dialog unless indicated in config file
+    		if(Config.get("showGeoRefDialog").equalsIgnoreCase("true")){
+    			JCheckBox chkBox = new JCheckBox("Do not show this message again.");
+    			chkBox.setFont(new Font("Dialog", Font.PLAIN, 12));
+    			chkBox.setAlignmentY(JCheckBox.RIGHT_ALIGNMENT);
+    			Color black = new Color(0,0,0);
+    			JLabel welcomeMessage = new JLabel("Reading Your Geospatial Information");
+    			welcomeMessage.setFont(new Font("Dialog",Font.ITALIC+Font.BOLD,14));
+    			welcomeMessage.setForeground(black);
+    			JTextArea message = new JTextArea("\n" +
+    					"• The Geospatial reader is a new feature to JMARS. It uses GDAL to read\n" +
+    					"the information in your file. If your image is not correctly projected\n" +
+    					"then you may experience inaccuracy. You can upload images with any of the\n" +
+    					"extensions that GDAL uses.\n\n"+
+    					"• If you are experiencing difficulty or inaccuracy when you believe your image\n" +
+    					"should have geospatial information, feel free to contact the JMARS team. We\n" +
+    					"appreciate your feedback while this feature is in Beta mode.\n"); 
+    			message.setEditable(false);
+    			message.setBackground(UIManager.getColor("Panel.background"));
+    			message.setForeground(black);
+    			message.setFont(new Font("Dialog",Font.BOLD,12));
+    			
+    			Object[] params = {welcomeMessage, message, chkBox};
+    			int n =JOptionPane.showConfirmDialog(null, params, "Geospatial Information", JOptionPane.OK_CANCEL_OPTION);
+
+    			if(n == JOptionPane.OK_OPTION){	//if Okay, check the checkbox to set config variable
+    				boolean dontShow = chkBox.isSelected();
+    				if(dontShow){
+    					Config.set("showGeoRefDialog", "false");
+    				}
+    			}else{    //if cancel, return 
+    				return;
+    			}
+    		}
+    	}
+    }
+	
+	private void clearSpatialInputs() {
+		north.setText("");
+		south.setText("");
+		west.setText("");
+		east.setText("");
+	}
+	private void enableSpatialInputs(boolean enabled) {
+		north.setEnabled(enabled);
+		south.setEnabled(enabled);
+		west.setEnabled(enabled);
+		east.setEnabled(enabled);
+		global.setEnabled(enabled);
+		regional.setEnabled(enabled);
+		degreeE.setEnabled(enabled);
+		degreeW.setEnabled(enabled);
+	}
 	private void setDialogWaiting(boolean waiting) {
 		if (waiting) {
 			uploadPB.setEnabled(false);
@@ -300,12 +640,19 @@ public class FileUploadDialog extends JDialog {
 	}
 	
 	private void revertValues() {
-		north.setText("90");
-		south.setText("-90");
-		west.setText("-180");
-		east.setText("180");
+		north.setText("");
+		south.setText("");
+		west.setText("");
+		east.setText("");
 		nameField.setText("");
 		ignoreField.setText("");
+		uploadPB.setEnabled(false);
+		regionSet=false;
+		unselected.setSelected(false);
+		description.setText(defaultdescTxt);
+		description.setEditable(false);
+		description.setForeground(Color.GRAY);
+		unselected.setSelected(true);
 	}
 	
 	/**
@@ -359,16 +706,20 @@ public class FileUploadDialog extends JDialog {
 		private Rectangle2D bounds;
 		private Double ignore;
 		private boolean wantsMail;
+		private String desc;
+		private boolean readGeoRef = false;
 		private final Runnable onUpload;
 		public UploadTask(Runnable onUpload) {
 			this.onUpload = onUpload;
 		}
-		public void setArgs(String name, String path, Rectangle2D bounds, Double ignore, boolean mail) {
+		public void setArgs(String name, String path, Rectangle2D bounds, Double ignore, boolean mail, String desc, boolean readGeoRefData) {
 			this.name = name;
 			this.path = path;
 			this.bounds = bounds;
 			this.ignore = ignore;
 			this.wantsMail = mail;
+			this.desc = desc;
+			this.readGeoRef = readGeoRefData;
 		}
 		public void run() {
 			try {
@@ -382,12 +733,32 @@ public class FileUploadDialog extends JDialog {
 				if (isURL(path)) {
 					// A URL, ask the server to download the file itself
 					URL url = new URL(path);
-					customMapServer.uploadCustomMap(name, url, bounds, ignore, wantsMail);
+					customMapServer.uploadCustomMap(name, url, bounds, ignore, wantsMail, desc, readGeoRef);
 				} else {
 					// A file, upload the file to the server
 					File file = new File(path);
-					customMapServer.uploadCustomMap(name, file, bounds, ignore, wantsMail);
+					customMapServer.uploadCustomMap(name, file, bounds, ignore, wantsMail, desc, readGeoRef);
 				}
+				
+				//we need to sleep for a few seconds off the EventDispatchThread to let caps finish loading
+				//This is a short-term fix. We will find a better way to alert the create layer process that all of the 
+				//listeners  have been notified and that they have finished running. For now, they should finish quickly
+				//and we just need to make sure that they are done before we try to create the layer.
+				if (SwingUtilities.isEventDispatchThread()) {
+					new Thread(new Runnable() {
+						
+						public void run() {
+							try {
+								Thread.sleep(5000);
+							} catch (InterruptedException e) {
+								e.printStackTrace();
+							}
+						}
+					}).start();
+				} else {
+					Thread.sleep(5000);
+				}
+				
 				// on success, either close the dialog, or popup a notice of success
 				SwingUtilities.invokeLater(new Runnable() {
 					public void run() {
@@ -395,8 +766,8 @@ public class FileUploadDialog extends JDialog {
 							stopAndClose();
 						} else {
 							JOptionPane.showMessageDialog(
-								FileUploadDialog.this,
-								Util.foldText("Custom map '" + path + "'' has finished", 60, "\n"),
+								null,
+								Util.foldText("Custom map '" + path + "'' has been uploaded successfully", 60, "\n"),
 								"Custom map uploaded",
 								JOptionPane.INFORMATION_MESSAGE);
 						}

@@ -1,23 +1,3 @@
-// Copyright 2008, Arizona Board of Regents
-// on behalf of Arizona State University
-// 
-// Prepared by the Mars Space Flight Facility, Arizona State University,
-// Tempe, AZ.
-// 
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-// 
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU General Public License for more details.
-// 
-// You should have received a copy of the GNU General Public License
-// along with this program.  If not, see <http://www.gnu.org/licenses/>.
-
-
 package edu.asu.jmars;
 
 import edu.asu.jmars.util.*;
@@ -44,6 +24,11 @@ public class UserProperties extends Object
 	throws IOException
 	{
 	   loadPropertiesFile(f.toString());
+	}
+
+   public UserProperties(InputStream is) throws IOException
+	{
+	   loadPropertiesFile(is);
 	}
 
   public String getProperty(String key) {
@@ -108,6 +93,12 @@ public class UserProperties extends Object
 	throws IOException
 	{
 	   props.load(new FileInputStream(fname));
+	}
+
+   public void loadPropertiesFile(InputStream is)
+	throws IOException
+	{
+	   props.load(is);
 	}
 
    public void savePropertiesFile(String fname)
@@ -197,6 +188,7 @@ public class UserProperties extends Object
         }
         catch (Exception e) {
                 System.out.println(e.toString());
+                e.printStackTrace();
              System.out.println("Error saving key: " + key + " " + e.getMessage());
         }
     }

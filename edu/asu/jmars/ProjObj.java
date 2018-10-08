@@ -1,47 +1,26 @@
-// Copyright 2008, Arizona Board of Regents
-// on behalf of Arizona State University
-// 
-// Prepared by the Mars Space Flight Facility, Arizona State University,
-// Tempe, AZ.
-// 
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-// 
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU General Public License for more details.
-// 
-// You should have received a copy of the GNU General Public License
-// along with this program.  If not, see <http://www.gnu.org/licenses/>.
-
-
 package edu.asu.jmars;
 
-import edu.asu.jmars.graphics.*;
-import edu.asu.jmars.layer.*;
-import edu.asu.jmars.util.*;
-import java.awt.*;
-import java.awt.geom.*;
-import java.io.*;
-import java.util.*;
+import java.awt.Shape;
+import java.awt.geom.GeneralPath;
+import java.awt.geom.Point2D;
+import java.io.BufferedReader;
+import java.io.InputStream;
+import java.io.InputStreamReader;
+import java.util.StringTokenizer;
+
+import edu.asu.jmars.graphics.TransformingIterator;
+import edu.asu.jmars.graphics.TransformingIterator.Transformer;
+import edu.asu.jmars.util.Config;
+import edu.asu.jmars.util.DebugLog;
+import edu.asu.jmars.util.HVector;
+import edu.asu.jmars.util.Util;
 
 
 public abstract class ProjObj
  {
 	private static final DebugLog log = DebugLog.instance();
 
-	protected	final double	noelsNumber=352;
-	protected	final double	noelsHorizontalNumber=360;
-	protected	final double	bensNumber= 88;
-	
-	public abstract double getBucketWidth(double ppd);
-	public abstract double getBucketHeight(double ppd);
 	public abstract double getServerOffsetX();
-	public abstract double getInitial_X();
-	public abstract double getInitial_Y();
 	public abstract double getXMin(double x);
 	public abstract double getUnitWidth();
 	public abstract double getUnitHeight();
@@ -49,26 +28,74 @@ public abstract class ProjObj
 	public abstract String getProjectionSpecialParameters();
 	public abstract double getCircumfrence();
 	public abstract double getDelta(double ppd);
-	public abstract double upperLimit();
-	public abstract double lowerLimit();
 	public abstract double getCenterLon();
 	public abstract double getCenterLat();
 	public abstract Point2D getProjectionCenter();
-
+	
 	public abstract Point2D convSpatialToWorld(Point2D orig);
 	public abstract Point2D convWorldToSpatial(Point2D orig);
-   public Point2D convWorldToSpatialFromProj(MultiProjection proj, Point2D orig) { return orig; }
-
-	public Point2D convSpatialToWorld(double x, double y)
-	 {
-		return  convSpatialToWorld(new Point2D.Double(x,y));
-	 }
-
-	public Point2D convWorldToSpatial(double x, double y)
-	 {
-		return  convWorldToSpatial(new Point2D.Double(x,y));
-	 }
-
+	
+	/** Transforms the given point from world coordinates to spatial coordinates. */
+	public final Transformer worldToSpatial = new Transformer() {
+		public void transform(Point2D.Double p) {
+			p.setLocation(convWorldToSpatial(p));
+		}
+	};
+	
+	/** Transforms the given point from spatial coordinates to world coordinates. */
+	public final Transformer spatialToWorld = new Transformer() {
+		public void transform(Point2D.Double p) {
+			p.setLocation(convSpatialToWorld(p));
+		}
+	};
+	
+	public GeneralPath convSpatialToWorld(Shape orig) {
+		GeneralPath path = new GeneralPath();
+		path.append(new TransformingIterator(orig.getPathIterator(null), spatialToWorld), false);
+		return path;
+	}
+	
+	public GeneralPath convWorldToSpatial(Shape orig) {
+		GeneralPath path = new GeneralPath();
+		path.append(new TransformingIterator(orig.getPathIterator(null), worldToSpatial), false);
+		return path;
+	}
+	
+	public final Transformer worldToSpatialEast = new Transformer() {
+		public void transform(Point2D.Double p) {
+			p.setLocation(convWorldToSpatial(p));
+			p.x = lonNorm(-p.x);
+		}
+	};
+	
+	public final Transformer spatialEastToWorld = new Transformer() {
+		public void transform(Point2D.Double p) {
+			p.x = lonNorm(-p.x);
+			p.setLocation(convSpatialToWorld(p));
+		}
+	};
+	
+    /**
+     * Returns a longitude in the interval [0.0, 360.0).
+     * This method should not be used on longitudes that are
+     * more than 360 degrees outside the included interval;
+     * it will return the expected result, but performance may
+     * be poor.
+     */
+	public static final double lonNorm (double lon) {
+		while (lon < 0.0) lon += 360.0;
+		while (lon >= 360.0) lon -= 360.0;
+		return lon;
+	}
+	
+	public Point2D convSpatialToWorld(double x, double y) {
+		return convSpatialToWorld(new Point2D.Double(x, y));
+	}
+	
+	public Point2D convWorldToSpatial(double x, double y) {
+		return convWorldToSpatial(new Point2D.Double(x, y));
+	}
+	
 	public static class Projection_OC extends ProjObj
 	 {
 		private final HVector up;
@@ -77,8 +104,6 @@ public abstract class ProjObj
 		private double  projCenterLon;
 		private double  projCenterLat;
 		private final HVector center;
-		private double initialX;
-		private double initialY;
 		private static double ROUND = Config.get("projection.round", 0);
 
 		/**
@@ -169,11 +194,6 @@ public abstract class ProjObj
 				projCenterLon = Util.roundToMultiple(projCenterLon, ROUND);
 				projCenterLat = Util.roundToMultiple(projCenterLat, ROUND);
 			}
-
-			Point2D initialPt = convSpatialToWorld(centerLon, centerLat);
-			initialX = initialPt.getX();
-			initialY = initialPt.getY();
-			log.println("initial = " + initialX + "\t" + initialY);
 		 }
 
 		/** Returns the projection center in east-lon ocentric lat */
@@ -193,28 +213,7 @@ public abstract class ProjObj
 			return  center.lat();
 		 }
 
- 		public Point2D convWorldToSpatialFromProj(MultiProjection proj,
-												  Point2D orig)
-		 {
-			return  proj.world.toSpatial(orig);
-		 }
-
-		public double getBucketWidth(double ppd)
-		 {
-				return(noelsHorizontalNumber/ppd);
-		 }
-
-		public double getBucketHeight(double ppd)
-		 {
-			if (ppd >= 4.0)
-				return(noelsNumber/ppd);
-			else
-				return(bensNumber);
-		 }
-
 		public double getServerOffsetX() { return  0.0; }
-		public double getInitial_X()			{ return (initialX);	}
-		public double getInitial_Y()			{ return (initialY);			}
 		public double getXMin(double x)		{ return ( (x < 0 ? ((360-Math.abs(x)%360.)%360.) : x % 360.));			}
 		public double getUnitWidth()			{ return (1.0);		}
 		public double getUnitHeight()			{ return (1.0);			}
@@ -222,8 +221,6 @@ public abstract class ProjObj
 		public String getProjectType()		{ return ("OC");			}
 		public double getCircumfrence()		{ return (360.0);			}
 		public double getDelta(double ppd)				{ return (1.0/ppd);			}
-		public double upperLimit() { return (bensNumber);}
-		public double lowerLimit() { return -(bensNumber);}
 
 		// Locate the center and the "upward" direction vectors
 		public HVector getCenter()
@@ -237,7 +234,6 @@ public abstract class ProjObj
 
 		public String getProjectionSpecialParameters()
 		 {
-			HVector up = getUp();
 			String pars =
 				"&TRACK_centerLat=888&TRACK_centerLon=888" +
 				"&TRACK_upLat=" + upLat +
@@ -273,8 +269,7 @@ public abstract class ProjObj
 		 */
 		public Point2D convSpatialToWorld(Point2D orig)
 		 {
-			HVector pt = marsll2vector(Math.toRadians(orig.getX()),
-									   Math.toRadians(orig.getY()));
+			HVector pt = new HVector(orig);
 			HVector up = getUp();
 			HVector center = getCenter();
 
@@ -293,193 +288,8 @@ public abstract class ProjObj
 		
 	 }
 
-	public static class Projection_SOM extends ProjObj
-	 {
-		public Projection_SOM(double start)
-		 {
-			start = Math.round(start*10) / 10.0;
-			log.println("Initial ET: "
-						+ Math.round(start) + "." + Math.round(start*10)%10);
-			serverOffsetX = start;
-		 }
-
-		public Point2D getProjectionCenter()
-		{
-			return (new Point2D.Double(serverOffsetX,0.));
-		}
-
-		public double getCenterLon()
-		 {
-			return  Double.NaN;
-		 }
-
-		public double getCenterLat()
-		 {
-			return  Double.NaN;
-		 }
-
-		public double getBucketWidth(double ppd)
-		 {
-			int iVal;
-			double val;
-
-			if (ppd >= 8.0)
-				val= noelsNumber / ppd / 360.0 * 7200.0;
-			else
-				val= bensNumber / ppd / 360.0 * 7200.0;
-
-
-			iVal = (int)Math.ceil(val); //First, round up to nearest int;
-
-			if (iVal % 2 != 0) //iVal is odd
-
-				iVal++; //now it's even
-
-			return((double)iVal);
-/*
-			if (ppd >= 8.0)
-				return((((noelsNumber/ppd)/360.0)*7200.0));
-			else
-				return((((bensNumber/ppd)/360.0)*7200.0));
-*/
-
-		 }
-
-		public double getBucketHeight(double ppd)
-		 {
-			if (ppd >= 4.0)
-				return(noelsNumber/ppd);
-			else
-				return(bensNumber);
-		 }
-
-		private double serverOffsetX = 0;
-		public double getServerOffsetX() { return  serverOffsetX; }
-		public double getInitial_X()			{ return (0.0);	}
-		public double getInitial_Y()			{ return (0.0);			}
-		public double getXMin(double x)		{ return (x);			}
-		public double getUnitWidth()			{ return (20.0);		}
-		public double getUnitHeight()			{ return (1.0);			}
-		public String getProjectType()		{ return ("SOM");			}
-		public double getCircumfrence()		{ return (7200.0);			}
-		public double getDelta(double ppd)				{ return (2.0);			}
-		public double upperLimit() { return (bensNumber);}
-		public double lowerLimit() { return -(bensNumber);}
-
-		public String getProjectionSpecialParameters()
-		 {
-			return("&TRACK_format=c");
-		 }
-
-		public Point2D convSpatialToWorld(Point2D orig)
-		 {
-			// for now
-			return  orig;
-		 }
-
-		public Point2D convWorldToSpatial(Point2D orig)
-		 {
-			// for now
-			return  orig;
-		 }
-
-		public Point2D convWorldToSpatialFromProj(MultiProjection proj, Point2D orig)
-		 {
-                    Point2D.Double ret = new Point2D.Double(0,0);
-
-                    GridDataStore grid = GridDataStore.forProj(proj);
-
-                    HVector hv = proj_world_toHVector(grid, orig);
-                    if ( hv != null ) {
-                      ret.x = Math.toDegrees(ProjObj.lon_of(hv));
-                      ret.y = Math.toDegrees(ProjObj.lat_of(hv));
-                    } else {
-                      //just return orig for not
-                      ret.x = orig.getX();
-                      ret.y = orig.getY();
-                    }
-
-                    return ret;
-  		 }
-
-
-
-                 //temp functions stolen from SpatialGraphicsSpOb class - which the
-                //comments say belongs in the projection object. Until it is relocated,
-                //i will use this bastardized one.
-                private HVector proj_world_toHVector(GridDataStore grid, Point2D w)
-                {
-                    HVector result = null;
-
-                    try {
-                      Point cell = grid.getCellPoint(w);
-                      HVector sw = grid.getGridData(cell.x  , cell.y  );
-                      HVector se = grid.getGridData(cell.x+1, cell.y  );
-                      HVector ne = grid.getGridData(cell.x+1, cell.y+1);
-                      HVector nw = grid.getGridData(cell.x  , cell.y+1);
-
-                    Point2D offset = grid.getCellOffset(w, cell);
-                    result = interpolate(offset, sw, se, ne, nw);
-
-                    } catch ( Exception e ) { }
-
-                    return  result;
-                }
-
-                private static HVector interpolate(Point2D offset,
-                                                   HVector sw, HVector se,
-                                                   HVector ne, HVector nw)
-                {
-                  HVector s_normal = sw.cross(se).unit();
-                  HVector n_normal = nw.cross(ne).unit();
-                  HVector e_normal = ne.cross(se).unit();
-                  HVector w_normal = nw.cross(sw).unit();
-
-                  HVector nperc_axis = s_normal.cross(n_normal).unit();
-                  HVector eperc_axis = w_normal.cross(e_normal).unit();
-
-                  double ns_maxangle = Math.acos(s_normal.dot(n_normal));
-                  double ew_maxangle = Math.acos(e_normal.dot(w_normal));
-
-                  //// ABOVE: pre-calculatable / BELOW: dynamic ////
-
-                  double n_angle = ns_maxangle * offset.getY();
-                  HVector ns_interp_normal = s_normal.rotateP(nperc_axis, n_angle);
-
-                  double e_angle = ew_maxangle * offset.getX();
-                  HVector ew_interp_normal = w_normal.rotateP(eperc_axis, e_angle);
-
-                  HVector pt = ew_interp_normal.cross(ns_interp_normal).unit();
-
-                  // Make sure we have the right sign on pt
-                  if(pt.dot(nw) >= 0)
-                          return  pt;
-                  else
-                          return  pt.neg();
-                }
-
-
-	 }
-
 	////////////// BEGIN internal cylindrical routines /////////////
-
-	public static HVector marsll2vector(Point2D pt)
-	 {
-		return  marsll2vector(pt.getX(), pt.getY());
-	 }
 	
-	/**
-	 * @param lon Radians west of the prime meridian
-	 * @param lat Radians north of the equator
-	 * @return The {@link HVector} on the unit sphere for this lon/lat position
-	 */
-	public static HVector marsll2vector(double lon, double lat)
-	 {
-		return  new HVector(Math.cos(lat)*Math.cos(-lon),
-							Math.cos(lat)*Math.sin(-lon),
-							Math.sin(lat));
-	 }
-
 	public static double lat_of(HVector p)
 	 {
 		return  Math.asin(p.unit().z);

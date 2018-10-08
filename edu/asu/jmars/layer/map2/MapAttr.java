@@ -1,27 +1,15 @@
-// Copyright 2008, Arizona Board of Regents
-// on behalf of Arizona State University
-// 
-// Prepared by the Mars Space Flight Facility, Arizona State University,
-// Tempe, AZ.
-// 
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-// 
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU General Public License for more details.
-// 
-// You should have received a copy of the GNU General Public License
-// along with this program.  If not, see <http://www.gnu.org/licenses/>.
-
-
 package edu.asu.jmars.layer.map2;
 
+import java.awt.Dimension;
 import java.awt.image.BufferedImage;
+import java.awt.image.ColorModel;
+import java.awt.image.ComponentColorModel;
 import java.awt.image.DataBuffer;
+import java.util.Arrays;
+
+import edu.asu.jmars.graphics.EmptyColorModel;
+import edu.asu.jmars.util.ImageOrg;
+import edu.asu.jmars.util.Util;
 
 /**
  * Describes a type of map data. The data can consist of any number of planes,
@@ -35,111 +23,74 @@ import java.awt.image.DataBuffer;
  * actually request a sample and create a MapAttr from it.
  */
 public class MapAttr {
-	public static enum ImageType {
-		TYPE_FAILED,
-		TYPE_COLOR,
-		TYPE_GRAY,
-		TYPE_NUMERIC
-	};
-	
-	/** Value designating any number of color components. */
-	public static final int NUM_CC_ANY = -1;
-
 	/** Predefined single band grayscale image MapAttr */
-	public static final MapAttr GRAY        = new MapAttr(1,          DataBuffer.TYPE_BYTE);
+	public static final MapAttr GRAY        = new MapAttr(DataBuffer.TYPE_BYTE, 1, null);
 	/** Predefined three band color image MapAttr */
-	public static final MapAttr COLOR       = new MapAttr(3,          DataBuffer.TYPE_BYTE);
+	public static final MapAttr COLOR       = new MapAttr(DataBuffer.TYPE_BYTE, 3, null);
 	/** Predefined single band image MapAttr */
-	public static final MapAttr SINGLE_BAND = new MapAttr(1,          DataBuffer.TYPE_UNDEFINED);
+	public static final MapAttr SINGLE_BAND = new MapAttr(null, 1, null);
 	/** Predefined any configuration image MapAttr */
-	public static final MapAttr ANY         = new MapAttr(NUM_CC_ANY, DataBuffer.TYPE_UNDEFINED);
-
+	public static final MapAttr ANY         = new MapAttr(null, null, null);
 	
+	/** Data type of each plane, or null if the data type does not matter */
+	private final Integer dataType;
 	
-	/** Data type of each plane */
-	private final int dataType;
+	/** Number of bands, or null if the number does not matter */
+	private final Integer numBands;
 	
-	/** Number of color components */
-	private final int numColorComp;
+	/** Number of bands, or null if the alpha state does not matter */
+	private final Boolean hasAlpha;
 	
 	/** True if the map source was initialized with an image sample that was bad */
 	private final boolean failed;
 	
-	/**
-	 * Create a MapAttr with the given number of color components and data type
-	 * of every component.
-	 * @param numColorComp
-	 * @param dataType
-	 */
-	public MapAttr(int numColorComp, int dataType){
-		this.numColorComp = numColorComp;
+	/** Create a MapAttr with the given data type, color band count, and alpha setting */
+	public MapAttr(Integer dataType, Integer numBands, Boolean hasAlpha) {
 		this.dataType = dataType;
+		this.numBands = numBands;
+		this.hasAlpha = hasAlpha;
 		this.failed = false;
-	}
-	
-	/**
-	 * Returns <code>true</code> if a {@link Stage} consuming tgtAttrs can
-	 * accept this {@link MapAttr} as input.
-	 * @param tgtAttrs Output of {@link Stage#consumes(int)}
-	 */
-	public boolean isCompatible(MapAttr[] tgtAttrs){
-		for(int i=0; i<tgtAttrs.length; i++)
-			if (isCompatible(tgtAttrs[i]))
-				return true;
-		return false;
-	}
-
-	/**
-	 * Returns <code>true</code> if a Stage taking tgtAttr can accept this {@link MapAttr}
-	 * as input.
-	 * @param tgtAttr Target {@link Stage}'s {@link MapAttr}.
-	 */
-	public boolean isCompatible(MapAttr tgtAttr){
-		if (!(tgtAttr.getDataType() == DataBuffer.TYPE_UNDEFINED || tgtAttr.getDataType() == getDataType()))
-			return false;
-		
-		if (!(tgtAttr.getNumColorComp() == MapAttr.NUM_CC_ANY || tgtAttr.getNumColorComp() == getNumColorComp()))
-			return false;
-		
-		return true;
 	}
 	
 	/** Creates a MapAttr by inspecting bands, color model, and raster data type */
 	public MapAttr(BufferedImage sample) {
 		boolean result;
-		int colorCount;
-		int dataType;
+		Boolean hasAlpha;
+		Integer dataType;
+		Integer numBands;
 		try {
-			colorCount = sample.getColorModel().getNumColorComponents();
+			numBands = sample.getColorModel().getNumColorComponents();
+			hasAlpha = sample.getColorModel().hasAlpha();
 			dataType = sample.getSampleModel().getDataType();
 			result = false;
 		} catch (Exception e) {
-			colorCount = NUM_CC_ANY;
-			dataType = DataBuffer.TYPE_UNDEFINED;
+			numBands = null;
+			hasAlpha = null;
+			dataType = null;
 			result = true;
 		}
-		this.numColorComp = colorCount;
+		this.numBands = numBands;
+		this.hasAlpha = hasAlpha;
 		this.dataType = dataType;
 		this.failed = result;
 	}
 	
 	/**
-	 * Get the data type. Has one of the values returned by
-	 * {@link java.awt.image.Raster.DataBuffer#getDataType DataBuffer.getDataType()}
+	 * @return Null if there is no specified data type, otherwise one of the values returned by
+	 * {@link java.awt.image.Raster.DataBuffer#getDataType DataBuffer.getDataType()}.
 	 */
-	public int getDataType() {
+	public Integer getDataType() {
 		return dataType;
 	}
 	
-	/** Returns one of TYPE_GRAY, TYPE_COLOR, or TYPE_NUMERIC */
-	private final ImageType getColorType() {
-		if (failed)
-			return ImageType.TYPE_FAILED;
-		if (numColorComp == 1 && dataType == DataBuffer.TYPE_BYTE)
-			return ImageType.TYPE_GRAY;
-		if (numColorComp == 3 && dataType == DataBuffer.TYPE_BYTE)
-			return ImageType.TYPE_COLOR;
-		return ImageType.TYPE_NUMERIC;
+	/** @return Null if there is no defined alpha, otherwise the Boolean for the presence of alpha */ 
+	public Boolean hasAlpha() {
+		return hasAlpha;
+	}
+	
+	/** @return Null if there is no defined number of color bands, otherwise the count of color bands */
+	public Integer getNumColorComp() {
+		return numBands;
 	}
 	
 	/** When this is true, callers should NOT attempt to get maps through this MapSource */
@@ -147,34 +98,104 @@ public class MapAttr {
 		return failed;
 	}
 	
+	/**
+	 * Returns <code>true</code> if this <code>MapAttr</code> is compatible with
+	 * any of the given <code>MapAttr</code>s.
+	 */
+	public boolean isCompatible(MapAttr[] tgtAttrs){
+		for(int i=0; i<tgtAttrs.length; i++)
+			if (isCompatible(tgtAttrs[i]))
+				return true;
+		return false;
+	}
+	
+	public BufferedImage createCompatibleImage(Dimension size) {
+		return createCompatibleImage(size.width, size.height);
+	}
+	
+	/**
+	 * @return <code>true</code> if the given target type can handle data of this
+	 *         type, meaning the target data type is undefined or equal, the
+	 *         target color band count is undefined or equal, and the target
+	 *         alpha value is undefined or equal.
+	 */
+	public boolean isCompatible(MapAttr tgtAttr) {
+		return (tgtAttr.getDataType() == null || tgtAttr.getDataType().equals(getDataType())) &&
+			(tgtAttr.getNumColorComp() == null || tgtAttr.getNumColorComp().equals(getNumColorComp())) &&
+			(tgtAttr.hasAlpha() == null || tgtAttr.hasAlpha().equals(hasAlpha()));
+	}
+	
+	/**
+	 * Creates an image that will be compatible with this MapAttr; this routine
+	 * should only be called on a fully-defined MapAttr, that does not return null
+	 * from any of the get methods.
+	 */
+	public BufferedImage createCompatibleImage(int width, int height) {
+		if (failed) {
+			throw new IllegalStateException("Cannot create an image from a failed MapAttr");
+		}
+		if (dataType == null) {
+			throw new IllegalStateException("Cannot create an image without a data type");
+		}
+		if (numBands == null) {
+			throw new IllegalStateException("Cannot create an image without a number of bands");
+		}
+		if (hasAlpha == null) {
+			throw new IllegalStateException("Cannot create an image without an alpha requirement");
+		}
+		if (isColor()) {
+			if (hasAlpha) {
+				return new BufferedImage(width, height, BufferedImage.TYPE_INT_ARGB);
+			} else {
+				return new BufferedImage(width, height, BufferedImage.TYPE_INT_RGB);
+			}
+		} else if (isGray()) {
+			if (hasAlpha) {
+				int[] bits = new int[numBands];
+				Arrays.fill(bits, DataBuffer.getDataTypeSize(dataType));
+				ColorModel cm = new ComponentColorModel(Util.getLinearGrayColorSpace(),
+						bits, hasAlpha, false, hasAlpha? ColorModel.TRANSLUCENT: ColorModel.OPAQUE, dataType);
+				return ImageOrg.BSQ.createImage(dataType, width, height, 2, cm);
+			} else {
+				return new BufferedImage(width, height, BufferedImage.TYPE_BYTE_GRAY);
+			}
+		} else {
+			if (hasAlpha) {
+				throw new IllegalStateException("Unable to create numeric image with an alpha band");
+			} else {
+				return ImageOrg.BIP.createImage(dataType, width, height, numBands, new EmptyColorModel());
+			}
+		}
+	}
+	
 	public boolean isColor() {
-		return getColorType().equals(ImageType.TYPE_COLOR);
+		return !failed && numBands != null && dataType != null && numBands == 3 && dataType == DataBuffer.TYPE_BYTE;
 	}
 	
 	public boolean isGray() {
-		return getColorType().equals(ImageType.TYPE_GRAY);
+		return !failed && numBands != null && dataType != null && numBands == 1 && dataType == DataBuffer.TYPE_BYTE;
 	}
 	
 	public boolean isNumeric() {
-		return getColorType().equals(ImageType.TYPE_NUMERIC);
-	}
-	
-	public int getNumColorComp() {
-		return numColorComp;
+		return !failed && !isColor() && !isGray();
 	}
 	
 	public String toString(){
 		String typeName;
-		switch(getDataType()){
-		case DataBuffer.TYPE_BYTE:   typeName = "byte";   break;
-		case DataBuffer.TYPE_SHORT:  typeName = "short";  break;
-		case DataBuffer.TYPE_USHORT: typeName = "ushort"; break;
-		case DataBuffer.TYPE_INT:    typeName = "int";    break;
-		case DataBuffer.TYPE_FLOAT:  typeName = "float";  break;
-		case DataBuffer.TYPE_DOUBLE: typeName = "double"; break;
-		default:                     typeName = "*"; break;
+		if (dataType == null) {
+			typeName = "*";
+		} else {
+			switch(getDataType()){
+			case DataBuffer.TYPE_BYTE:   typeName = "byte";   break;
+			case DataBuffer.TYPE_SHORT:  typeName = "short";  break;
+			case DataBuffer.TYPE_USHORT: typeName = "ushort"; break;
+			case DataBuffer.TYPE_INT:    typeName = "int";    break;
+			case DataBuffer.TYPE_FLOAT:  typeName = "float";  break;
+			case DataBuffer.TYPE_DOUBLE: typeName = "double"; break;
+			default:                     typeName = "*"; break;
+			}
 		}
 		
-		return "(" + typeName + "," + (getNumColorComp() == NUM_CC_ANY? "*": Integer.toString(getNumColorComp())) + ")";
+		return "(" + typeName + "," + (getNumColorComp() == null ? "*": Integer.toString(getNumColorComp())) + ")";
 	}
 }

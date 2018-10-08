@@ -1,26 +1,8 @@
-// Copyright 2008, Arizona Board of Regents
-// on behalf of Arizona State University
-// 
-// Prepared by the Mars Space Flight Facility, Arizona State University,
-// Tempe, AZ.
-// 
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-// 
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU General Public License for more details.
-// 
-// You should have received a copy of the GNU General Public License
-// along with this program.  If not, see <http://www.gnu.org/licenses/>.
-
-
 package edu.asu.jmars.layer.stamp.focus;
 
+import java.awt.Color;
 import java.awt.Dimension;
+import java.awt.Frame;
 import java.awt.Point;
 import java.awt.Rectangle;
 import java.awt.datatransfer.Clipboard;
@@ -31,11 +13,9 @@ import java.awt.event.KeyAdapter;
 import java.awt.event.KeyEvent;
 import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
-import java.io.ObjectInputStream;
-import java.io.OutputStreamWriter;
-import java.net.URL;
-import java.net.URLConnection;
+import java.io.File;
 import java.text.DecimalFormat;
+import java.text.NumberFormat;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashSet;
@@ -43,23 +23,36 @@ import java.util.List;
 import java.util.Set;
 import java.util.Vector;
 
+import javax.swing.Box;
+import javax.swing.BoxLayout;
+import javax.swing.DefaultCellEditor;
+import javax.swing.JCheckBox;
 import javax.swing.JLabel;
-import javax.swing.JMenu;
 import javax.swing.JMenuItem;
+import javax.swing.JOptionPane;
+import javax.swing.JPanel;
 import javax.swing.JPopupMenu;
 import javax.swing.SwingUtilities;
 import javax.swing.ToolTipManager;
 import javax.swing.table.DefaultTableCellRenderer;
 import javax.swing.table.TableColumn;
 
+import org.json.JSONArray;
+import org.json.JSONObject;
+
 import edu.asu.jmars.Main;
 import edu.asu.jmars.layer.stamp.StampLView;
 import edu.asu.jmars.layer.stamp.StampLayer;
+import edu.asu.jmars.layer.stamp.StampMenu;
 import edu.asu.jmars.layer.stamp.StampShape;
 import edu.asu.jmars.layer.stamp.StampLayer.StampSelectionListener;
-import edu.asu.jmars.layer.stamp.functions.RenderFunction;
+import edu.asu.jmars.swing.ColorCell;
 import edu.asu.jmars.swing.STable;
+import edu.asu.jmars.swing.TableColumnAdjuster;
 import edu.asu.jmars.swing.ValidClipboard;
+import edu.asu.jmars.util.Config;
+import edu.asu.jmars.util.Util;
+import edu.asu.jmars.util.stable.ColumnDialog;
 import edu.asu.jmars.util.stable.FilteringColumnModel;
 import edu.asu.jmars.util.stable.Sorter;
 
@@ -102,6 +95,8 @@ public class StampTable extends STable implements StampSelectionListener
 		
 		setAutoscrolls(true);
 	}
+	
+	public boolean limitToMainView=false;
 
 	StampLView myLView;
 
@@ -117,8 +112,8 @@ public class StampTable extends STable implements StampSelectionListener
 	
 	public StampTable(StampLView newView)
 	{
-		super();
-		
+		super(newView.stampLayer.getInstrument());
+				
 		myLView = newView;
 		
 		setUnsortedTableModel(getTableModel());
@@ -129,10 +124,17 @@ public class StampTable extends STable implements StampSelectionListener
 		setColumnSelectionAllowed(false);
 		setPreferredScrollableViewportSize(new Dimension(getPreferredSize().width,400));
 
-		addMouseListener( new TableMouseAdapter());
+	    TableMouseAdapter tma = new TableMouseAdapter();
+		addMouseListener(tma);
 		addKeyListener(new TableKeyListener());
 
 		myLView.stampLayer.addSelectionListener(this);
+		
+		setDefaultRenderer(Double.class, new NumberRenderer());
+		
+		setDefaultRenderer(Color.class, new ColorRenderer());
+		
+		getTableHeader();
 	}
 	
 	
@@ -174,6 +176,9 @@ public class StampTable extends STable implements StampSelectionListener
 			// all other updates result in a table change only
 			model.fireTableDataChanged();
 		}        	
+		
+		TableColumnAdjuster tca = new TableColumnAdjuster(this);
+		tca.adjustColumns();
     }
 	
 	/**
@@ -217,7 +222,52 @@ public class StampTable extends STable implements StampSelectionListener
 			}
 		}
 	}
+		
+	class NumberRenderer extends DefaultTableCellRenderer {
+		NumberFormat nf = NumberFormat.getNumberInstance();
+		
+	    public NumberRenderer() { 
+	    	super();
+	    	nf.setMaximumFractionDigits(8);
+	    }
 
+	    public void setValue(Object value) {
+	    	/*
+	    	 * The data from ReadoutTableModel for which NumberRenderer is used in conjunction with
+	    	 * contains NaNs for the MapSources for which we haven't received any data as yet.
+	    	 */
+	        setText((value == null) ? "" : (Double.isNaN(((Number)value).doubleValue())? "NaN": nf.format(value)));
+	    }  
+	}
+
+	class ColorRenderer extends DefaultTableCellRenderer {		
+	    @Override
+		public void setForeground(Color c) {
+			// TODO Auto-generated method stub
+			super.setForeground(c);
+		}
+
+		@Override
+		public void setBackground(Color c) {
+			// TODO Auto-generated method stub
+			super.setBackground(myColor);
+		}
+
+		Color myColor;
+		
+		public ColorRenderer() { 
+	    	super();
+	    }
+
+	    public void setValue(Object value) {
+	    	Color color = (Color) value;
+	    	myColor=color;
+	    	setForeground(color);
+	    	setBackground(color);
+	    }  
+	}
+
+	
 	/**
 	 ** updates the stamp table with contents of the stamp array. The 
 	 ** length and order of the rows may not be the same after the update,
@@ -225,24 +275,32 @@ public class StampTable extends STable implements StampSelectionListener
 	 **/
 	void dataRefreshed() 
 	{
-		if (myLView.stamps==null){
-			return;
-		}
-
 		// don't do any of this if we are dealing with the panner view.
 		if (myLView.getChild()==null){
 			return;
 		}
 
 		// rebuild the table.
-
 		final StampTableModel model = (StampTableModel)getUnsortedTableModel();
-
 
 		final List<Vector> newRows = new ArrayList<Vector>();
 
 		int numCols = model.getColumnCount();
-		for (StampShape stampShape : myLView.stamps) {
+		
+		StampShape stamps[]=new StampShape[0];
+		
+		if (limitToMainView) {
+			stamps = myLView.stamps;
+		} else {
+			ArrayList<StampShape> allStamps = myLView.stampLayer.getVisibleStamps();
+			stamps = allStamps.toArray(new StampShape[allStamps.size()]);
+		}
+	
+		if (stamps == null) {
+			stamps = new StampShape[0];
+		}
+		
+		for (StampShape stampShape : stamps) {
 			Object data[] = stampShape.getStamp().getData();
 			Vector v = new Vector(numCols + 1);			        
 			for (int i=0; i < data.length; i++) {
@@ -279,6 +337,9 @@ public class StampTable extends STable implements StampSelectionListener
 				}
 				
 				newRows.clear();
+				
+				TableColumnAdjuster tca = new TableColumnAdjuster(StampTable.this);
+				tca.adjustColumns();
 			}
 		};
 
@@ -292,6 +353,23 @@ public class StampTable extends STable implements StampSelectionListener
 			e.printStackTrace();
 		}
 
+	}
+
+	/**
+	 ** Ensure the row passed is made visible
+	 **/
+	void makeRowVisible(int row) {
+		setAutoscrolls(true);
+		
+		// Scroll to make the toggled row visible for the last stamp in the list.
+		if (row >= 0) {
+			Rectangle r = getCellRect(row, 0, false).union(
+								       getCellRect(row, getColumnCount()-1, false));
+			int extra = Math.min(r.height * 3, getHeight() / 4);
+			r.y -= extra;
+			r.height += 2 * extra;
+			scrollRectToVisible(r);
+		}					
 	}
 
 	/**
@@ -318,17 +396,7 @@ public class StampTable extends STable implements StampSelectionListener
 			changeSelection(row, 0, true, false);
 		}
 		
-		setAutoscrolls(true);
-		
-		// Scroll to make the toggled row visible for the last stamp in the list.
-		if (row >= 0) {
-			Rectangle r = getCellRect(row, 0, false).union(
-								       getCellRect(row, getColumnCount()-1, false));
-			int extra = Math.min(r.height * 3, getHeight() / 4);
-			r.y -= extra;
-			r.height += 2 * extra;
-			scrollRectToVisible(r);
-		}				
+		makeRowVisible(row);			
 	}			
 	
 	// listens for mouse events in the unfilled stamp table.  If a single left-click,
@@ -336,11 +404,15 @@ public class StampTable extends STable implements StampSelectionListener
 	// is hilighted AND the viewers center about the stamp.  If a right-click, the 
 	// render/browse popup is brought forth.
 	protected class TableMouseAdapter extends MouseAdapter {
+		
+		// TODO: Mouse drag in the table doesn't select entries.  Probably should.
 		public void mousePressed(MouseEvent e){
 			synchronized (StampTable.this) {
 				// get the indexes of the sorted rows. 
 				final int[] rowSelections = getSelectedRows();
 				if (rowSelections==null || rowSelections.length==0) {
+					// Ctrl-clicking the last row will result in no row selections.  Clear the selections here.
+					myLView.stampLayer.clearSelectedStamps();
 					return;
 				}
 				
@@ -359,6 +431,7 @@ public class StampTable extends STable implements StampSelectionListener
 						Sorter sorter = getSorter();
 						
 						int row = rowAtPoint(e.getPoint());
+						int col = columnAtPoint(e.getPoint());
 						
 						StampShape s = getStamp(sorter.unsortRow(row));
 												
@@ -389,109 +462,29 @@ public class StampTable extends STable implements StampSelectionListener
 				} 
 
 				// if this was a right click, bring up the render/browse popup
-				JPopupMenu menu = new JPopupMenu();
-				if (rowSelections.length == 1) 
-                {
-					final int row = getSorter().unsortRow(rowSelections[0]);
-					if (row < 0) {
-						return;
-					}
-					
-                    //
-					StampShape stamp = myLView.stamps[row];
-					List<String> supportedTypes = stamp.getSupportedTypes();
-					
-					for (String supportedType : supportedTypes) {
-						JMenuItem renderMenu = new JMenuItem("Render " + stamp.getId() + " as " + supportedType);
-						final String type = supportedType;
-						renderMenu.addActionListener(new ActionListener() {			
-							public void actionPerformed(ActionEvent e) {
-							    Runnable runme = new Runnable() {
-							        public void run() {
-							        	myLView.focusFilled.addStamp(myLView.stamps[row], type);
-							        }
-							    };
-			
-						        SwingUtilities.invokeLater(runme);
-							}
-						});
-						menu.add(renderMenu);
-					}
-					
-					JMenuItem webBrowse = new JMenuItem("Web browse " + myLView.stamps[row].getId());
-					webBrowse.addActionListener(new ActionListener() {
-						public void actionPerformed(ActionEvent e) {
-							myLView.browse(myLView.stamps[row]);
-						}
-					});
-					menu.add(webBrowse);
-				} 
-				else {
-					JMenu loadSelected = new JMenu("Render Selected Stamps");
-					
-					//
-					final List<StampShape> selectedStamps = myLView.stampLayer.getSelectedStamps();
-					
-					List<String> imageTypes = new ArrayList<String>();
+				final JPopupMenu menu = new JPopupMenu();
 
-					boolean btr=false;
-					boolean abr=false;
-					
-					try {
-						String idList="";
-						for (StampShape stamp : selectedStamps) {
-							idList+=stamp.getId()+",";
+				
+				if (myLView.stampLayer.enableRender() || myLView.stampLayer.enableWeb()) {
+					if (rowSelections.length == 1) {
+						final int row = getSorter().unsortRow(rowSelections[0]);
+						if (row < 0) {
+							return;
 						}
-						
-						if (idList.endsWith(",")) {
-							idList=idList.substring(0,idList.length()-1);
+		
+						StampShape stamp = getStamp(row);
+	
+						StampMenu stampMenu = new StampMenu(myLView.stampLayer, myLView.getFocusPanel().getRenderedView(), stamp);
+						menu.add(stampMenu);
+					} else {					
+						if (myLView.stampLayer.enableRender()) {
+							// Only makes sense to offer a 'Render all selected' if you can render.
+							StampMenu stampMenu = new StampMenu(myLView.stampLayer, myLView.getFocusPanel().getRenderedView());
+							menu.add(stampMenu);
 						}
-
-						String typeLookupStr = StampLayer.stampURL+"ImageTypeLookup";
-								
-						String data = "id="+idList+"&instrument="+myLView.stampLayer.getInstrument()+"&format=JAVA"+myLView.stampLayer.getAuthString()+StampLayer.versionStr;
-						
-						URL url = new URL(typeLookupStr);
-						URLConnection conn = url.openConnection();
-						conn.setDoOutput(true);
-						OutputStreamWriter wr = new OutputStreamWriter(conn.getOutputStream());
-						wr.write(data);
-						wr.flush();
-						wr.close();
-						
-						ObjectInputStream ois = new ObjectInputStream(conn.getInputStream());
-																	
-						List<String> supportedTypes = (List<String>)ois.readObject();
-						for (String type : supportedTypes) {
-							if (type.equalsIgnoreCase("BTR")) {
-								btr=true;
-							} else if (type.equalsIgnoreCase("ABR")) {
-								abr=true;
-							} 
-							
-							imageTypes.add(type);								
-						}
-						ois.close();
-					} catch (Exception e2) {
-						e2.printStackTrace();
 					}
-
-					
-					if (abr && btr) {
-						imageTypes.add(0, "ABR / BTR");
-					}
-					
-					for (final String imageType : imageTypes) {
-						JMenuItem renderMenu = new JMenuItem("Render Selected as " + imageType);
-						renderMenu.addActionListener(new RenderFunction(myLView.stampLayer, myLView.focusFilled, imageType));
-						loadSelected.add(renderMenu);
-					}
-											
-					//
-					
-					menu.add(loadSelected);
 				}
-
+				
 				// Add copy-selected-stamp-IDs menu item.
 				if (rowSelections != null && rowSelections.length > 0) {
 					JMenuItem copyToClipBoard = new JMenuItem("Copy Selected Stamp List to Clipboard");
@@ -515,6 +508,90 @@ public class StampTable extends STable implements StampSelectionListener
 						}						
 					});
 					menu.add(copyToClipBoard);
+					
+					if (myLView.stampLayer.getInstrument().equalsIgnoreCase("Davinci")) {
+						JMenuItem persistAsCustom = new JMenuItem("Persist as Custom Stamp");
+						persistAsCustom.addActionListener(new ActionListener() {						
+							public void actionPerformed(ActionEvent e) {
+								if (Main.USER==null || Main.USER.length()==0) {
+									JOptionPane.showMessageDialog(
+											Main.mainFrame,
+											"Sorry - you must be logged into JMARS to use this feature.",
+											"Login Required",
+											JOptionPane.INFORMATION_MESSAGE
+									);
+									
+									return;
+								}
+								
+								String startName = "<Enter Set Name>";
+								
+								String setName=(String)JOptionPane.showInputDialog(Main.mainFrame, "Set:", "Persist to set:", 
+										JOptionPane.QUESTION_MESSAGE, null, null, startName);
+								
+								if (setName.equalsIgnoreCase(startName)) {
+									setName="";
+								}
+								
+								try {
+									for (StampShape s : myLView.stampLayer.getSelectedStamps()) {												
+										String urlStr = "CustomStampUploader?";
+									
+										JSONArray json = fieldstoJSON(s, setName);
+										urlStr+="&data="+json.toString();
+//												System.out.println(urlStr.replaceAll("password=[^&]*", "password=xxxxxx"));
+
+										// TODO: Add some safety/ error checking
+										Object[] data=s.getStamp().getData();
+										
+										File f = new File((String)data[2]);
+										
+										StampLayer.postToServer(urlStr, f);
+									}
+								} catch (Exception e2) {
+									e2.printStackTrace();
+								}
+							}						
+						});
+						menu.add(persistAsCustom);								
+					}
+					if (myLView.stampLayer.getInstrument().equalsIgnoreCase("Custom")) {
+						JMenuItem deleteCustom = new JMenuItem("Delete Custom Stamp");
+						deleteCustom.addActionListener(new ActionListener() {						
+							public void actionPerformed(ActionEvent e) {
+								if (Main.USER==null || Main.USER.length()==0) {
+									JOptionPane.showMessageDialog(
+											Main.mainFrame,
+											"Sorry - you must be logged into JMARS to use this feature.",
+											"Login Required",
+											JOptionPane.INFORMATION_MESSAGE
+									);
+									
+									return;
+								}
+								
+								int choice=JOptionPane.showConfirmDialog(Main.mainFrame, "Permanently remove this image from your saved custom stamps?", 
+										"Delete Custom Stamp", JOptionPane.YES_NO_OPTION);
+											
+								if (choice==JOptionPane.NO_OPTION) return;
+								
+								try {
+									for (StampShape s : myLView.stampLayer.getSelectedStamps()) {												
+										String urlStr = "CustomStampDeleter?";
+										
+										urlStr+="&id="+s.getId();
+										StampLayer.queryServer(urlStr);
+									}
+									// Requery for the list of stamps?
+									myLView.stampLayer.setQuery(myLView.stampLayer.getQuery());
+								} catch (Exception e2) {
+									e2.printStackTrace();
+								}
+							}						
+						});
+						menu.add(deleteCustom);								
+					}
+
 				}
 
 				menu.show(e.getComponent(), e.getX(), e.getY());
@@ -522,6 +599,43 @@ public class StampTable extends STable implements StampSelectionListener
 		}// end: mousePressed()				
 	};// end: class TableMouseAdapter
 
+	
+	public JSONArray fieldstoJSON(StampShape s, String setName) {
+		JSONArray json = new JSONArray();
+		
+		JSONObject j = new JSONObject();
+
+		try {
+			j.put("user_name", Main.USER);
+			j.put("body", Config.get(Util.getProductBodyPrefix() + "bodyname", "Mars"));//@since change bodies
+
+			Object[] data=s.getStamp().getData();
+			j.put("stamp_id", data[0]);
+			j.put("stamp_name", data[1]);
+			
+			double pts[] = s.getStamp().getPoints();
+			
+			j.put("lon0", pts[0]);
+			j.put("lat0", pts[1]);
+			j.put("lon1", pts[2]);
+			j.put("lat1", pts[3]);
+			j.put("lon2", pts[4]);
+			j.put("lat2", pts[5]);
+			j.put("lon3", pts[6]);
+			j.put("lat3", pts[7]);
+			
+			if (setName!=null && setName.length()>0)
+				j.put("set", setName);
+			
+			json.put(j);
+		} catch (Exception e) {
+			e.printStackTrace();
+		}
+		
+		return json;
+	}
+
+	
 	int startSelectionIndex=-1;
 	
 	protected class TableKeyListener extends KeyAdapter {
@@ -546,8 +660,10 @@ public class StampTable extends STable implements StampSelectionListener
 			int newRow;
 			if (e.getKeyCode()==KeyEvent.VK_UP) {
 				newRow=lastClicked-1;
+				makeRowVisible(newRow);
 			} else if (e.getKeyCode()==KeyEvent.VK_DOWN) {
-				newRow=lastClicked+1;					
+				newRow=lastClicked+1;
+				makeRowVisible(newRow);
 			} else {
 				return; 
 			}

@@ -1,26 +1,8 @@
-// Copyright 2008, Arizona Board of Regents
-// on behalf of Arizona State University
-// 
-// Prepared by the Mars Space Flight Facility, Arizona State University,
-// Tempe, AZ.
-// 
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-// 
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU General Public License for more details.
-// 
-// You should have received a copy of the GNU General Public License
-// along with this program.  If not, see <http://www.gnu.org/licenses/>.
-
-
 package edu.asu.jmars.layer.map2;
 
+import java.awt.Image;
 import java.awt.Point;
+import java.awt.Rectangle;
 import java.awt.color.ColorSpace;
 import java.awt.image.BandedSampleModel;
 import java.awt.image.BufferedImage;
@@ -28,9 +10,9 @@ import java.awt.image.ColorModel;
 import java.awt.image.ComponentColorModel;
 import java.awt.image.ComponentSampleModel;
 import java.awt.image.DataBuffer;
-import java.awt.image.IndexColorModel;
 import java.awt.image.PixelInterleavedSampleModel;
 import java.awt.image.Raster;
+import java.awt.image.RenderedImage;
 import java.awt.image.SampleModel;
 import java.awt.image.WritableRaster;
 import java.io.BufferedInputStream;
@@ -45,8 +27,10 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.io.PushbackInputStream;
+import java.io.RandomAccessFile;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
+import java.nio.channels.FileChannel;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
@@ -54,6 +38,11 @@ import java.util.Hashtable;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
+import java.util.Random;
+import java.util.Vector;
+
+import sun.nio.ch.FileChannelImpl;
+
 
 import edu.asu.jmars.util.DebugLog;
 import edu.asu.jmars.util.Util;
@@ -64,7 +53,7 @@ import edu.asu.jmars.util.VicarException;
 /**
  * Very simple and dirty VICAR reader and writer. 
  */
-public class MyVicarReaderWriter {
+public class MyVicarReaderWriter implements RenderedImage {
 	public static final String kwLblSize = "LBLSIZE";
 	public static final String kwType = "TYPE";
 	public static final String kwOrg = "ORG";
@@ -108,7 +97,301 @@ public class MyVicarReaderWriter {
 	public static final int orgBSQ = 0;
 	public static final int orgBIP = 1;
 	public static final int orgBIL = 2;
+	
+	
+	//
+	// Cheap and dirty VICAR image interface to read pixel data randomly
+	//
+	
+	private final File infile;
+	private final RandomAccessFile rfile;
+	private final HashMap lbl;
+	private final int dataType, sampleSize;
+	private final int org;
+	private final boolean bigEndian;
+	private final int n1, n2, n3, nl, ns, nb, nbb, nlb, recSize, lblSize, dataOffset;
+	private final ByteBuffer bbuf;
+	private Raster cachedRaster;
+	private PushbackInputStream is; // FYI: keep reference so that "is" 
+	
+	public MyVicarReaderWriter(File infile) throws IOException, VicarException {
+		this.infile = infile;
+		
+		// open the file to read label
+		is = new PushbackInputStream(new FileInputStream(infile), 100);
+		lblSize = readLblSize(is);
+		
+		byte[] lblBuf = new byte[lblSize];
+		if (readFully(is, lblBuf) != lblSize)
+			throw new VicarException("Short file. Could not read entire label.");
+		
+		lbl = readLbl(new PushbackInputStream(new ByteArrayInputStream(lblBuf), 1024));
+		
+		dataType = getDataType((String)lbl.get(kwFormat));
+		bigEndian = isBigEndian(dataType, (String)lbl.get(kwRealFmt), (String)lbl.get(kwIntFmt));
+		org = getOrg((String)lbl.get(kwOrg));
+		
+		n1 = Integer.parseInt((String)lbl.get(kwN1));
+		n2 = Integer.parseInt((String)lbl.get(kwN2));
+		n3 = Integer.parseInt((String)lbl.get(kwN3));
+		
+		nl = Integer.parseInt((String)lbl.get(kwNL));
+		ns = Integer.parseInt((String)lbl.get(kwNS));
+		nb = Integer.parseInt((String)lbl.get(kwNB));
+		nbb = Integer.parseInt((String)lbl.get(kwNBB));
+		nlb = Integer.parseInt((String)lbl.get(kwNLB));
+		
+		recSize = Integer.parseInt((String)lbl.get(kwRecSize));
+		dataOffset = lblSize + nlb * recSize; // text label + binary label
+		
+		sampleSize = DataBuffer.getDataTypeSize(dataType)/8;
+		bbuf = ByteBuffer.allocate(sampleSize);
+		bbuf.order(bigEndian? ByteOrder.BIG_ENDIAN: ByteOrder.LITTLE_ENDIAN);
+		
+		// finally open the file for random access
+		rfile = new RandomAccessFile(infile, "r");
+	}
+	
+	private long getSampleOffset(int x, int y, int z){
+		long off = -1;
+		
+		if (org == orgBSQ){
+			off = dataOffset + (((nbb + ns * sampleSize) * nl) * z + (nbb + ns * sampleSize) * y + (nbb + x * sampleSize)); 
+		}
+		else if (org == orgBIP){
+			off = dataOffset + (((nbb + nb * sampleSize) * ns) * y + (nbb + nb * sampleSize) * x + (nbb + z * sampleSize));
+		}
+		else if (org == orgBIL){
+			off = dataOffset + (((nbb + ns * sampleSize) * nb) * y + (nbb + ns * sampleSize) * z + (nbb + x * sampleSize));
+		}
+		
+		return off;
+	}
+	
+	public double[] getPixel(int x, int y, double[] pixel) throws IOException {
+		if (pixel == null)
+			pixel = new double[nb];
+		
+		for(int i=0; i<nb; i++){
+			// Seek to sample's position
+			long sampleOffset = getSampleOffset(x, y, i);
+			rfile.seek(sampleOffset);
+			
+			// Clear sample buffer and read sample worth of data
+			bbuf.clear();
+			rfile.readFully(bbuf.array());
+			
+			// Convert read sample into a double
+			switch(dataType){
+			case DataBuffer.TYPE_BYTE:
+				pixel[i] = bbuf.get();
+				break;
+			case DataBuffer.TYPE_SHORT:
+				pixel[i] = bbuf.getShort();
+				break;
+			case DataBuffer.TYPE_INT:
+				pixel[i] = bbuf.getInt();
+				break;
+			case DataBuffer.TYPE_FLOAT:
+				pixel[i] = bbuf.getFloat();
+				break;
+			case DataBuffer.TYPE_DOUBLE:
+				pixel[i] = bbuf.getDouble();
+				break;
+			}
+		}
+		
+		return pixel;
+	}
+	
+	public int[] getPixel(int x, int y, int[] pixel) throws IOException {
+		if (pixel == null)
+			pixel = new int[nb];
+		
+		for(int i=0; i<nb; i++){
+			// Seek to sample's position
+			long sampleOffset = getSampleOffset(x, y, i);
+			rfile.seek(sampleOffset);
+			
+			// Clear sample buffer and read sample worth of data
+			bbuf.clear();
+			rfile.readFully(bbuf.array());
+			
+			// Convert read sample into a double
+			switch(dataType){
+			case DataBuffer.TYPE_BYTE:
+				pixel[i] = bbuf.get();
+				break;
+			case DataBuffer.TYPE_SHORT:
+				pixel[i] = bbuf.getShort();
+				break;
+			case DataBuffer.TYPE_INT:
+				pixel[i] = bbuf.getInt();
+				break;
+			case DataBuffer.TYPE_FLOAT:
+				pixel[i] = (int)bbuf.getFloat();
+				break;
+			case DataBuffer.TYPE_DOUBLE:
+				pixel[i] = (int)bbuf.getDouble();
+				break;
+			}
+		}
+		
+		return pixel;
+	}
+	
+	
+	//
+	// Begin - Implementation of RenderedImage interface
+	//
+	
+	public int getWidth(){
+		return ns;
+	}
+	
+	public int getHeight(){
+		return nl;
+	}
+	
+	public WritableRaster copyData(WritableRaster raster) {
+		if (raster == null){
+			Raster r = getData();
+			WritableRaster wr = r.createCompatibleWritableRaster();
+			wr.setRect(r);
+			return wr;
+		}
+		else {
+			Raster r = getData(raster.getBounds());
+			
+			int[] bands = new int[raster.getNumBands()];
+			for(int i=0; i<raster.getNumBands(); i++)
+				bands[i] = i;
+			
+			raster.setRect(r.createChild(r.getMinX(), r.getMinY(), r.getWidth(), r.getHeight(), r.getMinX(), r.getMinY(), bands));
+		}
+		return raster;
+	}
 
+	public ColorModel getColorModel() {
+		return getColorModel(getSampleModel());
+	}
+
+	public Raster getData() {
+		if (cachedRaster == null){
+			try {
+				rfile.seek(lblSize);
+				cachedRaster = readData(new PushbackInputStream(new FileInputStream(rfile.getFD())), lbl);
+			}
+			catch(IOException ex){
+				throw new RuntimeException(ex);
+			}
+			catch(VicarException ex){
+				throw new RuntimeException(ex);
+			}
+		}
+		
+		WritableRaster wr = cachedRaster.createCompatibleWritableRaster();
+		wr.setRect(cachedRaster);
+		return wr;
+	}
+
+	public Raster getData(Rectangle rect) {
+		SampleModel sm = getSampleModel().createCompatibleSampleModel(rect.width, rect.height);
+		DataBuffer dbuf = sm.createDataBuffer();
+		double[] pixel = new double[nb];
+		WritableRaster raster = WritableRaster.createWritableRaster(sm, dbuf, rect.getLocation());
+
+		for(int j=rect.y; j<(rect.y+rect.height); j++){
+			for(int i=rect.x; i<(rect.x+rect.width); i++){
+				try {
+					getPixel(i, j, pixel);
+				}
+				catch(IOException ex){
+					throw new RuntimeException("Unable to read pixel at ("+i+","+j+").", ex);
+				}
+				raster.setPixel(i, j, pixel);
+			}
+		}
+
+		return raster;
+	}
+
+	public int getMinTileX() {
+		return 0;
+	}
+
+	public int getMinTileY() {
+		return 0;
+	}
+
+	public int getMinX() {
+		return 0;
+	}
+
+	public int getMinY() {
+		return 0;
+	}
+
+	public int getNumXTiles() {
+		return 1;
+	}
+
+	public int getNumYTiles() {
+		return 1;
+	}
+
+	public Object getProperty(String name) {
+		if (lbl.containsKey(name))
+			return lbl.get(name);
+		return Image.UndefinedProperty;
+	}
+
+	public String[] getPropertyNames() {
+		return (String[])lbl.keySet().toArray(new String[0]);
+	}
+
+	public SampleModel getSampleModel() {
+		try {
+			return getSampleModel(org, dataType, n1, n2, n3, nl, ns, nb);
+		}
+		catch(VicarException ex){
+			throw new RuntimeException(ex);
+		}
+	}
+
+	public Vector<RenderedImage> getSources() {
+		return null;
+	}
+
+	public Raster getTile(int tileX, int tileY) {
+		if (tileX != 0 && tileY != 0)
+			return null;
+		if (cachedRaster == null)
+			getData();
+		return cachedRaster;
+	}
+
+	public int getTileGridXOffset() {
+		return 0;
+	}
+
+	public int getTileGridYOffset() {
+		return 0;
+	}
+
+	public int getTileHeight() {
+		return getHeight();
+	}
+
+	public int getTileWidth() {
+		return getWidth();
+	}
+	
+	//
+	// End - Implementation of RenderedImage interface
+	//
+	
+	
 	//
 	// Cheap and dirty VICAR image reader
 	//
@@ -135,16 +418,30 @@ public class MyVicarReaderWriter {
 		return out.toByteArray();
 	}
 	
+	public static ColorModel getColorModel(SampleModel sm){
+		/*
+		 * Byte grayscale images created using the ComponentColorModel get an LUT that makes
+		 * them brighter. Thus, the gray values retrieved using the BufferedImage methods are
+		 * different from what is stored in the underlying raster. See bugs 4904494 & 5051418. 
+		 * http://bugs.sun.com/bugdatabase/view_bug.do?bug_id=4904494
+		 */
+		int[] bits = new int[sm.getNumBands()];
+		Arrays.fill(bits, DataBuffer.getDataTypeSize(sm.getTransferType()));
+		boolean hasAlpha = false; // raster.getTransferType() == DataBuffer.TYPE_BYTE && raster.getNumBands() == 2;
+		ColorModel cm = new ComponentColorModel(ColorSpace.getInstance(ColorSpace.CS_GRAY),
+				bits, hasAlpha, false, hasAlpha? ColorModel.TRANSLUCENT: ColorModel.OPAQUE, sm.getTransferType());
+		return cm;
+	}
+	
 	public static BufferedImage read(InputStream iis) throws IOException, VicarException {
 		// Suck-in all data from the InputStream, we do that because of HttpURLInputStream not 
 		// returning all the requested data, but prematurely returning with partial data.
-		PushbackInputStream is = new PushbackInputStream(new ByteArrayInputStream(getAllBytes(iis)), 2048);
-		
+		PushbackInputStream is = new PushbackInputStream(iis, 100);
 		int lblSize = readLblSize(is);
 		
 		// read the entire label
 		byte[] lblBytes = new byte[lblSize];
-		if (is.read(lblBytes) == -1)
+		if (readFully(is, lblBytes) != lblSize)
 			throw new VicarException("Short file. Could not read entire label.");
 
 		Map lbl = readLbl(new PushbackInputStream(new ByteArrayInputStream(lblBytes), 100));
@@ -153,39 +450,13 @@ public class MyVicarReaderWriter {
 			throw new VicarException("Only \""+valTypeImage+"\" type VICAR files are supported.");
 		
 		WritableRaster raster = readData(is, lbl);
-		
-		/*
-		 * Byte grayscale images created using the ComponentColorModel get an LUT that makes
-		 * them brighter. Thus, the gray values retrieved using the BufferedImage methods are
-		 * different from what is stored in the underlying raster. See bugs 4904494 & 5051418. 
-		 * http://bugs.sun.com/bugdatabase/view_bug.do?bug_id=4904494
-		 */
-		int[] bits = new int[raster.getNumBands()];
-		Arrays.fill(bits, DataBuffer.getDataTypeSize(raster.getTransferType()));
-		boolean hasAlpha = false; // raster.getTransferType() == DataBuffer.TYPE_BYTE && raster.getNumBands() == 2;
-		ColorModel cm = new ComponentColorModel(ColorSpace.getInstance(ColorSpace.CS_GRAY),
-				bits, hasAlpha, false, hasAlpha? ColorModel.TRANSLUCENT: ColorModel.OPAQUE, raster.getTransferType());
+		ColorModel cm = getColorModel(raster.getSampleModel());
 		BufferedImage outImage = new BufferedImage(cm, raster, cm.isAlphaPremultiplied(), new Hashtable(lbl));
 		
 		return outImage;
 	}
 	
-	private static WritableRaster readData(PushbackInputStream is, Map lbl) throws IOException, VicarException {
-		int nl = Integer.parseInt((String)lbl.get(kwNL));
-		int ns = Integer.parseInt((String)lbl.get(kwNS));
-		int nb = Integer.parseInt((String)lbl.get(kwNB));
-		int nbb = Integer.parseInt((String)lbl.get(kwNBB));
-		int nlb = Integer.parseInt((String)lbl.get(kwNLB));
-		int recSize = Integer.parseInt((String)lbl.get(kwRecSize));
-		String orgStr = (String)lbl.get(kwOrg);
-		String fmt = (String)lbl.get(kwFormat);
-		String intFmt = (String)lbl.get(kwIntFmt);
-		String realFmt = (String)lbl.get(kwRealFmt);
-
-		int n1 = Integer.parseInt((String)lbl.get(kwN1));
-		int n2 = Integer.parseInt((String)lbl.get(kwN2));
-		int n3 = Integer.parseInt((String)lbl.get(kwN3));
-		
+	private static int getDataType(String fmt) throws VicarException {
 		// Get the raster sample data format
 		int dataType = DataBuffer.TYPE_UNDEFINED;
 		if (valFormatByte.equals(fmt))
@@ -200,7 +471,10 @@ public class MyVicarReaderWriter {
 			dataType = DataBuffer.TYPE_DOUBLE;
 		else
 			throw new VicarException("Unknown/unhandled format \""+fmt+"\".");
-
+		return dataType;
+	}
+	
+	private static boolean isBigEndian(int dataType, String realFmt, String intFmt) throws VicarException {
 		// See if the data is big-endian or little-endian
 		boolean bigEndian = false;
 		if (dataType == DataBuffer.TYPE_FLOAT || dataType == DataBuffer.TYPE_DOUBLE){
@@ -220,43 +494,100 @@ public class MyVicarReaderWriter {
 				throw new VicarException("Unknown "+kwIntFmt+" value \""+intFmt+"\".");
 		}
 		
-		
-		// Skip the binary header - we don't care about it
-		is.skip(nlb * recSize);
-		
-		SampleModel sm;
+		return bigEndian;
+	}
+	
+	private static int getOrg(String orgStr) throws VicarException {
 		int org;
+		
 		if (valOrgBSQ.equals(orgStr)){
 			org = orgBSQ;
-			sm = new BandedSampleModel(dataType, n1, n2, n3);
 		}
 		else if (valOrgBIP.equals(orgStr)){
 			org = orgBIP;
+		}
+		else if (valOrgBIL.equals(orgStr)){
+			org = orgBIL;
+		}
+		else
+			throw new VicarException("Unknown "+kwOrg+" value \""+orgStr+"\".");
+		
+		return org;
+	}
+	
+	private static SampleModel getSampleModel(int org, int dataType, int n1, int n2, int n3, int nl, int ns, int nb) throws VicarException {
+		SampleModel sm = null;
+		
+		if (org == orgBSQ){
+			sm = new BandedSampleModel(dataType, n1, n2, n3);
+		}
+		else if (org == orgBIP){
 			int[] bandOffsets = new int[nb];
 			for(int i=0; i<nb; i++)
 				bandOffsets[i] = i;
 			sm = new PixelInterleavedSampleModel(dataType, ns, nl, nb, ns*nb, bandOffsets);
 		}
-		else if (valOrgBIL.equals(orgStr)){
-			org = orgBIL;
+		else if (org == orgBIL){
 			int[] bandOffsets = new int[nb];
 			for(int i=0; i<nb; i++)
 				bandOffsets[i] = i*ns;
 			sm = new ComponentSampleModel(dataType, ns, nl, 1, ns*nb, bandOffsets);
 		}
 		else
-			throw new VicarException("Unknown "+kwOrg+" value \""+orgStr+"\".");
+			throw new VicarException("Unknown org "+org+".");
 		
+		return sm;
+	}
+	
+	/**
+	 * Reads the VICAR data into a raster. The input stream must be positioned at the start of
+	 * the binary header in the VICAR file, i.e. just after the end of text header.
+	 * @param is stream to read data from.
+	 * @param lbl already read text label.
+	 * @return raster containing the data.
+	 * @throws IOException propagated upward whenever the input stream generates it.
+	 * @throws VicarException generated when either the header information is invalid or file is short.
+	 */
+	private static WritableRaster readData(PushbackInputStream is, Map lbl) throws IOException, VicarException {
+		int nl = Integer.parseInt((String)lbl.get(kwNL));
+		int ns = Integer.parseInt((String)lbl.get(kwNS));
+		int nb = Integer.parseInt((String)lbl.get(kwNB));
+		int nbb = Integer.parseInt((String)lbl.get(kwNBB));
+		int nlb = Integer.parseInt((String)lbl.get(kwNLB));
+		int recSize = Integer.parseInt((String)lbl.get(kwRecSize));
+		String orgStr = (String)lbl.get(kwOrg);
+		String fmt = (String)lbl.get(kwFormat);
+		String intFmt = (String)lbl.get(kwIntFmt);
+		String realFmt = (String)lbl.get(kwRealFmt);
+
+		int n1 = Integer.parseInt((String)lbl.get(kwN1));
+		int n2 = Integer.parseInt((String)lbl.get(kwN2));
+		int n3 = Integer.parseInt((String)lbl.get(kwN3));
+		
+		// Get the raster sample data format
+		int dataType = getDataType(fmt);
+		
+		// See if the data is big-endian or little-endian
+		boolean bigEndian = isBigEndian(dataType, realFmt, intFmt);
+		
+		// Skip the binary header - we don't care about it
+		if (skipFully(is, nlb * recSize) != (nlb * recSize))
+			throw new VicarException("Skip failed skipping "+ (nlb*recSize)+" bytes.");
+		
+		int org = getOrg(orgStr);
+		SampleModel sm = getSampleModel(org, dataType, n1, n2, n3, nl, ns, nb);
 		DataBuffer dbuff = sm.createDataBuffer();
+		
 		ByteBuffer bbuf = ByteBuffer.allocate(n1 * DataBuffer.getDataTypeSize(dataType)/8);
 		bbuf.order(bigEndian? ByteOrder.BIG_ENDIAN: ByteOrder.LITTLE_ENDIAN);
 		for(int k=0; k<n3; k++){
 			for(int j=0; j<n2; j++){
 				// Skip the binary prefix on each record
-				is.skip(nbb);
+				if (skipFully(is, nbb) != nbb)
+					throw new VicarException("Skip failed skipping binary prefix of length "+nbb+" on n2="+j+" n3="+k+".");
 				
 				bbuf.clear();
-				if (is.read(bbuf.array()) != bbuf.array().length)
+				if (readFully(is, bbuf.array()) != bbuf.array().length)
 					throw new VicarException("Short file.");
 				
 				for(int i=0; i<n1; i++){
@@ -487,12 +818,36 @@ public class MyVicarReaderWriter {
 		return Character.toString((char)c);
 	}
 	
+	private static int readFully(InputStream is, byte[] buf) throws IOException {
+		int off = 0, read = 0, len = buf.length;
+		while(len > 0 && (read = is.read(buf, off, len)) > 0){
+			off += read;
+			len -= read;
+		}
+		
+		if (read < 0)
+			return read;
+		return off;
+	}
+	
+	private static long skipFully(InputStream is, long nbb) throws IOException {
+		long skipped = 0, total = 0;
+		while(nbb > 0 && (skipped = is.skip(nbb)) > 0){
+			nbb -= skipped;
+			total += skipped;
+		}
+		
+		if (nbb < 0)
+			return nbb;
+		return total;
+	}
+	
 	private static int readLblSize(PushbackInputStream is) throws IOException, VicarException {
 		int c = -1;
 		String bbuf = "";
 		
 		byte[] tmp = new byte[kwLblSize.length()];
-		if (is.read(tmp) != tmp.length || !(new String(tmp)).equals(kwLblSize))
+		if (readFully(is,tmp) != tmp.length || !(new String(tmp)).equals(kwLblSize))
 			throw new VicarException(kwLblSize+" missing, not a VICAR file.");
 		bbuf += new String(tmp);
 
@@ -709,10 +1064,12 @@ public class MyVicarReaderWriter {
 
 	
 	public static void main(String[] args){
+		log.setActive();
+		
 		//String[] files = new String[]{ "bsq.v", "bip.v", "bil.v" };
 		//String[] files = new String[]{ "bipb.v", "bipi.v", "bipf.v", "bipd.v" };
 		//String[] files = new String[]{ "2x3x4bsq.v", "2x3x4bip.v", "2x3x4bil.v" };
-		String[] files = new String[]{ "147.v" };
+		String[] files = new String[]{ "resources/clem750.v" };
 		//url = new URL("http://ms.mars.asu.edu/?SERVICE=WMS&REQUEST=GetMap&FORMAT=image/vicar&WIDTH=1920.0&HEIGHT=960.0&SRS=JMARS:1,180.0,90.0&BBOX=30.0,-15.0,90.0,15.0&STYLES=&VERSION=1.1.1&LAYERS=TES_TI_Putzig_numeric");
 		for(int fi=0; fi<files.length; fi++){
 			try {
@@ -742,5 +1099,48 @@ public class MyVicarReaderWriter {
 				ex.printStackTrace();
 			}
 		}
+		
+		try {
+			MyVicarReaderWriter rr = new MyVicarReaderWriter(new File("resources/clem750.v"));
+
+			int n = 30000;
+			Point[] pts = new Point[n];
+			Random rand = new Random();
+			
+			double[] pixel = new double[1];
+			long[] t = new long[3];
+			
+			for(int j=0; j<100; j++){
+				// Get random pixel coordinates
+				for(int i=0; i<pts.length; i++){
+					pts[i] = new Point();
+					pts[i].x = rand.nextInt(rr.getWidth());
+					pts[i].y = rand.nextInt(rr.getHeight());
+				}
+				
+				int ti = 0;
+
+				t[ti++] = System.currentTimeMillis();
+
+				for(int i=0; i<pts.length; i++){
+					rr.getPixel(pts[i].x, pts[i].y, pixel);
+				}
+				t[ti++] = System.currentTimeMillis();
+				System.err.println(ti+": Accessing "+pts.length+" pts took "+((t[ti-1]-t[ti-2])/1000.0)+"s @ "+(pts.length*1000.0/(t[ti-1]-t[ti-2]))+" pix/sec");
+				
+				for(int i=0; i<pts.length; i++){
+					rr.getData(new Rectangle(pts[i].x, pts[i].y, 1, 1));
+				}
+				t[ti++] = System.currentTimeMillis();
+				System.err.println(ti+": Accessing "+pts.length+" pts took "+((t[ti-1]-t[ti-2])/1000.0)+"s @ "+(pts.length*1000.0/(t[ti-1]-t[ti-2]))+" pix/sec");
+
+			}
+			
+		}
+		catch(Exception ex){
+			ex.printStackTrace();
+			System.exit(-1);
+		}
 	}
+
 }

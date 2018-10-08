@@ -1,23 +1,3 @@
-// Copyright 2008, Arizona Board of Regents
-// on behalf of Arizona State University
-// 
-// Prepared by the Mars Space Flight Facility, Arizona State University,
-// Tempe, AZ.
-// 
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-// 
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU General Public License for more details.
-// 
-// You should have received a copy of the GNU General Public License
-// along with this program.  If not, see <http://www.gnu.org/licenses/>.
-
-
 package edu.asu.jmars.layer.map2;
 
 import java.awt.Point;
@@ -134,6 +114,7 @@ public class MapChannelTiled {
 				log(MessageFormat.format("tile[{0},{1}] started", p.x, p.y));
 				newChannel.addReceiver(new MapChannelReceiver() {
 					public void mapChanged(MapData mapData) {
+						boolean sendIt = false;
 						synchronized(MapChannelTiled.this) {
 							if (channels.contains(newChannel)) {
 								if (mapData.isFinished()) {
@@ -146,13 +127,19 @@ public class MapChannelTiled {
 								}
 								if (!mapData.getRequest().isCancelled()) {
 									log(p, "Sending update");
-									receiver.mapChanged(mapData);
+									sendIt = true;
 								} else {
 									log(p, "Skipping cancelled update");
 								}
 							} else {
 								log(p, "updated, but not in channels list");
 							}
+						}
+						if (sendIt) {
+							// this does not return quickly or without side
+							// effects, so we call it outside the lock on
+							// MapChannelTiled.this
+							receiver.mapChanged(mapData);
 						}
 					}
 				});
