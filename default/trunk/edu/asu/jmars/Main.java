@@ -136,7 +136,6 @@ import edu.asu.jmars.layer.stamp.StampCache;
 import edu.asu.jmars.layer.stamp.StampServer;
 import edu.asu.jmars.layer.stamp.StampSource;
 import edu.asu.jmars.layer.streets.OpenStreetMapTiles;
-import edu.asu.jmars.layer.tes6.CacheKeeper;
 import edu.asu.jmars.layer.util.FileLogger;
 import edu.asu.jmars.places.PlacesMenu;
 import edu.asu.jmars.places.XmlPlaceStore;
@@ -1438,16 +1437,6 @@ public class Main extends JFrame {
 		// Delete the stamp cache directory for edu.asu.jmars.layer.stamp
 		StampCache.cleanCache();
 		
-		// Remove the TES data cache - see TesLayer
-		Object tesCacheUser = new Object();
-		try {
-			Ehcache tesCache = CacheKeeper.instance().checkout(tesCacheUser);
-			tesCache.removeAll();
-			tesCache.flush();
-		}
-		finally {
-			CacheKeeper.instance().checkin(tesCacheUser);
-		}
 		
 		//Delete the layerParams cache
 		LayerParameters.cleanCache();
