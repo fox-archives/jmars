@@ -99,8 +99,8 @@ public class WMSMapServer extends MapServerDefault implements MapServer, Seriali
 	private URI uri;
 	private String title;
 	
-	private StringBuffer user;
-	private StringBuffer pass;
+	private transient StringBuffer user;
+	private transient StringBuffer pass;
 	
 	/** Transient since GetMap service URL can be recovered from the capabilities document */
 	private transient WMSCapabilities capabilities;
