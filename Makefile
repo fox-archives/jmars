@@ -589,5 +589,5 @@ docs/index.html: Makefile $(shell find edu/asu/jmars -name "*.java")
 
 # Various cleanup routines
 clean::	testmro_clean dawn_clean
-	rm -rf *.class $(CLSDIR) $(TMPDIR) .mro
+	rm -rf *.class $(CLSDIR) $(TMPDIR)
 	rm -R *.* edu/asu/jmars/test
