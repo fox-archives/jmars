@@ -332,4 +332,4 @@ docs/index.html: Makefile $(shell find edu/asu/jmars -name "*.java")
 # Various cleanup routines
 clean:
 	rm -rf *.class $(CLSDIR) $(TMPDIR)
-	rm -R *.* edu/asu/jmars/test
+	rm -fR *.* edu/asu/jmars/test

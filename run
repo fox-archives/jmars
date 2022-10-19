@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+set -eo pipefail
+
+# The Perl script is kind of buggy so use this './run' script instead
+
+
+die() {
+	printf '%s\n' "$1" >&2
+	exit 1
+}
+
+# Ensure wd
+cd "${0%/*}"
+
+# Stuff riped from './runme'
+chmod +x resources/jmars.config
+
+# Reduce errors
+mkdir -p './net/signalpro'
+touch './net/signalpro/.keep'
+
+# jmars build silently fails if java is not installed
+if ! command -v javac &>/dev/null; then
+	die "Must have javac installed"
+fi
+
+# Check for Java 1.8 compiler
+if ! javac -version |& grep -q 'javac 1.8.0_345'; then
+	die "Must be running javac 1.8 (see 'java -version')"
+fi
+
+make clean
+make jar
+java -Xmx512M -classpath "$PWD/lib:$PWD/libsrc:$PWD/lib/jogl-all.jar" -jar ./public-jmars.jar "$@"
+
